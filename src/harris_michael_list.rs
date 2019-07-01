@@ -1,16 +1,15 @@
-extern crate crossbeam;
-
-use crossbeam::epoch;
-
-use epoch::{Atomic, Guard, Owned, Shared};
+use crossbeam_epoch::{Atomic, Guard, Owned, Shared};
 
 use std::mem::ManuallyDrop;
 use std::ptr;
 use std::sync::atomic::Ordering::{AcqRel, Acquire, Release};
 
 struct Node<K, V> {
+    // TODO(@jeehoonkang): why not `ManuallyDrop<K>`?
     key: K,
+
     value: ManuallyDrop<V>,
+
     // Mark: tag()
     // Tag: not needed
     next: Atomic<Node<K, V>>,
@@ -26,6 +25,12 @@ where
 {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<K, V> Drop for List<K, V> {
+    fn drop(&mut self) {
+        unimplemented!()
     }
 }
 
@@ -91,7 +96,6 @@ where
         }
     }
 
-    // mut? handle?
     pub fn insert<'g, 'a: 'g>(&'a self, key: K, value: V, guard: &'g Guard) -> bool {
         let mut prev: &'g Atomic<Node<K, V>> = &self.head;
         let mut cur: Shared<'g, Node<K, V>> = Shared::null();
