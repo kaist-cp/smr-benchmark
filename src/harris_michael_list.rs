@@ -2,10 +2,9 @@ use crossbeam_epoch::{Atomic, Guard, Owned, Shared};
 
 use std::mem::ManuallyDrop;
 use std::ptr;
-use std::sync::atomic::Ordering::{AcqRel, Acquire, Release};
+use std::sync::atomic::Ordering;
 
 struct Node<K, V> {
-    // TODO(@jeehoonkang): why not `ManuallyDrop<K>`?
     key: K,
 
     value: ManuallyDrop<V>,
@@ -34,6 +33,12 @@ impl<K, V> Drop for List<K, V> {
     }
 }
 
+struct Cursor<'g, K, V> {
+    prev: &'g Atomic<Node<K, V>>,
+    curr: Shared<'g, Node<K, V>>,
+    next: Shared<'g, Node<K, V>>,
+}
+
 impl<K, V> List<K, V>
 where
     K: Ord,
@@ -44,102 +49,124 @@ where
         }
     }
 
-    fn find<'g, 'a: 'g>(
-        &'a self,
-        key: &K,
-        guard: &'g Guard,
-        prev: &mut &'g Atomic<Node<K, V>>,
-        cur: &mut Shared<'g, Node<K, V>>,
-        next: &mut Shared<'g, Node<K, V>>,
-    ) -> bool {
+    /// Returns (1) whether it found an entry, and (2) a cursor.
+    #[inline]
+    fn find_inner<'g>(&'g self, key: &K, guard: &'g Guard) -> Result<(bool, Cursor<'g, K, V>), ()> {
+        let mut cursor = Cursor {
+            prev: &self.head,
+            curr: self.head.load(Ordering::Acquire, guard),
+            next: Shared::null(),
+        };
+
         loop {
-            *prev = &self.head;
-            *cur = prev.load(Acquire, guard);
-            loop {
-                match unsafe { cur.as_ref() } {
-                    None => return false,
-                    Some(cur_node) => {
-                        if prev.load(Acquire, guard) != cur.with_tag(0) {
-                            break;
-                        }
-                        *next = cur_node.next.load(Acquire, guard);
-                        let ckey = &cur_node.key;
-                        if next.tag() == 0 {
-                            if ckey >= key {
-                                return ckey == key;
-                            }
-                            *prev = &cur_node.next;
-                        } else {
-                            match prev.compare_and_set(cur.with_tag(0), *next, AcqRel, guard) {
-                                Ok(_) => unsafe {
-                                    guard.defer_destroy(*cur);
-                                },
-                                Err(_) => break,
-                            }
-                        }
-                        *cur = *next;
-                    }
+            let curr_node = match unsafe { cursor.curr.as_ref() } {
+                None => return Ok((false, cursor)),
+                Some(c) => c,
+            };
+
+            if cursor.prev.load(Ordering::Acquire, guard) != cursor.curr.with_tag(0) {
+                return Err(());
+            }
+
+            cursor.next = curr_node.next.load(Ordering::Acquire, guard);
+
+            let curr_key = &curr_node.key;
+            if cursor.next.tag() == 0 {
+                if curr_key >= key {
+                    return Ok((curr_key == key, cursor));
                 }
+                cursor.prev = &curr_node.next;
+            } else {
+                match cursor.prev.compare_and_set(
+                    cursor.curr.with_tag(0),
+                    cursor.next,
+                    Ordering::AcqRel,
+                    guard,
+                ) {
+                    Err(_) => return Err(()),
+                    Ok(_) => unsafe { guard.defer_destroy(cursor.curr) },
+                }
+            }
+            cursor.curr = cursor.next;
+        }
+    }
+
+    fn find<'g>(&'g self, key: &K, guard: &'g Guard) -> (bool, Cursor<'g, K, V>) {
+        loop {
+            if let Ok(r) = self.find_inner(key, guard) {
+                return r;
             }
         }
     }
 
-    pub fn search<'g, 'a: 'g>(&'a self, key: &K, guard: &'g Guard) -> Option<&'g V> {
-        let mut prev: &'g Atomic<Node<K, V>> = &self.head;
-        let mut cur: Shared<'g, Node<K, V>> = Shared::null();
-        let mut next: Shared<'g, Node<K, V>> = Shared::null();
+    pub fn search<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        let (found, cursor) = self.find(key, guard);
 
-        if self.find(key, guard, &mut prev, &mut cur, &mut next) {
-            unsafe { cur.as_ref().map(|n| &*n.value) }
+        if found {
+            unsafe { cursor.curr.as_ref().map(|n| &*n.value) }
         } else {
             None
         }
     }
 
-    pub fn insert<'g, 'a: 'g>(&'a self, key: K, value: V, guard: &'g Guard) -> bool {
-        let mut prev: &'g Atomic<Node<K, V>> = &self.head;
-        let mut cur: Shared<'g, Node<K, V>> = Shared::null();
-        let mut next: Shared<'g, Node<K, V>> = Shared::null();
+    pub fn insert<'g>(&'g self, key: K, value: V, guard: &'g Guard) -> bool {
         let mut node = Owned::new(Node {
             key,
             value: ManuallyDrop::new(value),
             next: Atomic::null(),
         });
+
         loop {
-            if self.find(&node.key, guard, &mut prev, &mut cur, &mut next) {
+            let (found, cursor) = self.find(&node.key, guard);
+            if found {
                 return false;
             }
-            node.next.store(cur, Release);
-            match prev.compare_and_set(cur, node, AcqRel, guard) {
+
+            node.next.store(cursor.curr, Ordering::Relaxed);
+            match cursor
+                .prev
+                .compare_and_set(cursor.curr, node, Ordering::AcqRel, guard)
+            {
                 Ok(_) => return true,
                 Err(e) => node = e.new,
             }
         }
     }
 
-    pub fn remove<'g, 'a: 'g>(&'a self, key: &K, guard: &'g Guard) -> Option<V> {
-        let mut prev: &'g Atomic<Node<K, V>> = &self.head;
-        let mut cur: Shared<'g, Node<K, V>> = Shared::null();
-        let mut next: Shared<'g, Node<K, V>> = Shared::null();
+    pub fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<V> {
         loop {
-            if !self.find(key, guard, &mut prev, &mut cur, &mut next) {
+            let (found, cursor) = self.find(key, guard);
+            if !found {
                 return None;
             }
-            let cur_node = unsafe { cur.as_ref()? }; // TODO: ?
-            if cur_node
+
+            let curr_node = unsafe { cursor.curr.as_ref() }.unwrap();
+            let value = unsafe { ptr::read(&curr_node.value) };
+
+            if curr_node
                 .next
-                .compare_and_set(next, next.with_tag(1), AcqRel, guard)
+                .compare_and_set(
+                    cursor.next,
+                    cursor.next.with_tag(1),
+                    Ordering::AcqRel,
+                    guard,
+                )
                 .is_err()
             {
                 continue;
             }
-            match prev.compare_and_set(cur, next, AcqRel, guard) {
-                Ok(_) => unsafe {
-                    guard.defer_destroy(cur);
-                },
-                Err(_e) => unimplemented!(),
+
+            match cursor
+                .prev
+                .compare_and_set(cursor.curr, cursor.next, Ordering::AcqRel, guard)
+            {
+                Err(_) => {
+                    self.find(key, guard);
+                }
+                Ok(_) => unsafe { guard.defer_destroy(cursor.curr) },
             }
-            return unsafe { Some(ManuallyDrop::into_inner(ptr::read(&cur_node.value))) };
+
+            return Some(ManuallyDrop::into_inner(value));
         }
     }
 }
