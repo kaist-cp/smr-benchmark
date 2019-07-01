@@ -1,3 +1,7 @@
+// TODO
+// #![warn(missing_docs)]
+// #![warn(missing_debug_implementations)]
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -6,4 +10,5 @@ mod tests {
     }
 }
 
-mod michael_hash_map;
+pub mod harris_michael_list;
+pub mod michael_hash_map;
