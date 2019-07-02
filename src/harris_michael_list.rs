@@ -99,7 +99,7 @@ where
         }
     }
 
-    pub fn search<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+    pub fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         let (found, cursor) = self.find(key, guard);
 
         if found {
@@ -109,15 +109,16 @@ where
         }
     }
 
-    pub fn insert<'g>(&'g self, key: K, value: V, guard: &'g Guard) -> bool {
+    pub fn insert(&self, key: K, value: V) -> bool {
         let mut node = Owned::new(Node {
             key,
             value: ManuallyDrop::new(value),
             next: Atomic::null(),
         });
+        let guard = crossbeam_epoch::pin();
 
         loop {
-            let (found, cursor) = self.find(&node.key, guard);
+            let (found, cursor) = self.find(&node.key, &guard);
             if found {
                 return false;
             }
@@ -125,7 +126,7 @@ where
             node.next.store(cursor.curr, Ordering::Relaxed);
             match cursor
                 .prev
-                .compare_and_set(cursor.curr, node, Ordering::AcqRel, guard)
+                .compare_and_set(cursor.curr, node, Ordering::AcqRel, &guard)
             {
                 Ok(_) => return true,
                 Err(e) => node = e.new,
@@ -133,9 +134,10 @@ where
         }
     }
 
-    pub fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<V> {
+    pub fn remove(&self, key: &K) -> Option<V> {
+        let guard = crossbeam_epoch::pin();
         loop {
-            let (found, cursor) = self.find(key, guard);
+            let (found, cursor) = self.find(key, &guard);
             if !found {
                 return None;
             }
@@ -149,7 +151,7 @@ where
                     cursor.next,
                     cursor.next.with_tag(1),
                     Ordering::AcqRel,
-                    guard,
+                    &guard,
                 )
                 .is_err()
             {
@@ -158,10 +160,10 @@ where
 
             match cursor
                 .prev
-                .compare_and_set(cursor.curr, cursor.next, Ordering::AcqRel, guard)
+                .compare_and_set(cursor.curr, cursor.next, Ordering::AcqRel, &guard)
             {
                 Err(_) => {
-                    self.find(key, guard);
+                    self.find(key, &guard);
                 }
                 Ok(_) => unsafe { guard.defer_destroy(cursor.curr) },
             }

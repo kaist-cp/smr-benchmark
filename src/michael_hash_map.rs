@@ -42,19 +42,17 @@ where
 
     pub fn get<'g>(&'g self, k: &K, guard: &'g Guard) -> Option<&'g V> {
         let i = Self::hash(k);
-        self.get_bucket(i).search(k, guard)
+        self.get_bucket(i).get(k, guard)
     }
 
     pub fn insert(&self, k: K, v: V) -> bool {
         let i = Self::hash(&k);
-        let guard = crossbeam_epoch::pin();
-        self.get_bucket(i).insert(k, v, &guard)
+        self.get_bucket(i).insert(k, v)
     }
 
     pub fn remove(&self, k: &K) -> Option<V> {
         let i = Self::hash(&k);
-        let guard = crossbeam_epoch::pin();
-        self.get_bucket(i).remove(k, &guard)
+        self.get_bucket(i).remove(k)
     }
 }
 
