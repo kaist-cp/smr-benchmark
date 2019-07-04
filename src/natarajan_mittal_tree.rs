@@ -130,7 +130,6 @@ where
     fn load_right<'g>(&self, guard: &'g Guard) -> Shared<'g, Node<K, V>> {
         self.right.load(Ordering::Acquire, guard)
     }
-
 }
 
 struct SeekRecord<'g, K, V> {
@@ -265,7 +264,7 @@ where
         }
     }
 
-    fn defer_destroy_subtree<'g>(root: Shared<'g, Node<K,V>>, guard: &'g Guard) {
+    fn defer_destroy_subtree<'g>(root: Shared<'g, Node<K, V>>, guard: &'g Guard) {
         // recurse
         let root_node = match unsafe { root.as_ref() } {
             None => return,
@@ -276,7 +275,9 @@ where
 
         // TODO: check if it is safe to manually drop the value
         // ManuallyDrop::drop(root.value);
-        unsafe { guard.defer_destroy(root); }
+        unsafe {
+            guard.defer_destroy(root);
+        }
     }
 
     // TODO: key &'g ???
@@ -412,9 +413,9 @@ where
 #[cfg(test)]
 mod tests {
     extern crate rand;
-    use rand::prelude::*;
     use super::NMTreeMap;
     use crossbeam_utils::thread;
+    use rand::prelude::*;
 
     #[test]
     fn smoke_nm_tree() {
