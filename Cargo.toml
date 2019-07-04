@@ -9,3 +9,4 @@ edition = "2018"
 [dependencies]
 crossbeam-epoch = "0.7.1"
 crossbeam-utils = "0.6.5"
+rand = "0.7"

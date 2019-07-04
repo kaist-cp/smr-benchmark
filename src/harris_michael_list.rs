@@ -4,6 +4,7 @@ use std::mem::ManuallyDrop;
 use std::ptr;
 use std::sync::atomic::Ordering;
 
+#[derive(Debug)]
 struct Node<K, V> {
     key: K,
 
@@ -79,7 +80,7 @@ where
             } else {
                 match cursor.prev.compare_and_set(
                     cursor.curr.with_tag(0),
-                    cursor.next,
+                    cursor.next.with_tag(0),
                     Ordering::AcqRel,
                     guard,
                 ) {
@@ -162,10 +163,10 @@ where
                 .prev
                 .compare_and_set(cursor.curr, cursor.next, Ordering::AcqRel, &guard)
             {
+                Ok(_) => unsafe { guard.defer_destroy(cursor.curr) },
                 Err(_) => {
                     self.find(key, &guard);
                 }
-                Ok(_) => unsafe { guard.defer_destroy(cursor.curr) },
             }
 
             return Some(ManuallyDrop::into_inner(value));

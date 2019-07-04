@@ -58,16 +58,21 @@ where
 
 #[cfg(test)]
 mod tests {
+    extern crate rand;
     use super::HashMap;
     use crossbeam_utils::thread;
+    use rand::prelude::*;
 
     #[test]
-    fn smoke() {
-        let hash_map = &HashMap::with_capacity(100);
+    fn smoke_hashmap() {
+        let hash_map = &HashMap::with_capacity(10000);
         thread::scope(|s| {
-            for t in 0..100 {
+            for t in 0..20 {
                 s.spawn(move |_| {
-                    for i in 0..1000 {
+                    let mut rng = rand::thread_rng();
+                    let mut keys: Vec<i32> = (0..2000).collect();
+                    keys.shuffle(&mut rng);
+                    for i in keys {
                         hash_map.insert(i, (i, t));
                     }
                 });
@@ -75,9 +80,25 @@ mod tests {
         })
         .unwrap();
 
+        println!("start removal");
+        thread::scope(|s| {
+            for t in 0..20 {
+                s.spawn(move |_| {
+                    let mut rng = rand::thread_rng();
+                    let mut keys: Vec<i32> = (1..2000).collect();
+                    keys.shuffle(&mut rng);
+                    for i in keys {
+                        hash_map.remove(&i);
+                    }
+                });
+            }
+        })
+        .unwrap();
+        println!("done");
+
         let guard = crossbeam_epoch::pin();
-        assert_eq!(hash_map.get(&1, &guard).unwrap().0, 1);
-        assert_eq!(hash_map.remove(&1).unwrap().0, 1);
-        assert_eq!(hash_map.get(&1, &guard), None);
+        assert_eq!(hash_map.get(&0, &guard).unwrap().0, 0);
+        assert_eq!(hash_map.remove(&0).unwrap().0, 0);
+        assert_eq!(hash_map.get(&0, &guard), None);
     }
 }
