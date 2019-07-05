@@ -10,14 +10,12 @@ fn with_flag_tag<T>(p: Shared<T>, flag: bool, tag: bool) -> Shared<T> {
 }
 
 #[inline]
-fn flag_tag<T>(p: Shared<T>) -> (bool, bool) {
+fn get_flag_tag<T>(p: Shared<T>) -> (bool, bool) {
     let tags = p.tag();
     ((tags & 2) == 2, (tags & 1) == 1)
 }
 
-// TODO separate key/level vs Sum type
-// Ord not needed?
-#[derive(Clone, PartialEq, Eq, Ord)]
+#[derive(Clone, PartialEq, Eq, Ord, Debug)]
 enum Key<K> {
     Fin(K),
     Inf0,
@@ -73,6 +71,7 @@ where
     }
 }
 
+#[derive(Debug)]
 struct Node<K, V> {
     key: Key<K>,
     // TODO: Default V vs. Option<ManuallyDrop<V>>,
@@ -111,13 +110,25 @@ where
         }
     }
 
-    /// uses right's key
-    fn new_internal(left: &Node<K, V>, right: &Node<K, V>) -> Node<K, V> {
+    /// Make a new internal node, consuming the given left and right nodes,
+    /// using the right node's key.
+    fn new_internal(left: Node<K, V>, right: Node<K, V>) -> Node<K, V> {
         Node {
             key: right.key.clone(),
             value: ManuallyDrop::new(V::default()),
-            left: Atomic::new(left.clone()),
-            right: Atomic::new(right.clone()),
+            left: Atomic::from(left),
+            right: Atomic::from(right),
+        }
+    }
+
+    /// Make a new internal node from the references to the left and right nodes.
+    /// The left node and the right node should live longer than the new internal node.
+    fn new_internal_from_ref(left: &Node<K, V>, right: &Node<K, V>) -> Node<K, V> {
+        Node {
+            key: right.key.clone(),
+            value: ManuallyDrop::new(V::default()),
+            left: Atomic::from(left as *const Node<K, V>),
+            right: Atomic::from(right as *const Node<K, V>),
         }
     }
 
@@ -143,6 +154,46 @@ pub struct NMTreeMap<K, V> {
     r: Node<K, V>,
 }
 
+impl<K, V> Default for NMTreeMap<K, V>
+where
+    K: Ord + Clone,
+    V: Default + Clone,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<K, V> Drop for NMTreeMap<K, V> {
+    fn drop(&mut self) {
+        // TODO: incomplete implementation. nice way to drop subtree?
+        unsafe {
+            let guard = &crossbeam_epoch::unprotected();
+            drop(self.r.right.load(Ordering::Relaxed, guard).into_owned());
+            drop(
+                self.r
+                    .left
+                    .load(Ordering::Relaxed, guard)
+                    .as_ref()
+                    .unwrap()
+                    .left
+                    .load(Ordering::Relaxed, guard)
+                    .into_owned(),
+            );
+            drop(
+                self.r
+                    .left
+                    .load(Ordering::Relaxed, guard)
+                    .as_ref()
+                    .unwrap()
+                    .right
+                    .load(Ordering::Relaxed, guard)
+                    .into_owned(),
+            );
+        }
+    }
+}
+
 impl<K, V> NMTreeMap<K, V>
 where
     K: Ord + Clone,
@@ -152,13 +203,13 @@ where
         let inf0 = Node::new_leaf(Key::Inf0, None);
         let inf1 = Node::new_leaf(Key::Inf1, None);
         let inf2 = Node::new_leaf(Key::Inf2, None);
-        let s = Node::new_internal(&inf0, &inf1);
-        let r = Node::new_internal(&s, &inf2);
+        let s = Node::new_internal(inf0, inf1);
+        let r = Node::new_internal(s, inf2);
         NMTreeMap { r }
     }
 
     #[inline]
-    fn new_record<'g>(&self, guard: &'g Guard) -> SeekRecord<'g, K, V> {
+    fn init_record<'g>(&self, guard: &'g Guard) -> SeekRecord<'g, K, V> {
         let s = self.r.left.load(Ordering::Relaxed, guard);
         SeekRecord {
             ancestor: Shared::from(&self.r as *const Node<K, V>),
@@ -173,15 +224,13 @@ where
     }
 
     fn seek<'g>(&self, key: &K, guard: &'g Guard) -> SeekRecord<'g, K, V> {
-        let mut record = self.new_record(guard);
-
+        let mut record = self.init_record(guard);
         let mut parent_field = unsafe { record.parent.as_ref() }.unwrap().load_left(guard);
         let mut current_field = unsafe { record.leaf.as_ref() }.unwrap().load_left(guard);
-        // TODO: is current needed?
         let mut current = current_field.with_tag(0);
 
         while let Some(curr_node) = unsafe { current.as_ref() } {
-            let (_, tag) = flag_tag(parent_field);
+            let (_, tag) = get_flag_tag(parent_field);
             if !tag {
                 // untagged edge: advance ancestor and successor pointers
                 record.ancestor = record.parent;
@@ -205,10 +254,8 @@ where
         record
     }
 
-    /// physical removal is done only by this function
+    /// Physically remove node.
     fn cleanup(&self, key: &K, record: &SeekRecord<'_, K, V>) -> bool {
-        // TODO: make method?
-        // TODO: add some doc
         let ancestor = unsafe { record.ancestor.as_ref().unwrap() };
         let parent = unsafe { record.parent.as_ref().unwrap() };
 
@@ -228,7 +275,7 @@ where
         let guard = crossbeam_epoch::pin();
         let mut child = child_addr.load(Ordering::Acquire, &guard);
 
-        let (flag, _) = flag_tag(child);
+        let (flag, _) = get_flag_tag(child);
         if !flag {
             // sibling is flagged for deletion: switch sibling addr
             child = sibling_addr.load(Ordering::Acquire, &guard);
@@ -236,7 +283,7 @@ where
         }
 
         // NOTE: the ibr implementation uses CAS
-        // tag (parent, sibling) edge -> all of the parent's edges can change now
+        // tag (parent, sibling) edge -> all of the parent's edges can't change now
         // TODO: Is Release enough?
         sibling_addr.fetch_or(1, Ordering::AcqRel, &guard);
 
@@ -244,7 +291,7 @@ where
         // Since (parent, sibling) might have been concurrently flagged, copy
         // the flag to the new edge (ancestor, sibling).
         let sibling = sibling_addr.load(Ordering::Acquire, &guard);
-        let (flag, _) = flag_tag(sibling);
+        let (flag, _) = get_flag_tag(sibling);
         match successor_addr.compare_and_set(
             record.successor.with_tag(0),
             with_flag_tag(sibling, flag, false),
@@ -253,30 +300,13 @@ where
         ) {
             Ok(_) => {
                 unsafe {
-                    // TODO!!!!!!!!!!!!!!!!: free all of the subtree?
-                    // guard.defer_destroy(child);
-                    // guard.defer_destroy(record.successor);
-                    Self::defer_destroy_subtree(record.successor, &guard);
+                    // TODO: add correctness proof
+                    guard.defer_destroy(child);
+                    guard.defer_destroy(record.successor);
                 }
                 true
             }
             Err(_) => false,
-        }
-    }
-
-    fn defer_destroy_subtree<'g>(root: Shared<'g, Node<K, V>>, guard: &'g Guard) {
-        // recurse
-        let root_node = match unsafe { root.as_ref() } {
-            None => return,
-            Some(root_node) => root_node,
-        };
-        Self::defer_destroy_subtree(root_node.load_left(guard), guard);
-        Self::defer_destroy_subtree(root_node.load_right(guard), guard);
-
-        // TODO: check if it is safe to manually drop the value
-        // ManuallyDrop::drop(root.value);
-        unsafe {
-            guard.defer_destroy(root);
         }
     }
 
@@ -291,7 +321,6 @@ where
         }
     }
 
-    /// The original version in the paper doesn't update.
     pub fn insert(&self, key: K, value: V) -> bool {
         let guard = crossbeam_epoch::pin();
         loop {
@@ -308,13 +337,19 @@ where
                     &parent.right
                 };
 
-                let new_leaf = Node::new_leaf(Key::Fin(key.clone()), Some(value.clone()));
-                let (new_left, new_right) = if leaf.key > key {
-                    (&new_leaf, leaf)
+                let new_leaf = Box::leak(Box::new(Node::new_leaf(
+                    Key::Fin(key.clone()),
+                    Some(value.clone()),
+                ))) as &Node<K, V>;
+
+                let (new_left, new_right, drop_left) = if leaf.key > key {
+                    (new_leaf, leaf, true)
                 } else {
-                    (leaf, &new_leaf)
+                    (leaf, new_leaf, false)
                 };
-                let new_internal = Owned::new(Node::new_internal(new_left, new_right));
+
+                let new_internal = Owned::new(Node::new_internal_from_ref(new_left, new_right));
+
                 match child_addr.compare_and_set(
                     record.leaf.with_tag(0),
                     new_internal,
@@ -322,9 +357,15 @@ where
                     &guard,
                 ) {
                     Ok(_) => return true,
-                    Err(_) => {
+                    Err(e) => {
+                        // Insertion failed. Drop the leaked leaf and help the
+                        // conflicting remove operation if needed.
+                        let leaked = if drop_left { &e.new.left } else { &e.new.right };
+                        unsafe {
+                            drop(leaked.load(Ordering::Relaxed, &guard).into_owned());
+                        }
                         let child = child_addr.load(Ordering::Acquire, &guard);
-                        let (flag, tag) = flag_tag(child);
+                        let (flag, tag) = get_flag_tag(child);
                         if child.with_tag(0) == record.leaf && (flag || tag) {
                             self.cleanup(&key, &record);
                         }
@@ -333,8 +374,6 @@ where
             }
         }
     }
-
-    // TODO: put, replace?
 
     pub fn remove(&self, key: &K) -> Option<V> {
         let guard = crossbeam_epoch::pin();
@@ -383,10 +422,9 @@ where
                 Err(_) => {
                     // Flagging failed.
                     // 1. child_addr points to another node: restart.
-                    // 2. Another thread flagged/tagged the leaf: help and
-                    //    restart
+                    // 2. Another thread flagged/tagged the leaf: help and restart
                     let temp_child = child_addr.load(Ordering::Acquire, &guard);
-                    let (flag, tag) = flag_tag(temp_child);
+                    let (flag, tag) = get_flag_tag(temp_child);
                     if record.leaf == temp_child.with_tag(0) && (flag || tag) {
                         self.cleanup(key, &record);
                     }
@@ -420,12 +458,14 @@ mod tests {
     #[test]
     fn smoke_nm_tree() {
         let nm_tree_map = &NMTreeMap::new();
+        nm_tree_map.insert(0, (0, 100));
+        nm_tree_map.remove(&0);
 
         thread::scope(|s| {
-            for t in 0..6 {
+            for t in 0..30 {
                 s.spawn(move |_| {
                     let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (0..3000000).collect();
+                    let mut keys: Vec<i32> = (0..3000).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
                         nm_tree_map.insert(i, (i, t));
@@ -437,10 +477,10 @@ mod tests {
 
         println!("start removal");
         thread::scope(|s| {
-            for _ in 0..6 {
+            for _ in 0..30 {
                 s.spawn(move |_| {
                     let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (1..3000000).collect();
+                    let mut keys: Vec<i32> = (1..3000).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
                         nm_tree_map.remove(&i);
