@@ -4,15 +4,30 @@ use std::mem::ManuallyDrop;
 use std::ptr;
 use std::sync::atomic::Ordering;
 
-#[inline]
-fn with_flag_tag<T>(p: Shared<T>, flag: bool, tag: bool) -> Shared<T> {
-    p.with_tag(((flag as usize) << 1) | (tag as usize))
+bitflags! {
+    /// TODO
+    struct Flags: usize {
+        /// TODO: meaningful
+        const FLAG = 1usize.wrapping_shl(1);
+
+        /// TODO: meaningful
+        const TAG  = 1usize.wrapping_shl(0);
+    }
 }
 
-#[inline]
-fn get_flag_tag<T>(p: Shared<T>) -> (bool, bool) {
-    let tags = p.tag();
-    ((tags & 2) == 2, (tags & 1) == 1)
+impl Flags {
+    fn new(flag: bool, tag: bool) -> Self {
+        (if flag { Flags::FLAG } else { Flags::empty() })
+            | (if tag { Flags::TAG } else { Flags::empty() })
+    }
+
+    fn flag(self) -> bool {
+        !(self & Flags::FLAG).is_empty()
+    }
+
+    fn tag(self) -> bool {
+        !(self & Flags::TAG).is_empty()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Ord, Debug)]
@@ -219,7 +234,7 @@ where
                 .unwrap()
                 .left
                 .load(Ordering::Acquire, guard)
-                .with_tag(0),
+                .with_tag(Flags::empty().bits()),
         }
     }
 
@@ -227,10 +242,10 @@ where
         let mut record = self.init_record(guard);
         let mut parent_field = unsafe { record.parent.as_ref() }.unwrap().load_left(guard);
         let mut current_field = unsafe { record.leaf.as_ref() }.unwrap().load_left(guard);
-        let mut current = current_field.with_tag(0);
+        let mut current = current_field.with_tag(Flags::empty().bits());
 
         while let Some(curr_node) = unsafe { current.as_ref() } {
-            let (_, tag) = get_flag_tag(parent_field);
+            let tag = Flags::from_bits_truncate(parent_field.tag()).tag();
             if !tag {
                 // untagged edge: advance ancestor and successor pointers
                 record.ancestor = record.parent;
@@ -248,7 +263,7 @@ where
             } else {
                 curr_node.load_right(guard)
             };
-            current = current_field.with_tag(0);
+            current = current_field.with_tag(Flags::empty().bits());
         }
 
         record
@@ -275,7 +290,7 @@ where
         let guard = crossbeam_epoch::pin();
         let mut child = child_addr.load(Ordering::Acquire, &guard);
 
-        let (flag, _) = get_flag_tag(child);
+        let flag = Flags::from_bits_truncate(child.tag()).flag();
         if !flag {
             // sibling is flagged for deletion: switch sibling addr
             child = sibling_addr.load(Ordering::Acquire, &guard);
@@ -291,10 +306,10 @@ where
         // Since (parent, sibling) might have been concurrently flagged, copy
         // the flag to the new edge (ancestor, sibling).
         let sibling = sibling_addr.load(Ordering::Acquire, &guard);
-        let (flag, _) = get_flag_tag(sibling);
+        let flag = Flags::from_bits_truncate(sibling.tag()).flag();
         match successor_addr.compare_and_set(
-            record.successor.with_tag(0),
-            with_flag_tag(sibling, flag, false),
+            record.successor.with_tag(Flags::empty().bits()),
+            sibling.with_tag(Flags::new(flag, false).bits()),
             Ordering::AcqRel,
             &guard,
         ) {
@@ -351,7 +366,7 @@ where
                 let new_internal = Owned::new(Node::new_internal_from_ref(new_left, new_right));
 
                 match child_addr.compare_and_set(
-                    record.leaf.with_tag(0),
+                    record.leaf.with_tag(Flags::empty().bits()),
                     new_internal,
                     Ordering::AcqRel,
                     &guard,
@@ -365,8 +380,10 @@ where
                             drop(leaked.load(Ordering::Relaxed, &guard).into_owned());
                         }
                         let child = child_addr.load(Ordering::Acquire, &guard);
-                        let (flag, tag) = get_flag_tag(child);
-                        if child.with_tag(0) == record.leaf && (flag || tag) {
+                        let flags = Flags::from_bits_truncate(child.tag());
+                        if child.with_tag(Flags::empty().bits()) == record.leaf
+                            && (flags.flag() || flags.tag())
+                        {
                             self.cleanup(&key, &record);
                         }
                     }
@@ -404,8 +421,8 @@ where
 
             // Try injecting the deletion flag.
             match child_addr.compare_and_set(
-                record.leaf.with_tag(0),
-                with_flag_tag(record.leaf, true, false),
+                record.leaf.with_tag(Flags::empty().bits()),
+                record.leaf.with_tag(Flags::new(true, false).bits()),
                 Ordering::AcqRel,
                 &guard,
             ) {
@@ -424,8 +441,10 @@ where
                     // 1. child_addr points to another node: restart.
                     // 2. Another thread flagged/tagged the leaf: help and restart
                     let temp_child = child_addr.load(Ordering::Acquire, &guard);
-                    let (flag, tag) = get_flag_tag(temp_child);
-                    if record.leaf == temp_child.with_tag(0) && (flag || tag) {
+                    let flags = Flags::from_bits_truncate(temp_child.tag());
+                    if record.leaf == temp_child.with_tag(Flags::empty().bits())
+                        && (flags.flag() || flags.tag())
+                    {
                         self.cleanup(key, &record);
                     }
                 }
