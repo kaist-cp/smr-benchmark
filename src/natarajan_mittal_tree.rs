@@ -1,4 +1,4 @@
-use crossbeam_epoch::{Atomic, Guard, Owned, Shared};
+use crossbeam_epoch::{unprotected, Atomic, Guard, Owned, Shared};
 
 use std::mem::ManuallyDrop;
 use std::ptr;
@@ -94,25 +94,9 @@ struct Node<K, V> {
     right: Atomic<Node<K, V>>,
 }
 
-impl<K, V> Clone for Node<K, V>
-where
-    K: Clone,
-    V: Clone,
-{
-    fn clone(&self) -> Self {
-        Node {
-            key: self.key.clone(),
-            value: self.value.clone(),
-            left: self.left.clone(),
-            right: self.right.clone(),
-        }
-    }
-}
-
 impl<K, V> Node<K, V>
 where
     K: Clone,
-    V: Clone,
 {
     fn new_leaf(key: Key<K>, value: Option<V>) -> Node<K, V> {
         Node {
@@ -134,17 +118,6 @@ where
         }
     }
 
-    /// Make a new internal node from the references to the left and right nodes.
-    /// The left node and the right node should live longer than the new internal node.
-    fn new_internal_from_ref(left: &Node<K, V>, right: &Node<K, V>) -> Node<K, V> {
-        Node {
-            key: right.key.clone(),
-            value: None,
-            left: Atomic::from(left as *const Node<K, V>),
-            right: Atomic::from(right as *const Node<K, V>),
-        }
-    }
-
     #[inline]
     fn load_left<'g>(&self, guard: &'g Guard) -> Shared<'g, Node<K, V>> {
         self.left.load(Ordering::Acquire, guard)
@@ -157,12 +130,14 @@ where
 }
 
 struct SeekRecord<'g, K, V> {
+    // COMMENT(@jeehoonkang): please comment something
     ancestor: Shared<'g, Node<K, V>>,
     successor: Shared<'g, Node<K, V>>,
     parent: Shared<'g, Node<K, V>>,
     leaf: Shared<'g, Node<K, V>>,
 }
 
+// COMMENT(@jeehoonkang): write down the invariant of the tree
 pub struct NMTreeMap<K, V> {
     r: Node<K, V>,
 }
@@ -170,7 +145,6 @@ pub struct NMTreeMap<K, V> {
 impl<K, V> Default for NMTreeMap<K, V>
 where
     K: Ord + Clone,
-    V: Default + Clone,
 {
     fn default() -> Self {
         Self::new()
@@ -210,7 +184,6 @@ impl<K, V> Drop for NMTreeMap<K, V> {
 impl<K, V> NMTreeMap<K, V>
 where
     K: Ord + Clone,
-    V: Default + Clone,
 {
     pub fn new() -> Self {
         let inf0 = Node::new_leaf(Key::Inf0, None);
@@ -267,8 +240,8 @@ where
         record
     }
 
-    /// Physically remove node.
-    fn cleanup(&self, key: &K, record: &SeekRecord<'_, K, V>) -> bool {
+    /// Physically removes node.  Returns whether the subtree containing `key` is removed.
+    fn cleanup(&self, key: &K, record: &SeekRecord<'_, K, V>, guard: &Guard) -> bool {
         let ancestor = unsafe { record.ancestor.as_ref().unwrap() };
         let parent = unsafe { record.parent.as_ref().unwrap() };
 
@@ -285,25 +258,24 @@ where
             (&parent.right, &parent.left)
         };
 
-        let guard = crossbeam_epoch::pin();
-        let mut child = child_addr.load(Ordering::Acquire, &guard);
+        let mut child = child_addr.load(Ordering::Acquire, guard);
 
         let flag = Flags::from_bits_truncate(child.tag()).flag();
         if !flag {
             // sibling is flagged for deletion: switch sibling addr
-            child = sibling_addr.load(Ordering::Acquire, &guard);
+            child = sibling_addr.load(Ordering::Acquire, guard);
             sibling_addr = child_addr;
         }
 
         // NOTE: the ibr implementation uses CAS
         // tag (parent, sibling) edge -> all of the parent's edges can't change now
         // TODO: Is Release enough?
-        sibling_addr.fetch_or(1, Ordering::AcqRel, &guard);
+        sibling_addr.fetch_or(1, Ordering::AcqRel, guard);
 
         // Try to replace (ancestor, successor) w/ (ancestor, sibling).
         // Since (parent, sibling) might have been concurrently flagged, copy
         // the flag to the new edge (ancestor, sibling).
-        let sibling = sibling_addr.load(Ordering::Acquire, &guard);
+        let sibling = sibling_addr.load(Ordering::Acquire, guard);
         let flag = Flags::from_bits_truncate(sibling.tag()).flag();
         match successor_addr.compare_and_set(
             record.successor.with_tag(Flags::empty().bits()),
@@ -337,64 +309,73 @@ where
         }
     }
 
-    pub fn insert(&self, key: K, value: V) -> bool {
-        let guard = crossbeam_epoch::pin();
+    pub fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
+        let new_leaf = Owned::new(Node::new_leaf(Key::Fin(key.clone()), Some(value)))
+            .into_shared(unsafe { unprotected() });
+
+        let mut new_internal = Owned::new(Node {
+            key: Key::Inf2, // TODO
+            value: None,
+            left: Atomic::null(),
+            right: Atomic::null(),
+        })
+        .into_shared(unsafe { unprotected() });
+
         loop {
-            let record = self.seek(&key, &guard);
-            let leaf = unsafe { record.leaf.as_ref().unwrap() };
-            if leaf.key == key {
+            let record = self.seek(&key, guard);
+            let leaf = record.leaf;
+            let leaf_node = unsafe { leaf.deref() };
+
+            if leaf_node.key == key {
+                unsafe {
+                    drop(new_leaf.into_owned());
+                    drop(new_internal.into_owned());
+                }
                 return false;
+            }
+
+            // key not in the tree
+            let parent_node = unsafe { record.parent.as_ref().unwrap() };
+            let parent_child = if parent_node.key > key {
+                &parent_node.left
             } else {
-                // key not in the tree
-                let parent = unsafe { record.parent.as_ref().unwrap() };
-                let child_addr = if parent.key > key {
-                    &parent.left
-                } else {
-                    &parent.right
-                };
+                &parent_node.right
+            };
 
-                let new_leaf = Box::leak(Box::new(Node::new_leaf(
-                    Key::Fin(key.clone()),
-                    Some(value.clone()),
-                ))) as &Node<K, V>;
+            let (new_left, new_right) = if leaf_node.key > key {
+                (new_leaf, leaf)
+            } else {
+                (leaf, new_leaf)
+            };
 
-                let (new_left, new_right, drop_left) = if leaf.key > key {
-                    (new_leaf, leaf, true)
-                } else {
-                    (leaf, new_leaf, false)
-                };
+            let new_internal_node = unsafe { new_internal.deref_mut() };
+            new_internal_node.key = unsafe { new_right.deref().key.clone() };
+            new_internal_node.left.store(new_left, Ordering::Relaxed);
+            new_internal_node.right.store(new_right, Ordering::Relaxed);
 
-                let new_internal = Owned::new(Node::new_internal_from_ref(new_left, new_right));
-
-                match child_addr.compare_and_set(
+            if parent_child
+                .compare_and_set(
                     record.leaf.with_tag(Flags::empty().bits()),
                     new_internal,
                     Ordering::AcqRel,
                     &guard,
-                ) {
-                    Ok(_) => return true,
-                    Err(e) => {
-                        // Insertion failed. Drop the leaked leaf and help the
-                        // conflicting remove operation if needed.
-                        let leaked = if drop_left { &e.new.left } else { &e.new.right };
-                        unsafe {
-                            drop(leaked.load(Ordering::Relaxed, &guard).into_owned());
-                        }
-                        let child = child_addr.load(Ordering::Acquire, &guard);
-                        let flags = Flags::from_bits_truncate(child.tag());
-                        if child.with_tag(Flags::empty().bits()) == record.leaf
-                            && (flags.flag() || flags.tag())
-                        {
-                            self.cleanup(&key, &record);
-                        }
-                    }
-                }
+                )
+                .is_ok()
+            {
+                return true;
+            }
+
+            // Insertion failed. Help the conflicting remove operation if needed.
+            let child = parent_child.load(Ordering::Acquire, guard);
+            let flags = Flags::from_bits_truncate(child.tag());
+            if child.with_tag(Flags::empty().bits()) == record.leaf && (flags.flag() || flags.tag())
+            {
+                self.cleanup(&key, &record, guard);
             }
         }
     }
 
-    pub fn remove(&self, key: &K) -> Option<V> {
-        let guard = crossbeam_epoch::pin();
+    pub fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
         let mut record;
         // `leaf`, `value` is the snapshot of the node to be deleted.
         let leaf;
@@ -402,7 +383,7 @@ where
 
         // injection phase
         loop {
-            record = self.seek(key, &guard);
+            record = self.seek(key, guard);
             let parent = unsafe { record.parent.as_ref().unwrap() };
             let child_addr = if parent.key > *key {
                 &parent.left
@@ -433,7 +414,7 @@ where
                     // Finalize the node to be removed
                     leaf = temp_leaf;
                     value = temp_value;
-                    if self.cleanup(key, &record) {
+                    if self.cleanup(key, &record, guard) {
                         return Some(value);
                     }
                     // In-place cleanup failed. Enter the cleanup phase.
@@ -443,12 +424,12 @@ where
                     // Flagging failed.
                     // 1. child_addr points to another node: restart.
                     // 2. Another thread flagged/tagged the leaf: help and restart
-                    let temp_child = child_addr.load(Ordering::Acquire, &guard);
+                    let temp_child = child_addr.load(Ordering::Acquire, guard);
                     let flags = Flags::from_bits_truncate(temp_child.tag());
                     if record.leaf == temp_child.with_tag(Flags::empty().bits())
                         && (flags.flag() || flags.tag())
                     {
-                        self.cleanup(key, &record);
+                        self.cleanup(key, &record, guard);
                     }
                 }
             }
@@ -456,13 +437,13 @@ where
 
         // cleanup phase
         loop {
-            record = self.seek(key, &guard);
+            record = self.seek(key, guard);
             if record.leaf != leaf {
                 // `leaf` flagged for deletion was removed by a helping thread
                 return Some(value);
             } else {
                 // `leaf` is still present in the tree.
-                if self.cleanup(key, &record) {
+                if self.cleanup(key, &record, guard) {
                     return Some(value);
                 }
             }
@@ -480,8 +461,12 @@ mod tests {
     #[test]
     fn smoke_nm_tree() {
         let nm_tree_map = &NMTreeMap::new();
-        nm_tree_map.insert(0, (0, 100));
-        nm_tree_map.remove(&0);
+
+        {
+            let guard = crossbeam_epoch::pin();
+            nm_tree_map.insert(0, (0, 100), &guard);
+            nm_tree_map.remove(&0, &guard);
+        }
 
         thread::scope(|s| {
             for t in 0..30 {
@@ -490,7 +475,7 @@ mod tests {
                     let mut keys: Vec<i32> = (0..3000).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        nm_tree_map.insert(i, (i, t));
+                        nm_tree_map.insert(i, (i, t), &crossbeam_epoch::pin());
                     }
                 });
             }
@@ -505,7 +490,7 @@ mod tests {
                     let mut keys: Vec<i32> = (1..3000).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        nm_tree_map.remove(&i);
+                        nm_tree_map.remove(&i, &crossbeam_epoch::pin());
                     }
                 });
             }
@@ -514,9 +499,11 @@ mod tests {
 
         println!("done");
 
-        let guard = crossbeam_epoch::pin();
-        assert_eq!(nm_tree_map.get(&0, &guard).unwrap().0, 0);
-        assert_eq!(nm_tree_map.remove(&0).unwrap().0, 0);
-        assert_eq!(nm_tree_map.get(&0, &guard), None);
+        {
+            let guard = crossbeam_epoch::pin();
+            assert_eq!(nm_tree_map.get(&0, &guard).unwrap().0, 0);
+            assert_eq!(nm_tree_map.remove(&0, &guard).unwrap().0, 0);
+            assert_eq!(nm_tree_map.get(&0, &guard), None);
+        }
     }
 }
