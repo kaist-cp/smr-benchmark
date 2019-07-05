@@ -186,6 +186,7 @@ where
     K: Ord + Clone,
 {
     pub fn new() -> Self {
+        // COMMENT(@jeehoonkang): describe it...
         let inf0 = Node::new_leaf(Key::Inf0, None);
         let inf1 = Node::new_leaf(Key::Inf1, None);
         let inf2 = Node::new_leaf(Key::Inf2, None);
@@ -194,25 +195,21 @@ where
         NMTreeMap { r }
     }
 
-    #[inline]
-    fn init_record<'g>(&self, guard: &'g Guard) -> SeekRecord<'g, K, V> {
+    fn seek<'g>(&self, key: &K, guard: &'g Guard) -> SeekRecord<'g, K, V> {
         let s = self.r.left.load(Ordering::Relaxed, guard);
-        SeekRecord {
+        let leaf = unsafe { s.deref() }
+            .left
+            .load(Ordering::Acquire, guard)
+            .with_tag(Flags::empty().bits());
+
+        let mut record = SeekRecord {
             ancestor: Shared::from(&self.r as *const Node<K, V>),
             successor: s,
             parent: s,
-            leaf: unsafe { s.as_ref() }
-                .unwrap()
-                .left
-                .load(Ordering::Acquire, guard)
-                .with_tag(Flags::empty().bits()),
-        }
-    }
-
-    fn seek<'g>(&self, key: &K, guard: &'g Guard) -> SeekRecord<'g, K, V> {
-        let mut record = self.init_record(guard);
-        let mut parent_field = unsafe { record.parent.as_ref() }.unwrap().load_left(guard);
-        let mut current_field = unsafe { record.leaf.as_ref() }.unwrap().load_left(guard);
+            leaf,
+        };
+        let mut parent_field = unsafe { s.as_ref() }.unwrap().load_left(guard);
+        let mut current_field = unsafe { leaf.as_ref() }.unwrap().load_left(guard);
         let mut current = current_field.with_tag(Flags::empty().bits());
 
         while let Some(curr_node) = unsafe { current.as_ref() } {
@@ -240,24 +237,27 @@ where
         record
     }
 
-    /// Physically removes node.  Returns whether the subtree containing `key` is removed.
+    /// Physically removes node.
+    ///
+    /// Returns whether the subtree containing `key` is removed.
     fn cleanup(&self, key: &K, record: &SeekRecord<'_, K, V>, guard: &Guard) -> bool {
         let ancestor = unsafe { record.ancestor.as_ref().unwrap() };
         let parent = unsafe { record.parent.as_ref().unwrap() };
 
+        // COMMENT(@jeehoonkang): maybe refactoring? inefficient?
         let successor_addr: &Atomic<Node<K, V>> = if ancestor.key > *key {
             &ancestor.left
         } else {
             &ancestor.right
         };
 
-        // TODO: (setting up sibling_addr) inefficient?
         let (child_addr, mut sibling_addr) = if parent.key > *key {
             (&parent.left, &parent.right)
         } else {
             (&parent.right, &parent.left)
         };
 
+        // COMMENT(@jeehoonkang): consistent variable naming
         let mut child = child_addr.load(Ordering::Acquire, guard);
 
         let flag = Flags::from_bits_truncate(child.tag()).flag();
@@ -270,6 +270,9 @@ where
         // NOTE: the ibr implementation uses CAS
         // tag (parent, sibling) edge -> all of the parent's edges can't change now
         // TODO: Is Release enough?
+        //
+        // COMMENT(@jeehoonkang): the value of `sibling_addr` can be changed from `child`. We remove
+        // `child` later. Is it okay?
         sibling_addr.fetch_or(1, Ordering::AcqRel, guard);
 
         // Try to replace (ancestor, successor) w/ (ancestor, sibling).
@@ -298,15 +301,13 @@ where
     // TODO: key &'g ???
     pub fn get<'g>(&self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
         let record = self.seek(key, guard);
-        unsafe {
-            let leaf_node = record.leaf.as_ref()?;
+        let leaf_node = unsafe { record.leaf.as_ref()? };
 
-            if leaf_node.key != *key {
-                return None;
-            }
-
-            Some(leaf_node.value.as_ref().unwrap())
+        if leaf_node.key != *key {
+            return None;
         }
+
+        Some(leaf_node.value.as_ref().unwrap())
     }
 
     pub fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
