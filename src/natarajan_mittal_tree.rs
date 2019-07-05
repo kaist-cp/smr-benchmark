@@ -89,9 +89,7 @@ where
 #[derive(Debug)]
 struct Node<K, V> {
     key: Key<K>,
-    // TODO: Default V vs. Option<ManuallyDrop<V>>,
-    // - internal node check
-    value: ManuallyDrop<V>,
+    value: Option<ManuallyDrop<V>>,
     left: Atomic<Node<K, V>>,
     right: Atomic<Node<K, V>>,
 }
@@ -114,12 +112,12 @@ where
 impl<K, V> Node<K, V>
 where
     K: Clone,
-    V: Default + Clone,
+    V: Clone,
 {
     fn new_leaf(key: Key<K>, value: Option<V>) -> Node<K, V> {
         Node {
             key,
-            value: ManuallyDrop::new(value.unwrap_or_default()),
+            value: value.map(ManuallyDrop::new),
             left: Atomic::null(),
             right: Atomic::null(),
         }
@@ -130,7 +128,7 @@ where
     fn new_internal(left: Node<K, V>, right: Node<K, V>) -> Node<K, V> {
         Node {
             key: right.key.clone(),
-            value: ManuallyDrop::new(V::default()),
+            value: None,
             left: Atomic::from(left),
             right: Atomic::from(right),
         }
@@ -141,7 +139,7 @@ where
     fn new_internal_from_ref(left: &Node<K, V>, right: &Node<K, V>) -> Node<K, V> {
         Node {
             key: right.key.clone(),
-            value: ManuallyDrop::new(V::default()),
+            value: None,
             left: Atomic::from(left as *const Node<K, V>),
             right: Atomic::from(right as *const Node<K, V>),
         }
@@ -329,10 +327,13 @@ where
     pub fn get<'g>(&self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
         let record = self.seek(key, guard);
         unsafe {
-            record
-                .leaf
-                .as_ref()
-                .and_then(|n| if n.key == *key { Some(&*n.value) } else { None })
+            let leaf_node = record.leaf.as_ref()?;
+
+            if leaf_node.key != *key {
+                return None;
+            }
+
+            Some(leaf_node.value.as_ref().unwrap())
         }
     }
 
@@ -414,7 +415,9 @@ where
             let temp_leaf_node = unsafe { record.leaf.as_ref().unwrap() };
             // Copy the value before proceeding to the next step so that
             // `defer_destroy_subtree` doesn't destroy the value.
-            let temp_value = unsafe { ManuallyDrop::into_inner(ptr::read(&temp_leaf_node.value)) };
+            let temp_value = unsafe {
+                ManuallyDrop::into_inner(ptr::read(temp_leaf_node.value.as_ref().unwrap()))
+            };
             if temp_leaf_node.key != *key {
                 return None;
             }
