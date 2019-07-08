@@ -139,7 +139,7 @@ struct SeekRecord<'g, K, V> {
 
 // COMMENT(@jeehoonkang): write down the invariant of the tree
 pub struct NMTreeMap<K, V> {
-    r: ManuallyDrop<Node<K, V>>,
+    r: Node<K, V>,
 }
 
 impl<K, V> Default for NMTreeMap<K, V>
@@ -153,14 +153,18 @@ where
 
 impl<K, V> Drop for NMTreeMap<K, V> {
     fn drop(&mut self) {
-        let mut stack = vec![Shared::from(&*self.r as *const Node<K, V>)];
+        unsafe {
+            let mut stack = vec![
+                self.r.left.load(Ordering::Relaxed, unprotected()),
+                self.r.right.load(Ordering::Relaxed, unprotected()),
+            ];
+            assert!(self.r.value.is_none());
 
-        while let Some(mut node) = stack.pop() {
-            if node.is_null() {
-                continue;
-            }
+            while let Some(mut node) = stack.pop() {
+                if node.is_null() {
+                    continue;
+                }
 
-            unsafe {
                 let node_ref = node.deref_mut();
 
                 if let Some(value) = node_ref.value.as_mut() {
@@ -186,7 +190,7 @@ where
         let inf2 = Node::new_leaf(Key::Inf2, None);
         let s = Node::new_internal(inf0, inf1);
         let r = Node::new_internal(s, inf2);
-        NMTreeMap { r: ManuallyDrop::new(r) }
+        NMTreeMap { r }
     }
 
     fn seek<'g>(&self, key: &K, guard: &'g Guard) -> SeekRecord<'g, K, V> {
@@ -197,7 +201,7 @@ where
             .with_tag(Flags::empty().bits());
 
         let mut record = SeekRecord {
-            ancestor: Shared::from(&*self.r as *const _),
+            ancestor: Shared::from(&self.r as *const _),
             successor: s,
             parent: s,
             leaf,
