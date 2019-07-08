@@ -139,7 +139,7 @@ struct SeekRecord<'g, K, V> {
 
 // COMMENT(@jeehoonkang): write down the invariant of the tree
 pub struct NMTreeMap<K, V> {
-    r: Node<K, V>,
+    r: ManuallyDrop<Node<K, V>>,
 }
 
 impl<K, V> Default for NMTreeMap<K, V>
@@ -153,59 +153,25 @@ where
 
 impl<K, V> Drop for NMTreeMap<K, V> {
     fn drop(&mut self) {
-        // TODO: iterative post-order tree traversal
-        let guard = unsafe { &crossbeam_epoch::unprotected() };
-        let mut stack = Vec::new();
-        let mut node = Shared::from(&self.r as *const Node<K, V>);
-        let mut last_visited = Shared::null();
-        while !stack.is_empty() || !node.is_null() {
-            match unsafe { node.as_ref() } {
-                Some(n) => {
-                    stack.push(node);
-                    node = n.left.load(Ordering::Relaxed, guard);
+        let mut stack = vec![Shared::from(&*self.r as *const Node<K, V>)];
+
+        while let Some(mut node) = stack.pop() {
+            if node.is_null() {
+                continue;
+            }
+
+            unsafe {
+                let node_ref = node.deref_mut();
+
+                if let Some(value) = node_ref.value.as_mut() {
+                    ManuallyDrop::drop(value);
                 }
-                None => {
-                    let peek = *stack.last().unwrap();
-                    let peek_node = unsafe { peek.as_ref().unwrap() };
-                    let right = peek_node.right.load(Ordering::Relaxed, guard);
-                    if !right.is_null() && last_visited != right {
-                        node = right;
-                    } else {
-                        unsafe {
-                            drop(peek.into_owned());
-                            // guard.defer_destroy(peek);
-                            last_visited = stack.pop().unwrap();
-                        }
-                    }
-                }
+
+                stack.push(node_ref.left.load(Ordering::Relaxed, unprotected()));
+                stack.push(node_ref.right.load(Ordering::Relaxed, unprotected()));
+                drop(node.into_owned());
             }
         }
-
-        // unsafe {
-        //     let guard = &crossbeam_epoch::unprotected();
-        //     drop(self.r.right.load(Ordering::Relaxed, guard).into_owned());
-        //     drop(
-        //         self.r
-        //             .left
-        //             .load(Ordering::Relaxed, guard)
-        //             .as_ref()
-        //             .unwrap()
-        //             .left
-        //             .load(Ordering::Relaxed, guard)
-        //             .into_owned(),
-        //     );
-        //     drop(
-        //         self.r
-        //             .left
-        //             .load(Ordering::Relaxed, guard)
-        //             .as_ref()
-        //             .unwrap()
-        //             .right
-        //             .load(Ordering::Relaxed, guard)
-        //             .into_owned(),
-        //     );
-        //     drop(self.r.left.load(Ordering::Relaxed, guard));
-        // }
     }
 }
 
@@ -220,7 +186,7 @@ where
         let inf2 = Node::new_leaf(Key::Inf2, None);
         let s = Node::new_internal(inf0, inf1);
         let r = Node::new_internal(s, inf2);
-        NMTreeMap { r }
+        NMTreeMap { r: ManuallyDrop::new(r) }
     }
 
     fn seek<'g>(&self, key: &K, guard: &'g Guard) -> SeekRecord<'g, K, V> {
@@ -231,7 +197,7 @@ where
             .with_tag(Flags::empty().bits());
 
         let mut record = SeekRecord {
-            ancestor: Shared::from(&self.r as *const Node<K, V>),
+            ancestor: Shared::from(&*self.r as *const _),
             successor: s,
             parent: s,
             leaf,
