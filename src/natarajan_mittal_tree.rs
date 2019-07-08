@@ -153,31 +153,59 @@ where
 
 impl<K, V> Drop for NMTreeMap<K, V> {
     fn drop(&mut self) {
-        // TODO: incomplete implementation. nice way to drop subtree?
-        unsafe {
-            let guard = &crossbeam_epoch::unprotected();
-            drop(self.r.right.load(Ordering::Relaxed, guard).into_owned());
-            drop(
-                self.r
-                    .left
-                    .load(Ordering::Relaxed, guard)
-                    .as_ref()
-                    .unwrap()
-                    .left
-                    .load(Ordering::Relaxed, guard)
-                    .into_owned(),
-            );
-            drop(
-                self.r
-                    .left
-                    .load(Ordering::Relaxed, guard)
-                    .as_ref()
-                    .unwrap()
-                    .right
-                    .load(Ordering::Relaxed, guard)
-                    .into_owned(),
-            );
+        // TODO: iterative post-order tree traversal
+        let guard = unsafe { &crossbeam_epoch::unprotected() };
+        let mut stack = Vec::new();
+        let mut node = Shared::from(&self.r as *const Node<K, V>);
+        let mut last_visited = Shared::null();
+        while !stack.is_empty() || !node.is_null() {
+            match unsafe { node.as_ref() } {
+                Some(n) => {
+                    stack.push(node);
+                    node = n.left.load(Ordering::Relaxed, guard);
+                }
+                None => {
+                    let peek = *stack.last().unwrap();
+                    let peek_node = unsafe { peek.as_ref().unwrap() };
+                    let right = peek_node.right.load(Ordering::Relaxed, guard);
+                    if !right.is_null() && last_visited != right {
+                        node = right;
+                    } else {
+                        unsafe {
+                            drop(peek.into_owned());
+                            // guard.defer_destroy(peek);
+                            last_visited = stack.pop().unwrap();
+                        }
+                    }
+                }
+            }
         }
+
+        // unsafe {
+        //     let guard = &crossbeam_epoch::unprotected();
+        //     drop(self.r.right.load(Ordering::Relaxed, guard).into_owned());
+        //     drop(
+        //         self.r
+        //             .left
+        //             .load(Ordering::Relaxed, guard)
+        //             .as_ref()
+        //             .unwrap()
+        //             .left
+        //             .load(Ordering::Relaxed, guard)
+        //             .into_owned(),
+        //     );
+        //     drop(
+        //         self.r
+        //             .left
+        //             .load(Ordering::Relaxed, guard)
+        //             .as_ref()
+        //             .unwrap()
+        //             .right
+        //             .load(Ordering::Relaxed, guard)
+        //             .into_owned(),
+        //     );
+        //     drop(self.r.left.load(Ordering::Relaxed, guard));
+        // }
     }
 }
 
