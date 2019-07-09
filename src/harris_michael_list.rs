@@ -31,17 +31,14 @@ where
 impl<K, V> Drop for List<K, V> {
     fn drop(&mut self) {
         unsafe {
-            let mut prev = &self.head;
-            loop {
-                let mut curr = prev.load(Ordering::Relaxed, unprotected());
-                if curr.is_null() {
-                    break;
-                }
+            let mut curr = self.head.load(Ordering::Relaxed, unprotected());
 
-                let node_ref = curr.deref_mut();
-                ManuallyDrop::drop(&mut node_ref.value);
-
-                prev = &node_ref.next;
+            while !curr.is_null() {
+                let curr_ref = curr.deref_mut();
+                ManuallyDrop::drop(&mut curr_ref.value);
+                let next = curr_ref.next.load(Ordering::Relaxed, unprotected());
+                drop(curr.into_owned());
+                curr = next;
             }
         }
     }
