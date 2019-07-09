@@ -183,3 +183,50 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate rand;
+    use super::List;
+    use crossbeam_utils::thread;
+    use rand::prelude::*;
+
+    #[test]
+    fn smoke_list() {
+        let list = &List::new();
+        thread::scope(|s| {
+            for t in 0..20 {
+                s.spawn(move |_| {
+                    let mut rng = rand::thread_rng();
+                    let mut keys: Vec<i32> = (0..1000).collect();
+                    keys.shuffle(&mut rng);
+                    for i in keys {
+                        list.insert(i, (i, t));
+                    }
+                });
+            }
+        })
+        .unwrap();
+
+        println!("start removal");
+        thread::scope(|s| {
+            for _ in 0..20 {
+                s.spawn(move |_| {
+                    let mut rng = rand::thread_rng();
+                    let mut keys: Vec<i32> = (1..1000).collect();
+                    keys.shuffle(&mut rng);
+                    for i in keys {
+                        list.remove(&i);
+                    }
+                });
+            }
+        })
+        .unwrap();
+        println!("done");
+
+        let guard = crossbeam_epoch::pin();
+        assert_eq!(list.get(&0, &guard).unwrap().0, 0);
+        assert_eq!(list.remove(&0).unwrap().0, 0);
+        assert_eq!(list.get(&0, &guard), None);
+    }
+}

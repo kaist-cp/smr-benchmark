@@ -31,7 +31,7 @@ where
 
     #[inline]
     pub fn get_bucket(&self, index: usize) -> &List<K, V> {
-        unsafe { self.buckets.get_unchecked(index & self.buckets.len()) }
+        unsafe { self.buckets.get_unchecked(index % self.buckets.len()) }
     }
 
     // TODO(@jeehoonkang): we're converting u64 to usize, which may lose information.
