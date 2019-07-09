@@ -10,7 +10,9 @@ pub struct HashMap<K, V> {
 
 impl<K, V> Drop for HashMap<K, V> {
     fn drop(&mut self) {
-        unimplemented!()
+        for bucket in &mut self.buckets {
+            drop(bucket);
+        }
     }
 }
 
@@ -82,7 +84,7 @@ mod tests {
 
         println!("start removal");
         thread::scope(|s| {
-            for t in 0..20 {
+            for _ in 0..20 {
                 s.spawn(move |_| {
                     let mut rng = rand::thread_rng();
                     let mut keys: Vec<i32> = (1..2000).collect();

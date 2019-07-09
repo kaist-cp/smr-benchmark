@@ -1,4 +1,4 @@
-use crossbeam_epoch::{Atomic, Guard, Owned, Shared};
+use crossbeam_epoch::{unprotected, Atomic, Guard, Owned, Shared};
 
 use std::mem::ManuallyDrop;
 use std::ptr;
@@ -30,7 +30,20 @@ where
 
 impl<K, V> Drop for List<K, V> {
     fn drop(&mut self) {
-        unimplemented!()
+        unsafe {
+            let mut prev = &self.head;
+            loop {
+                let mut curr = prev.load(Ordering::Relaxed, unprotected());
+                if curr.is_null() {
+                    break;
+                }
+
+                let node_ref = curr.deref_mut();
+                ManuallyDrop::drop(&mut node_ref.value);
+
+                prev = &node_ref.next;
+            }
+        }
     }
 }
 
