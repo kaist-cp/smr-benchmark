@@ -6,8 +6,10 @@ use std::sync::atomic::Ordering;
 
 bitflags! {
     /// TODO
-    struct Flags: usize {
-        /// TODO: meaningful
+    /// A remove operation is registered by marking the corresponding edges: the (parent, target)
+    /// edge is _flagged_ and the (parent, sibling) edge is _tagged_.
+    struct Marks: usize {
+        ///
         const FLAG = 1usize.wrapping_shl(1);
 
         /// TODO: meaningful
@@ -15,18 +17,18 @@ bitflags! {
     }
 }
 
-impl Flags {
+impl Marks {
     fn new(flag: bool, tag: bool) -> Self {
-        (if flag { Flags::FLAG } else { Flags::empty() })
-            | (if tag { Flags::TAG } else { Flags::empty() })
+        (if flag { Marks::FLAG } else { Marks::empty() })
+            | (if tag { Marks::TAG } else { Marks::empty() })
     }
 
     fn flag(self) -> bool {
-        !(self & Flags::FLAG).is_empty()
+        !(self & Marks::FLAG).is_empty()
     }
 
     fn tag(self) -> bool {
-        !(self & Flags::TAG).is_empty()
+        !(self & Marks::TAG).is_empty()
     }
 }
 
@@ -117,24 +119,18 @@ where
             right: Atomic::from(right),
         }
     }
-
-    #[inline]
-    fn load_left<'g>(&self, guard: &'g Guard) -> Shared<'g, Node<K, V>> {
-        self.left.load(Ordering::Acquire, guard)
-    }
-
-    #[inline]
-    fn load_right<'g>(&self, guard: &'g Guard) -> Shared<'g, Node<K, V>> {
-        self.right.load(Ordering::Acquire, guard)
-    }
 }
 
 struct SeekRecord<'g, K, V> {
     // COMMENT(@jeehoonkang): please comment something
+    // All Shared<_> are unmarked.
     ancestor: Shared<'g, Node<K, V>>,
     successor: Shared<'g, Node<K, V>>,
+    successor_addr: &'g Atomic<Node<K, V>>,
     parent: Shared<'g, Node<K, V>>,
     leaf: Shared<'g, Node<K, V>>,
+    leaf_addr: &'g Atomic<Node<K, V>>,
+    sibling_addr: &'g Atomic<Node<K, V>>,
 }
 
 // COMMENT(@jeehoonkang): write down the invariant of the tree
@@ -184,7 +180,13 @@ where
     K: Ord + Clone,
 {
     pub fn new() -> Self {
-        // COMMENT(@jeehoonkang): describe it...
+        // An empty tree has 5 default nodes with infinite keys so that the SeekRecord is allways
+        // well-defined.
+        //         r(inf2)
+        //          /  \
+        //     s(inf1)  inf2
+        //       / \
+        //   inf0   inf1
         let inf0 = Node::new_leaf(Key::Inf0, None);
         let inf1 = Node::new_leaf(Key::Inf1, None);
         let inf2 = Node::new_leaf(Key::Inf2, None);
@@ -193,43 +195,59 @@ where
         NMTreeMap { r }
     }
 
-    fn seek<'g>(&self, key: &K, guard: &'g Guard) -> SeekRecord<'g, K, V> {
+    // All `Shared<_>` fields are unmarked.
+    fn seek<'g>(&'g self, key: &K, guard: &'g Guard) -> SeekRecord<'g, K, V> {
         let s = self.r.left.load(Ordering::Relaxed, guard);
-        let leaf = unsafe { s.deref() }
+        let s_node = unsafe { s.deref() };
+        let leaf = s_node
             .left
-            .load(Ordering::Acquire, guard)
-            .with_tag(Flags::empty().bits());
+            .load(Ordering::Relaxed, guard)
+            .with_tag(Marks::empty().bits());
+        let leaf_node = unsafe { leaf.deref() };
 
         let mut record = SeekRecord {
             ancestor: Shared::from(&self.r as *const _),
             successor: s,
+            successor_addr: &self.r.left,
             parent: s,
             leaf,
+            leaf_addr: &s_node.left,
+            sibling_addr: &s_node.right,
         };
-        let mut parent_field = unsafe { s.as_ref() }.unwrap().load_left(guard);
-        let mut current_field = unsafe { leaf.as_ref() }.unwrap().load_left(guard);
-        let mut current = current_field.with_tag(Flags::empty().bits());
 
-        while let Some(curr_node) = unsafe { current.as_ref() } {
-            let tag = Flags::from_bits_truncate(parent_field.tag()).tag();
+        let mut prev_marked = leaf;
+        let mut curr_addr = &leaf_node.left;
+        let mut curr_marked = leaf_node.left.load(Ordering::Relaxed, guard);
+        let mut curr = curr_marked.with_tag(Marks::empty().bits());
+        let mut curr_sibling_addr = &leaf_node.right;
+
+        while let Some(curr_node) = unsafe { curr.as_ref() } {
+            let tag = Marks::from_bits_truncate(prev_marked.tag()).tag();
             if !tag {
                 // untagged edge: advance ancestor and successor pointers
                 record.ancestor = record.parent;
                 record.successor = record.leaf;
+                record.successor_addr = record.leaf_addr;
             }
 
             // advance parent and leaf pointers
             record.parent = record.leaf;
-            record.leaf = current;
+            record.leaf = curr;
+            record.leaf_addr = curr_addr;
+            record.sibling_addr = curr_sibling_addr;
 
             // update other variables
-            parent_field = current_field;
-            current_field = if curr_node.key > *key {
-                curr_node.load_left(guard)
+            prev_marked = curr_marked;
+            curr_marked = if curr_node.key > *key {
+                curr_addr = &curr_node.left;
+                curr_sibling_addr = &curr_node.right;
+                curr_node.left.load(Ordering::Acquire, guard)
             } else {
-                curr_node.load_right(guard)
+                curr_addr = &curr_node.right;
+                curr_sibling_addr = &curr_node.left;
+                curr_node.right.load(Ordering::Acquire, guard)
             };
-            current = current_field.with_tag(Flags::empty().bits());
+            curr = curr_marked.with_tag(Marks::empty().bits());
         }
 
         record
@@ -238,27 +256,21 @@ where
     /// Physically removes node.
     ///
     /// Returns whether the subtree containing `key` is removed.
+    /// TODO: accept target(flagged) as arg?
     fn cleanup(&self, key: &K, record: &SeekRecord<'_, K, V>, guard: &Guard) -> bool {
-        let ancestor = unsafe { record.ancestor.as_ref().unwrap() };
-        let parent = unsafe { record.parent.as_ref().unwrap() };
+        let parent_node = unsafe { record.parent.deref() };
 
-        // COMMENT(@jeehoonkang): maybe refactoring? inefficient?
-        let successor_addr: &Atomic<Node<K, V>> = if ancestor.key > *key {
-            &ancestor.left
+        // Identify the flagged edge.
+        let (child_addr, mut sibling_addr) = if parent_node.key > *key {
+            (&parent_node.left, &parent_node.right)
         } else {
-            &ancestor.right
-        };
-
-        let (child_addr, mut sibling_addr) = if parent.key > *key {
-            (&parent.left, &parent.right)
-        } else {
-            (&parent.right, &parent.left)
+            (&parent_node.right, &parent_node.left)
         };
 
         // COMMENT(@jeehoonkang): consistent variable naming
         let mut child = child_addr.load(Ordering::Acquire, guard);
 
-        let flag = Flags::from_bits_truncate(child.tag()).flag();
+        let flag = Marks::from_bits_truncate(child.tag()).flag();
         if !flag {
             // sibling is flagged for deletion: switch sibling addr
             child = sibling_addr.load(Ordering::Acquire, guard);
@@ -277,10 +289,10 @@ where
         // Since (parent, sibling) might have been concurrently flagged, copy
         // the flag to the new edge (ancestor, sibling).
         let sibling = sibling_addr.load(Ordering::Acquire, guard);
-        let flag = Flags::from_bits_truncate(sibling.tag()).flag();
-        match successor_addr.compare_and_set(
-            record.successor.with_tag(Flags::empty().bits()),
-            sibling.with_tag(Flags::new(flag, false).bits()),
+        let flag = Marks::from_bits_truncate(sibling.tag()).flag();
+        match record.successor_addr.compare_and_set(
+            record.successor,
+            sibling.with_tag(Marks::new(flag, false).bits()),
             Ordering::AcqRel,
             &guard,
         ) {
@@ -296,8 +308,7 @@ where
         }
     }
 
-    // TODO: key &'g ???
-    pub fn get<'g>(&self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
+    pub fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
         let record = self.seek(key, guard);
         let leaf_node = unsafe { record.leaf.as_ref()? };
 
@@ -313,7 +324,7 @@ where
             .into_shared(unsafe { unprotected() });
 
         let mut new_internal = Owned::new(Node {
-            key: Key::Inf2, // TODO
+            key: Key::Inf2, // temporary placeholder
             value: None,
             left: Atomic::null(),
             right: Atomic::null(),
@@ -326,20 +337,13 @@ where
             let leaf_node = unsafe { leaf.deref() };
 
             if leaf_node.key == key {
+                // Newly created nodes that failed to be inserted are free'd here.
                 unsafe {
                     drop(new_leaf.into_owned());
                     drop(new_internal.into_owned());
                 }
                 return false;
             }
-
-            // key not in the tree
-            let parent_node = unsafe { record.parent.as_ref().unwrap() };
-            let parent_child = if parent_node.key > key {
-                &parent_node.left
-            } else {
-                &parent_node.right
-            };
 
             let (new_left, new_right) = if leaf_node.key > key {
                 (new_leaf, leaf)
@@ -352,49 +356,40 @@ where
             new_internal_node.left.store(new_left, Ordering::Relaxed);
             new_internal_node.right.store(new_right, Ordering::Relaxed);
 
-            if parent_child
-                .compare_and_set(
-                    record.leaf.with_tag(Flags::empty().bits()),
-                    new_internal,
-                    Ordering::AcqRel,
-                    &guard,
-                )
-                .is_ok()
-            {
-                return true;
-            }
-
-            // Insertion failed. Help the conflicting remove operation if needed.
-            let child = parent_child.load(Ordering::Acquire, guard);
-            let flags = Flags::from_bits_truncate(child.tag());
-            if child.with_tag(Flags::empty().bits()) == record.leaf && (flags.flag() || flags.tag())
-            {
-                self.cleanup(&key, &record, guard);
+            // NOTE: record.leaf_addr is called childAddr in the paper.
+            match record.leaf_addr.compare_and_set(
+                record.leaf,
+                new_internal,
+                Ordering::AcqRel,
+                &guard,
+            ) {
+                Ok(_) => return true,
+                Err(e) => {
+                    // Insertion failed. Help the conflicting remove operation if needed.
+                    // NOTE: The paper version checks if any of the mark is set, which is redundant.
+                    if e.current.with_tag(Marks::empty().bits()) == record.leaf {
+                        self.cleanup(&key, &record, guard);
+                    }
+                }
             }
         }
     }
 
     pub fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
         let mut record;
-        // `leaf`, `value` is the snapshot of the node to be deleted.
+        // `leaf` and `value` are the snapshot of the node to be deleted.
         let leaf;
         let value;
 
+        // NOTE: The paper version uses one big loop for both phases.
         // injection phase
         loop {
             record = self.seek(key, guard);
-            let parent = unsafe { record.parent.as_ref().unwrap() };
-            let child_addr = if parent.key > *key {
-                &parent.left
-            } else {
-                &parent.right
-            };
 
             // candidates
             let temp_leaf = record.leaf;
             let temp_leaf_node = unsafe { record.leaf.as_ref().unwrap() };
-            // Copy the value before proceeding to the next step so that
-            // `defer_destroy_subtree` doesn't destroy the value.
+            // Copy the value before the physical deletion.
             let temp_value = unsafe {
                 ManuallyDrop::into_inner(ptr::read(temp_leaf_node.value.as_ref().unwrap()))
             };
@@ -403,9 +398,9 @@ where
             }
 
             // Try injecting the deletion flag.
-            match child_addr.compare_and_set(
-                record.leaf.with_tag(Flags::empty().bits()),
-                record.leaf.with_tag(Flags::new(true, false).bits()),
+            match record.leaf_addr.compare_and_set(
+                record.leaf,
+                record.leaf.with_tag(Marks::new(true, false).bits()),
                 Ordering::AcqRel,
                 &guard,
             ) {
@@ -419,15 +414,12 @@ where
                     // In-place cleanup failed. Enter the cleanup phase.
                     break;
                 }
-                Err(_) => {
+                Err(e) => {
                     // Flagging failed.
-                    // 1. child_addr points to another node: restart.
-                    // 2. Another thread flagged/tagged the leaf: help and restart
-                    let temp_child = child_addr.load(Ordering::Acquire, guard);
-                    let flags = Flags::from_bits_truncate(temp_child.tag());
-                    if record.leaf == temp_child.with_tag(Flags::empty().bits())
-                        && (flags.flag() || flags.tag())
-                    {
+                    // case 1. record.leaf_addr(e.current) points to another node: restart.
+                    // case 2. Another thread flagged/tagged the edge to leaf: help and restart
+                    // NOTE: The paper version checks if any of the mark is set, which is redundant.
+                    if record.leaf == e.current.with_tag(Marks::empty().bits()) {
                         self.cleanup(key, &record, guard);
                     }
                 }
@@ -438,10 +430,10 @@ where
         loop {
             record = self.seek(key, guard);
             if record.leaf != leaf {
-                // `leaf` flagged for deletion was removed by a helping thread
+                // The edge to leaf flagged for deletion was removed by a helping thread
                 return Some(value);
             } else {
-                // `leaf` is still present in the tree.
+                // leaf is still present in the tree.
                 if self.cleanup(key, &record, guard) {
                     return Some(value);
                 }
@@ -471,7 +463,7 @@ mod tests {
             for t in 0..30 {
                 s.spawn(move |_| {
                     let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (0..3000).collect();
+                    let mut keys: Vec<i32> = (0..10000).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
                         nm_tree_map.insert(i, (i, t), &crossbeam_epoch::pin());
@@ -486,7 +478,7 @@ mod tests {
             for _ in 0..30 {
                 s.spawn(move |_| {
                     let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (1..3000).collect();
+                    let mut keys: Vec<i32> = (1..10000).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
                         nm_tree_map.remove(&i, &crossbeam_epoch::pin());
