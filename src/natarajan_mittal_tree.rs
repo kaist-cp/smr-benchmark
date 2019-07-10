@@ -9,10 +9,7 @@ bitflags! {
     /// A remove operation is registered by marking the corresponding edges: the (parent, target)
     /// edge is _flagged_ and the (parent, sibling) edge is _tagged_.
     struct Marks: usize {
-        ///
         const FLAG = 1usize.wrapping_shl(1);
-
-        /// TODO: meaningful
         const TAG  = 1usize.wrapping_shl(0);
     }
 }
@@ -75,7 +72,6 @@ where
     }
 }
 
-// TODO: https://www.reddit.com/r/rust/comments/5115o2/type_parameter_t_must_be_used_as_the_type/
 impl<K> PartialOrd<K> for Key<K>
 where
     K: PartialOrd,
@@ -121,15 +117,26 @@ where
     }
 }
 
+/// All Shared<_> are unmarked.
+///
+/// All of the edges of path from `successor` to `parent` are in the process of removal.
 struct SeekRecord<'g, K, V> {
-    // COMMENT(@jeehoonkang): please comment something
-    // All Shared<_> are unmarked.
+    /// Parent of `successor`
     ancestor: Shared<'g, Node<K, V>>,
+    /// The first internal node with a marked outgoing edge
     successor: Shared<'g, Node<K, V>>,
+    /// The pointer from `ancestor` to `successor`. This field is not presented in the paper, but
+    /// added for convenience.
     successor_addr: &'g Atomic<Node<K, V>>,
+    /// Parent of `leaf`
     parent: Shared<'g, Node<K, V>>,
+    /// The end of the access path.
     leaf: Shared<'g, Node<K, V>>,
+    /// The pointer from `parent` to `leaf`. This field is not presented in the paper, but
+    /// added for convenience.
     leaf_addr: &'g Atomic<Node<K, V>>,
+    /// The pointer from `parent` to the sibling of `leaf`. This field is not presented in the
+    /// paper, but added for convenience.
     sibling_addr: &'g Atomic<Node<K, V>>,
 }
 
@@ -255,56 +262,64 @@ where
 
     /// Physically removes node.
     ///
-    /// Returns whether the subtree containing `key` is removed.
-    /// TODO: accept target(flagged) as arg?
-    fn cleanup(&self, key: &K, record: &SeekRecord<'_, K, V>, guard: &Guard) -> bool {
-        let parent_node = unsafe { record.parent.deref() };
+    /// Returns true if it successfully unlinks the flagged node in `record`.
+    fn cleanup(&self, record: &SeekRecord<'_, K, V>, guard: &Guard) -> bool {
+        // let parent_node = unsafe { record.parent.deref() };
 
-        // Identify the flagged edge.
-        let (child_addr, mut sibling_addr) = if parent_node.key > *key {
-            (&parent_node.left, &parent_node.right)
+        // Identify the node(subtree) that will replace `successor`.
+        let leaf_marked = record.leaf_addr.load(Ordering::Acquire, guard);
+        let leaf_flag = Marks::from_bits_truncate(leaf_marked.tag()).flag();
+        let target_sibling_addr = if leaf_flag {
+            record.sibling_addr
         } else {
-            (&parent_node.right, &parent_node.left)
+            record.leaf_addr
         };
-
-        // COMMENT(@jeehoonkang): consistent variable naming
-        let mut child = child_addr.load(Ordering::Acquire, guard);
-
-        let flag = Marks::from_bits_truncate(child.tag()).flag();
-        if !flag {
-            // sibling is flagged for deletion: switch sibling addr
-            child = sibling_addr.load(Ordering::Acquire, guard);
-            sibling_addr = child_addr;
-        }
 
         // NOTE: the ibr implementation uses CAS
         // tag (parent, sibling) edge -> all of the parent's edges can't change now
         // TODO: Is Release enough?
-        //
         // COMMENT(@jeehoonkang): the value of `sibling_addr` can be changed from `child`. We remove
         // `child` later. Is it okay?
-        sibling_addr.fetch_or(1, Ordering::AcqRel, guard);
+        target_sibling_addr.fetch_or(1, Ordering::AcqRel, guard);
 
         // Try to replace (ancestor, successor) w/ (ancestor, sibling).
         // Since (parent, sibling) might have been concurrently flagged, copy
         // the flag to the new edge (ancestor, sibling).
-        let sibling = sibling_addr.load(Ordering::Acquire, guard);
-        let flag = Marks::from_bits_truncate(sibling.tag()).flag();
+        let target_sibling = target_sibling_addr.load(Ordering::Acquire, guard);
+        let flag = Marks::from_bits_truncate(target_sibling.tag()).flag();
         match record.successor_addr.compare_and_set(
             record.successor,
-            sibling.with_tag(Marks::new(flag, false).bits()),
+            target_sibling.with_tag(Marks::new(flag, false).bits()),
             Ordering::AcqRel,
             &guard,
         ) {
+            Err(_) => false,
             Ok(_) => {
                 unsafe {
-                    // TODO: add correctness proof
-                    guard.defer_destroy(child);
-                    guard.defer_destroy(record.successor);
+                    // destroy the subtree of successor except target_sibling
+                    let mut stack = vec![record.successor];
+
+                    while let Some(mut node) = stack.pop() {
+                        if node.is_null()
+                            || node.with_tag(Marks::new(flag, false).bits())
+                                == target_sibling.with_tag(Marks::new(flag, false).bits())
+                        {
+                            continue;
+                        }
+
+                        let node_ref = node.deref_mut();
+
+                        if let Some(value) = node_ref.value.as_mut() {
+                            ManuallyDrop::drop(value);
+                        }
+
+                        stack.push(node_ref.left.load(Ordering::Relaxed, guard));
+                        stack.push(node_ref.right.load(Ordering::Relaxed, guard));
+                        guard.defer_destroy(node);
+                    }
                 }
                 true
             }
-            Err(_) => false,
         }
     }
 
@@ -368,7 +383,7 @@ where
                     // Insertion failed. Help the conflicting remove operation if needed.
                     // NOTE: The paper version checks if any of the mark is set, which is redundant.
                     if e.current.with_tag(Marks::empty().bits()) == record.leaf {
-                        self.cleanup(&key, &record, guard);
+                        self.cleanup(&record, guard);
                     }
                 }
             }
@@ -408,7 +423,7 @@ where
                     // Finalize the node to be removed
                     leaf = temp_leaf;
                     value = temp_value;
-                    if self.cleanup(key, &record, guard) {
+                    if self.cleanup(&record, guard) {
                         return Some(value);
                     }
                     // In-place cleanup failed. Enter the cleanup phase.
@@ -420,7 +435,7 @@ where
                     // case 2. Another thread flagged/tagged the edge to leaf: help and restart
                     // NOTE: The paper version checks if any of the mark is set, which is redundant.
                     if record.leaf == e.current.with_tag(Marks::empty().bits()) {
-                        self.cleanup(key, &record, guard);
+                        self.cleanup(&record, guard);
                     }
                 }
             }
@@ -434,7 +449,7 @@ where
                 return Some(value);
             } else {
                 // leaf is still present in the tree.
-                if self.cleanup(key, &record, guard) {
+                if self.cleanup(&record, guard) {
                     return Some(value);
                 }
             }
