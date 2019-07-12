@@ -301,8 +301,8 @@ where
 
                     while let Some(mut node) = stack.pop() {
                         if node.is_null()
-                            || node.with_tag(Marks::new(flag, false).bits())
-                                == target_sibling.with_tag(Marks::new(flag, false).bits())
+                            || node.with_tag(Marks::empty().bits())
+                                == target_sibling.with_tag(Marks::empty().bits())
                         {
                             continue;
                         }
