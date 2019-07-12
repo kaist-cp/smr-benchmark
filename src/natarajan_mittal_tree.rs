@@ -32,7 +32,7 @@ impl Marks {
 #[derive(Clone, PartialEq, Eq, Ord, Debug)]
 enum Key<K> {
     Fin(K),
-    Inf0,
+    Inf0, // TODO(@jeehoonkang): is it really necessary to have multiple types of Inf*?
     Inf1,
     Inf2,
 }
@@ -87,6 +87,8 @@ where
 #[derive(Debug)]
 struct Node<K, V> {
     key: Key<K>,
+    // TODO(@jeehoonkang): how about having another type that is either (1) value, or (2) left and
+    // right.
     value: Option<ManuallyDrop<V>>,
     left: Atomic<Node<K, V>>,
     right: Atomic<Node<K, V>>,
@@ -264,8 +266,6 @@ where
     ///
     /// Returns true if it successfully unlinks the flagged node in `record`.
     fn cleanup(&self, record: &SeekRecord<'_, K, V>, guard: &Guard) -> bool {
-        // let parent_node = unsafe { record.parent.deref() };
-
         // Identify the node(subtree) that will replace `successor`.
         let leaf_marked = record.leaf_addr.load(Ordering::Acquire, guard);
         let leaf_flag = Marks::from_bits_truncate(leaf_marked.tag()).flag();
@@ -278,8 +278,6 @@ where
         // NOTE: the ibr implementation uses CAS
         // tag (parent, sibling) edge -> all of the parent's edges can't change now
         // TODO: Is Release enough?
-        // COMMENT(@jeehoonkang): the value of `sibling_addr` can be changed from `child`. We remove
-        // `child` later. Is it okay?
         target_sibling_addr.fetch_or(1, Ordering::AcqRel, guard);
 
         // Try to replace (ancestor, successor) w/ (ancestor, sibling).
@@ -287,40 +285,43 @@ where
         // the flag to the new edge (ancestor, sibling).
         let target_sibling = target_sibling_addr.load(Ordering::Acquire, guard);
         let flag = Marks::from_bits_truncate(target_sibling.tag()).flag();
-        match record.successor_addr.compare_and_set(
-            record.successor,
-            target_sibling.with_tag(Marks::new(flag, false).bits()),
-            Ordering::AcqRel,
-            &guard,
-        ) {
-            Err(_) => false,
-            Ok(_) => {
-                unsafe {
-                    // destroy the subtree of successor except target_sibling
-                    let mut stack = vec![record.successor];
+        let is_unlinked = record
+            .successor_addr
+            .compare_and_set(
+                record.successor,
+                target_sibling.with_tag(Marks::new(flag, false).bits()),
+                Ordering::AcqRel,
+                &guard,
+            )
+            .is_ok();
 
-                    while let Some(mut node) = stack.pop() {
-                        if node.is_null()
-                            || node.with_tag(Marks::empty().bits())
-                                == target_sibling.with_tag(Marks::empty().bits())
-                        {
-                            continue;
-                        }
+        if is_unlinked {
+            unsafe {
+                // destroy the subtree of successor except target_sibling
+                let mut stack = vec![record.successor];
 
-                        let node_ref = node.deref_mut();
-
-                        if let Some(value) = node_ref.value.as_mut() {
-                            ManuallyDrop::drop(value);
-                        }
-
-                        stack.push(node_ref.left.load(Ordering::Relaxed, guard));
-                        stack.push(node_ref.right.load(Ordering::Relaxed, guard));
-                        guard.defer_destroy(node);
+                while let Some(mut node) = stack.pop() {
+                    if node.is_null()
+                        || (node.with_tag(Marks::empty().bits())
+                            == target_sibling.with_tag(Marks::empty().bits()))
+                    {
+                        continue;
                     }
+
+                    let node_ref = node.deref_mut();
+
+                    if let Some(value) = node_ref.value.as_mut() {
+                        ManuallyDrop::drop(value);
+                    }
+
+                    stack.push(node_ref.left.load(Ordering::Relaxed, guard));
+                    stack.push(node_ref.right.load(Ordering::Relaxed, guard));
+                    guard.defer_destroy(node);
                 }
-                true
             }
         }
+
+        is_unlinked
     }
 
     pub fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
@@ -447,11 +448,11 @@ where
             if record.leaf != leaf {
                 // The edge to leaf flagged for deletion was removed by a helping thread
                 return Some(value);
-            } else {
-                // leaf is still present in the tree.
-                if self.cleanup(&record, guard) {
-                    return Some(value);
-                }
+            }
+
+            // leaf is still present in the tree.
+            if self.cleanup(&record, guard) {
+                return Some(value);
             }
         }
     }

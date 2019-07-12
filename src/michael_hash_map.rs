@@ -8,14 +8,6 @@ pub struct HashMap<K, V> {
     buckets: Vec<List<K, V>>,
 }
 
-impl<K, V> Drop for HashMap<K, V> {
-    fn drop(&mut self) {
-        for bucket in &mut self.buckets {
-            drop(bucket);
-        }
-    }
-}
-
 impl<K, V> HashMap<K, V>
 where
     K: Ord + Hash,
