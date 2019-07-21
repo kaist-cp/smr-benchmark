@@ -1,3 +1,4 @@
+use crate::concurrent_map::ConcurrentMap;
 use crossbeam_epoch::Guard;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -39,14 +40,32 @@ where
         self.get_bucket(i).get(k, guard)
     }
 
-    pub fn insert(&self, k: K, v: V) -> bool {
+    pub fn insert(&self, k: K, v: V, guard: &Guard) -> bool {
         let i = Self::hash(&k);
-        self.get_bucket(i).insert(k, v)
+        self.get_bucket(i).insert(k, v, guard)
     }
 
-    pub fn remove(&self, k: &K) -> Option<V> {
+    pub fn remove(&self, k: &K, guard: &Guard) -> Option<V> {
         let i = Self::hash(&k);
-        self.get_bucket(i).remove(k)
+        self.get_bucket(i).remove(k, guard)
+    }
+}
+
+impl<K, V> ConcurrentMap<K, V> for HashMap<K, V>
+where
+    K: Ord + Hash,
+{
+    #[inline]
+    fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
+        self.get(key, guard)
+    }
+    #[inline]
+    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
+        self.insert(key, value, guard)
+    }
+    #[inline]
+    fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
+        self.remove(key, guard)
     }
 }
 

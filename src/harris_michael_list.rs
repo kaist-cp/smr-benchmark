@@ -1,3 +1,4 @@
+use crate::concurrent_map::ConcurrentMap;
 use crossbeam_epoch::{unprotected, Atomic, Guard, Owned, Shared};
 
 use std::mem::ManuallyDrop;
@@ -120,13 +121,12 @@ where
         }
     }
 
-    pub fn insert(&self, key: K, value: V) -> bool {
+    pub fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
         let mut node = Owned::new(Node {
             key,
             value: ManuallyDrop::new(value),
             next: Atomic::null(),
         });
-        let guard = crossbeam_epoch::pin();
 
         loop {
             let (found, cursor) = self.find(&node.key, &guard);
@@ -145,8 +145,7 @@ where
         }
     }
 
-    pub fn remove(&self, key: &K) -> Option<V> {
-        let guard = crossbeam_epoch::pin();
+    pub fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
         loop {
             let (found, cursor) = self.find(key, &guard);
             if !found {
@@ -184,6 +183,24 @@ where
     }
 }
 
+impl<K, V> ConcurrentMap<K, V> for List<K, V>
+where
+    K: Ord,
+{
+    #[inline]
+    fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        self.get(key, guard)
+    }
+    #[inline]
+    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
+        self.insert(key, value, guard)
+    }
+    #[inline]
+    fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
+        self.remove(key, guard)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     extern crate rand;
@@ -201,7 +218,7 @@ mod tests {
                     let mut keys: Vec<i32> = (0..1000).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        list.insert(i, (i, t));
+                        list.insert(i, (i, t), &crossbeam_epoch::pin());
                     }
                 });
             }
@@ -216,7 +233,7 @@ mod tests {
                     let mut keys: Vec<i32> = (1..1000).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        list.remove(&i);
+                        list.remove(&i, &crossbeam_epoch::pin());
                     }
                 });
             }
@@ -224,9 +241,9 @@ mod tests {
         .unwrap();
         println!("done");
 
-        let guard = crossbeam_epoch::pin();
-        assert_eq!(list.get(&0, &guard).unwrap().0, 0);
-        assert_eq!(list.remove(&0).unwrap().0, 0);
-        assert_eq!(list.get(&0, &guard), None);
+        let guard = &crossbeam_epoch::pin();
+        assert_eq!(list.get(&0, guard).unwrap().0, 0);
+        assert_eq!(list.remove(&0, guard).unwrap().0, 0);
+        assert_eq!(list.get(&0, guard), None);
     }
 }

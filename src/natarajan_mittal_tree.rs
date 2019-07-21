@@ -1,5 +1,6 @@
 use crossbeam_epoch::{unprotected, Atomic, Guard, Owned, Shared};
 
+use crate::concurrent_map::ConcurrentMap;
 use std::mem::ManuallyDrop;
 use std::ptr;
 use std::sync::atomic::Ordering;
@@ -455,6 +456,24 @@ where
                 return Some(value);
             }
         }
+    }
+}
+
+impl<K, V> ConcurrentMap<K, V> for NMTreeMap<K, V>
+where
+    K: Ord + Clone,
+{
+    #[inline]
+    fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
+        self.get(key, guard)
+    }
+    #[inline]
+    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
+        self.insert(key, value, guard)
+    }
+    #[inline]
+    fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
+        self.remove(key, guard)
     }
 }
 
