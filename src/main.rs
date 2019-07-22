@@ -1,7 +1,7 @@
 extern crate clap;
 extern crate pebr_benchmark;
 
-use rand::distributions::WeightedIndex;
+use rand::distributions::{WeightedIndex, Uniform};
 use rand::prelude::*;
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
@@ -106,6 +106,7 @@ fn main() {
 
     let barrier = &Arc::new(Barrier::new(threads));
     let (sender, receiver) = mpsc::channel();
+    let key_dist = &Uniform::from(0..range);
 
     scope(|s| {
         for _ in 0..threads {
@@ -118,7 +119,7 @@ fn main() {
                 c.wait();
                 let start = Instant::now();
                 while start.elapsed() < duration {
-                    let key = rng.gen_range::<usize, usize, usize>(0, range).to_string();
+                    let key = key_dist.sample(&mut rng).to_string();
                     let guard = handle.pin();
                     match op_choices[dist.sample(&mut rng)] {
                         Op::Insert => {
