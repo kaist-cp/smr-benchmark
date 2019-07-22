@@ -86,7 +86,7 @@ mod tests {
                     let mut keys: Vec<i32> = (0..2000).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        hash_map.insert(i, (i, t));
+                        hash_map.insert(i, (i, t), &crossbeam_epoch::pin());
                     }
                 });
             }
@@ -101,7 +101,7 @@ mod tests {
                     let mut keys: Vec<i32> = (1..2000).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        hash_map.remove(&i);
+                        hash_map.remove(&i, &crossbeam_epoch::pin());
                     }
                 });
             }
@@ -109,9 +109,9 @@ mod tests {
         .unwrap();
         println!("done");
 
-        let guard = crossbeam_epoch::pin();
-        assert_eq!(hash_map.get(&0, &guard).unwrap().0, 0);
-        assert_eq!(hash_map.remove(&0).unwrap().0, 0);
-        assert_eq!(hash_map.get(&0, &guard), None);
+        let guard = &crossbeam_epoch::pin();
+        assert_eq!(hash_map.get(&0, guard).unwrap().0, 0);
+        assert_eq!(hash_map.remove(&0, guard).unwrap().0, 0);
+        assert_eq!(hash_map.get(&0, guard), None);
     }
 }
