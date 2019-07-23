@@ -1,7 +1,7 @@
 extern crate clap;
 extern crate pebr_benchmark;
 
-use rand::distributions::{WeightedIndex, Uniform};
+use rand::distributions::{Uniform, WeightedIndex};
 use rand::prelude::*;
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
@@ -148,6 +148,7 @@ fn main() {
     }
 
     println!("ops / sec = {}", ops / interval);
+    collector.report_retire_unreclaimed();
 
     // TODO CSV output
 }
