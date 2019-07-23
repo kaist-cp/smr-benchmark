@@ -463,6 +463,10 @@ impl<K, V> ConcurrentMap<K, V> for NMTreeMap<K, V>
 where
     K: Ord + Clone,
 {
+    fn new() -> Self {
+        Self::new()
+    }
+
     #[inline]
     fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
         self.get(key, guard)

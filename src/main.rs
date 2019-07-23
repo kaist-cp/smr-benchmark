@@ -1,13 +1,15 @@
 extern crate clap;
+extern crate csv;
 extern crate pebr_benchmark;
 
 use rand::distributions::{Uniform, WeightedIndex};
 use rand::prelude::*;
 use std::convert::TryInto;
+use std::fs::{File, OpenOptions};
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
 
-use clap::{arg_enum, value_t, App, Arg};
+use clap::{arg_enum, value_t, values_t, App, Arg, ArgMatches};
 use crossbeam_utils::thread::scope;
 
 use pebr_benchmark::concurrent_map::ConcurrentMap;
@@ -32,6 +34,17 @@ pub enum Op {
     Remove,
 }
 
+struct Config {
+    dss: Vec<DS>,
+    threads: Vec<usize>,
+    range: usize,
+    prefill: usize,
+    interval: i64,
+    duration: Duration,
+    op_dist: WeightedIndex<i32>,
+    output: csv::Writer<File>,
+}
+
 fn main() {
     let matches = App::new("pebr_benchmark")
         .arg(
@@ -39,15 +52,21 @@ fn main() {
                 .short("d")
                 .value_name("DS")
                 .possible_values(&DS::variants())
+                .multiple(true)
                 .case_insensitive(true)
-                .help("Data structure"),
+                .help("Data structure(s)"),
         )
         .arg(
             Arg::with_name("threads")
                 .short("t")
                 .value_name("THREADS")
                 .takes_value(true)
-                .default_value("1"),
+                .multiple(true)
+                .help(
+                    "Numbers of threads to run. \
+                     Use the deafult value (0) to run for [1,5,10,...100] threads",
+                )
+                .default_value("0"),
         )
         .arg(
             Arg::with_name("range")
@@ -71,37 +90,122 @@ fn main() {
                 .help("Time interval in seconds to run the benchmark")
                 .default_value("10"),
         )
+        .arg(
+            Arg::with_name("output")
+                .short("o")
+                .value_name("OUTPUT")
+                .takes_value(true)
+                .help(
+                    "Output CSV filename. \
+                     Appends the data if the file already exists.",
+                )
+                .default_value("results.csv"),
+        )
         .get_matches();
 
-    // TODO abstraction
-    let ds = value_t!(matches, "data structure", DS).unwrap();
-    let threads = value_t!(matches, "threads", usize).unwrap();
-    let range = value_t!(matches, "range", usize).unwrap();
-    let prefill = value_t!(matches, "prefill", usize).unwrap();
-    let interval: i64 = value_t!(matches, "interval", usize)
-        .unwrap()
-        .try_into()
-        .unwrap();
-    let duration = Duration::from_secs(interval.try_into().unwrap());
+    let mut config = setup(matches);
 
-    let op_choices = &[Op::Insert, Op::Get, Op::Remove];
+    bench_all(&mut config);
+}
+
+fn setup(m: ArgMatches) -> Config {
+    let dss = values_t!(m, "data structure", DS).unwrap();
+    let range = value_t!(m, "range", usize).unwrap();
+    let prefill = value_t!(m, "prefill", usize).unwrap();
+    let interval: i64 = value_t!(m, "interval", usize).unwrap().try_into().unwrap();
+    let duration = Duration::from_secs(interval as u64);
+
+    let threads = values_t!(m, "threads", usize).unwrap();
+    let threads = if threads.len() == 1 && threads[0] == 0 {
+        let mut threads: Vec<usize> = (0..101).step_by(5).collect();
+        threads[0] = 1;
+        threads
+    } else {
+        threads
+    };
+
     // TODO use arg
     let op_weights = &[1, 0, 1];
-    let dist = &WeightedIndex::new(op_weights).unwrap();
+    let op_dist = WeightedIndex::new(op_weights).unwrap();
+
+    let output_name = m.value_of("output").unwrap();
+    let output = match OpenOptions::new()
+        .read(true)
+        .write(true)
+        .append(true)
+        .open(output_name)
+    {
+        Ok(f) => csv::Writer::from_writer(f),
+        Err(_) => {
+            let f = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .open(output_name)
+                .unwrap();
+            let mut output = csv::Writer::from_writer(f);
+            output
+                .write_record(&["mm", "ds", "threads", "throughput", "avg_unreclaimed"])
+                .unwrap();
+            output.flush().unwrap();
+            output
+        }
+    };
+    Config {
+        dss,
+        threads,
+        range,
+        prefill,
+        interval,
+        duration,
+        op_dist,
+        output,
+    }
+}
+
+fn bench_all(config: &mut Config) -> (i64, i64) {
+    for threads in &config.threads {
+        for ds in &config.dss {
+            println!("{} threads, {:?}", threads, ds);
+            let (ops_per_sec, avg_unreclaimed) = match ds {
+                DS::List => bench::<List<String, String>>(config, *threads),
+                DS::HashMap => bench::<HashMap<String, String>>(config, *threads),
+                DS::NMTree => bench::<NMTreeMap<String, String>>(config, *threads),
+            };
+            println!("ops / sec = {}", ops_per_sec);
+            println!("avg unreclaimed at each op: {}", avg_unreclaimed);
+            config
+                .output
+                .write_record(&[
+                    String::from("ebr"),
+                    ds.to_string(),
+                    threads.to_string(),
+                    ops_per_sec.to_string(),
+                    avg_unreclaimed.to_string(),
+                ])
+                .unwrap();
+            config.output.flush().unwrap();
+        }
+    }
+    (0, 0)
+}
+
+fn bench<M: ConcurrentMap<String, String> + Send + Sync>(
+    config: &Config,
+    threads: usize,
+) -> (i64, i64) {
+    let map = &M::new();
+
+    let key_dist = &Uniform::from(0..config.range);
+    let op_choices = &[Op::Insert, Op::Get, Op::Remove];
 
     let collector = &crossbeam_epoch::Collector::new();
     let main_handle = collector.register();
 
-    let map: &Box<dyn ConcurrentMap<String, String> + Send + Sync> = &match ds {
-        DS::List => Box::new(List::new()),
-        DS::HashMap => Box::new(HashMap::with_capacity(30000)),
-        DS::NMTree => Box::new(NMTreeMap::new()),
-    };
-
-    for _ in 0..prefill {
+    for _ in 0..config.prefill {
         let mut rng = rand::thread_rng();
         let guard = main_handle.pin();
-        let key = rng.gen_range::<usize, usize, usize>(0, range).to_string();
+        let key = key_dist.sample(&mut rng).to_string();
         let value = key.clone();
         map.insert(key, value, &guard);
     }
@@ -110,7 +214,6 @@ fn main() {
 
     let barrier = &Arc::new(Barrier::new(threads));
     let (sender, receiver) = mpsc::channel();
-    let key_dist = &Uniform::from(0..range);
 
     scope(|s| {
         for _ in 0..threads {
@@ -128,11 +231,11 @@ fn main() {
                 c.wait();
                 let start = Instant::now();
 
-                while start.elapsed() < duration {
+                while start.elapsed() < config.duration {
                     let key = key_dist.sample(&mut rng).to_string();
                     let guard = handle.pin();
                     unreclaimd_acc += handle.retired_unreclaimed();
-                    match op_choices[dist.sample(&mut rng)] {
+                    match op_choices[config.op_dist.sample(&mut rng)] {
                         Op::Insert => {
                             let value = key.clone();
                             map.insert(key, value, &guard);
@@ -163,9 +266,8 @@ fn main() {
         unreclaimed_acc += local_unreclaimed_acc / local_ops;
     }
 
-    println!("ops / sec = {}", ops / interval);
+    let ops_per_sec = ops / config.interval;
     let threads: i64 = threads.try_into().unwrap();
-    println!("avg unreclaimed at each op: {}", unreclaimed_acc / threads);
-
-    // TODO CSV output
+    let avg_unreclaimed = unreclaimed_acc / threads;
+    (ops_per_sec, avg_unreclaimed)
 }

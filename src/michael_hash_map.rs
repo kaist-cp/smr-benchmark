@@ -55,6 +55,10 @@ impl<K, V> ConcurrentMap<K, V> for HashMap<K, V>
 where
     K: Ord + Hash,
 {
+    fn new() -> Self {
+        Self::with_capacity(30000)
+    }
+
     #[inline]
     fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
         self.get(key, guard)

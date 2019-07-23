@@ -187,6 +187,10 @@ impl<K, V> ConcurrentMap<K, V> for List<K, V>
 where
     K: Ord,
 {
+    fn new() -> Self {
+        Self::new()
+    }
+
     #[inline]
     fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         self.get(key, guard)
