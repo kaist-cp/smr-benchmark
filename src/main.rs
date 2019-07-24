@@ -3,9 +3,9 @@ extern crate pebr_benchmark;
 
 use rand::distributions::{Uniform, WeightedIndex};
 use rand::prelude::*;
+use std::convert::TryInto;
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
-use std::convert::TryInto;
 
 use clap::{arg_enum, value_t, App, Arg};
 use crossbeam_utils::thread::scope;
@@ -78,7 +78,10 @@ fn main() {
     let threads = value_t!(matches, "threads", usize).unwrap();
     let range = value_t!(matches, "range", usize).unwrap();
     let prefill = value_t!(matches, "prefill", usize).unwrap();
-    let interval: i64 = value_t!(matches, "interval", usize).unwrap().try_into().unwrap();
+    let interval: i64 = value_t!(matches, "interval", usize)
+        .unwrap()
+        .try_into()
+        .unwrap();
     let duration = Duration::from_secs(interval.try_into().unwrap());
 
     let op_choices = &[Op::Insert, Op::Get, Op::Remove];
@@ -153,13 +156,16 @@ fn main() {
     let mut ops = 0;
     let mut unreclaimed_acc = 0;
     for _ in 0..threads {
-        let (local_ops, local_unreclaimed_acc) =receiver.recv().unwrap();
+        let (local_ops, local_unreclaimed_acc) = receiver.recv().unwrap();
         ops += local_ops;
-        unreclaimed_acc += local_unreclaimed_acc;
+        // First the local avg (w.r.t ops) of unreclaimed count.
+        // Then, compute the avg (w.r.t threads) of them.
+        unreclaimed_acc += local_unreclaimed_acc / local_ops;
     }
 
     println!("ops / sec = {}", ops / interval);
-    println!("avg unreclaimed at each op: {}", unreclaimed_acc / ops);
+    let threads: i64 = threads.try_into().unwrap();
+    println!("avg unreclaimed at each op: {}", unreclaimed_acc / threads);
 
     // TODO CSV output
 }
