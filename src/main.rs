@@ -5,6 +5,7 @@ use rand::distributions::{Uniform, WeightedIndex};
 use rand::prelude::*;
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
+use std::convert::TryInto;
 
 use clap::{arg_enum, value_t, App, Arg};
 use crossbeam_utils::thread::scope;
@@ -77,8 +78,8 @@ fn main() {
     let threads = value_t!(matches, "threads", usize).unwrap();
     let range = value_t!(matches, "range", usize).unwrap();
     let prefill = value_t!(matches, "prefill", usize).unwrap();
-    let interval = value_t!(matches, "interval", u64).unwrap();
-    let duration = Duration::from_secs(interval);
+    let interval: i64 = value_t!(matches, "interval", usize).unwrap().try_into().unwrap();
+    let duration = Duration::from_secs(interval.try_into().unwrap());
 
     let op_choices = &[Op::Insert, Op::Get, Op::Remove];
     // TODO use arg
@@ -115,12 +116,19 @@ fn main() {
                 let mut rng = rand::thread_rng();
                 let handle = collector.register();
                 let c = barrier.clone();
-                let mut ops = 0;
+
+                let mut ops: i64 = 0;
+                // Add up unreclaimed block numbers at the beginning of each op and then divide by
+                // total num of ops later.
+                let mut unreclaimd_acc: i64 = 0;
+
                 c.wait();
                 let start = Instant::now();
+
                 while start.elapsed() < duration {
                     let key = key_dist.sample(&mut rng).to_string();
                     let guard = handle.pin();
+                    unreclaimd_acc += handle.retired_unreclaimed();
                     match op_choices[dist.sample(&mut rng)] {
                         Op::Insert => {
                             let value = key.clone();
@@ -136,19 +144,22 @@ fn main() {
                     ops += 1;
                 }
 
-                sender.send(ops).unwrap();
+                sender.send((ops, unreclaimd_acc)).unwrap();
             });
         }
     })
     .unwrap();
 
     let mut ops = 0;
+    let mut unreclaimed_acc = 0;
     for _ in 0..threads {
-        ops += receiver.recv().unwrap();
+        let (local_ops, local_unreclaimed_acc) =receiver.recv().unwrap();
+        ops += local_ops;
+        unreclaimed_acc += local_unreclaimed_acc;
     }
 
     println!("ops / sec = {}", ops / interval);
-    collector.report_retire_unreclaimed();
+    println!("avg unreclaimed at each op: {}", unreclaimed_acc / ops);
 
     // TODO CSV output
 }
