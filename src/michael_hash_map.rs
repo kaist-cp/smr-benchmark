@@ -35,17 +35,17 @@ where
         s.finish() as usize
     }
 
-    pub fn get<'g>(&'g self, k: &K, guard: &'g Guard) -> Option<&'g V> {
+    pub fn get<'g>(&'g self, k: &K, guard: &'g mut Guard) -> Option<&'g V> {
         let i = Self::hash(k);
         self.get_bucket(i).get(k, guard)
     }
 
-    pub fn insert(&self, k: K, v: V, guard: &Guard) -> bool {
+    pub fn insert(&self, k: K, v: V, guard: &mut Guard) -> bool {
         let i = Self::hash(&k);
         self.get_bucket(i).insert(k, v, guard)
     }
 
-    pub fn remove(&self, k: &K, guard: &Guard) -> Option<V> {
+    pub fn remove(&self, k: &K, guard: &mut Guard) -> Option<V> {
         let i = Self::hash(&k);
         self.get_bucket(i).remove(k, guard)
     }
@@ -60,15 +60,15 @@ where
     }
 
     #[inline]
-    fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
+    fn get<'g>(&'g self, key: &'g K, guard: &'g mut Guard) -> Option<&'g V> {
         self.get(key, guard)
     }
     #[inline]
-    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
+    fn insert(&self, key: K, value: V, guard: &mut Guard) -> bool {
         self.insert(key, value, guard)
     }
     #[inline]
-    fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
+    fn remove(&self, key: &K, guard: &mut Guard) -> Option<V> {
         self.remove(key, guard)
     }
 }
@@ -92,7 +92,7 @@ mod tests {
                     let mut keys: Vec<i32> = (0..3000).map(|k| k * 10 + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        assert!(hash_map.insert(i, i.to_string(), &crossbeam_epoch::pin()));
+                        assert!(hash_map.insert(i, i.to_string(), &mut crossbeam_epoch::pin()));
                     }
                 });
             }
@@ -109,7 +109,7 @@ mod tests {
                     for i in keys {
                         assert_eq!(
                             i.to_string(),
-                            hash_map.remove(&i, &crossbeam_epoch::pin()).unwrap()
+                            hash_map.remove(&i, &mut crossbeam_epoch::pin()).unwrap()
                         );
                     }
                 });
@@ -117,6 +117,7 @@ mod tests {
         })
         .unwrap();
 
+<<<<<<< HEAD
         // get
         thread::scope(|s| {
             for t in 5..10 {
@@ -127,7 +128,7 @@ mod tests {
                     for i in keys {
                         assert_eq!(
                             i.to_string(),
-                            *hash_map.get(&i, &crossbeam_epoch::pin()).unwrap()
+                            *hash_map.get(&i, &mut crossbeam_epoch::pin()).unwrap()
                         );
                     }
                 });

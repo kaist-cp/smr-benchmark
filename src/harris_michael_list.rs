@@ -1,5 +1,5 @@
 use crate::concurrent_map::ConcurrentMap;
-use crossbeam_epoch::{unprotected, Atomic, Guard, Owned, Pointer, Shared, Shield};
+use crossbeam_epoch::{unprotected, Atomic, Guard, Owned, Pointer, Shared, Shield, ShieldError};
 
 use std::mem::{self, ManuallyDrop};
 use std::ptr;
@@ -80,6 +80,11 @@ impl<K, V> Deref for VRef<K, V> {
     }
 }
 
+enum FindError {
+    Retry,
+    ShieldError(ShieldError),
+}
+
 impl<K, V> List<K, V>
 where
     K: Ord,
@@ -92,7 +97,7 @@ where
 
     /// Returns (1) whether it found an entry, and (2) a cursor.
     #[inline]
-    fn find_inner<'g>(&'g self, key: &K, guard: &'g Guard) -> Result<(bool, Cursor<'g, K, V>), ()> {
+    fn find_inner<'g>(&'g self, key: &K, guard: &'g Guard) -> Result<(bool, Cursor<'g, K, V>), FindError> {
         let mut cursor = Cursor::new(
             // HACK(@jeehoonkang): we're unsafely assuming the first 8 bytes of both `Node<K, V>`
             // and `List<K, V>` are `Atomic<Node<K, V>>`.
@@ -112,7 +117,7 @@ where
                 .load(Ordering::Acquire, guard)
                 != cursor.curr.shared().with_tag(0)
             {
-                return Err(());
+                return Err(FindError::Retry);
             }
 
             cursor.next = curr_node.next.load(Ordering::Acquire, guard);
@@ -130,23 +135,25 @@ where
                     Ordering::AcqRel,
                     guard,
                 ) {
-                    Err(_) => return Err(()),
+                    Err(_) => return Err(FindError::Retry),
                     Ok(_) => unsafe { guard.defer_destroy(cursor.curr.shared()) },
                 }
             }
-            cursor.curr.defend(cursor.next, guard);
+            cursor.curr.defend(cursor.next, guard).map_err(|e| FindError::ShieldError(e))?;
         }
     }
 
-    fn find<'g>(&'g self, key: &K, guard: &'g Guard) -> (bool, Cursor<'g, K, V>) {
+    fn find<'g>(&'g self, key: &K, guard: &'g mut Guard) -> (bool, Cursor<'g, K, V>) {
         loop {
-            if let Ok(r) = self.find_inner(key, guard) {
-                return r;
+            match self.find_inner(key, guard) {
+                Ok(r) => return r,
+                Err(FindError::Retry) => continue,
+                Err(FindError::ShieldError(e)) => guard.repin(),
             }
         }
     }
 
-    pub fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<VRef<K, V>> {
+    pub fn get<'g>(&'g self, key: &K, mut guard: &'g mut Guard) -> Option<VRef<K, V>> {
         let (found, cursor) = self.find(key, guard);
 
         if found {
@@ -156,7 +163,7 @@ where
         }
     }
 
-    pub fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
+    pub fn insert(&self, key: K, value: V, guard: &mut Guard) -> bool {
         let mut node = Owned::new(Node {
             key,
             value: ManuallyDrop::new(value),
@@ -165,7 +172,7 @@ where
 
         loop {
             // TODO: create cursor in this function.
-            let (found, cursor) = self.find(&node.key, &guard);
+            let (found, cursor) = self.find(&node.key, guard);
             if found {
                 return false;
             }
@@ -175,7 +182,7 @@ where
                 cursor.curr.shared(),
                 node,
                 Ordering::AcqRel,
-                &guard,
+                guard,
             ) {
                 Ok(_) => return true,
                 Err(e) => node = e.new,
@@ -183,9 +190,9 @@ where
         }
     }
 
-    pub fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
+    pub fn remove(&self, key: &K, guard: &mut Guard) -> Option<V> {
         loop {
-            let (found, cursor) = self.find(key, &guard);
+            let (found, cursor) = self.find(key, guard);
             if !found {
                 return None;
             }
@@ -199,7 +206,7 @@ where
                     cursor.next,
                     cursor.next.with_tag(1),
                     Ordering::AcqRel,
-                    &guard,
+                    guard,
                 )
                 .is_err()
             {
@@ -210,11 +217,11 @@ where
                 cursor.curr.shared(),
                 cursor.next,
                 Ordering::AcqRel,
-                &guard,
+                guard,
             ) {
                 Ok(_) => unsafe { guard.defer_destroy(cursor.curr.shared()) },
                 Err(_) => {
-                    self.find(key, &guard);
+                    self.find(key, guard);
                 }
             }
 
@@ -232,15 +239,15 @@ where
     }
 
     #[inline]
-    fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+    fn get<'g>(&'g self, key: &K, guard: &'g mut Guard) -> Option<&'g V> {
         self.get(key, guard)
     }
     #[inline]
-    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
+    fn insert(&self, key: K, value: V, guard: &mut Guard) -> bool {
         self.insert(key, value, guard)
     }
     #[inline]
-    fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
+    fn remove(&self, key: &K, guard: &mut Guard) -> Option<V> {
         self.remove(key, guard)
     }
 }
@@ -264,7 +271,7 @@ mod tests {
                     let mut keys: Vec<i32> = (0..1000).map(|k| k * 10 + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        assert!(list.insert(i, i.to_string(), &crossbeam_epoch::pin()));
+                        assert!(list.insert(i, i.to_string(), &mut crossbeam_epoch::pin()));
                     }
                 });
             }
@@ -281,8 +288,7 @@ mod tests {
                     for i in keys {
                         assert_eq!(
                             i.to_string(),
-                            list.remove(&i, &crossbeam_epoch::pin()).unwrap()
-                        );
+                            list.remove(&i, &mut crossbeam_epoch::pin()).unwrap()
                     }
                 });
             }
@@ -299,7 +305,7 @@ mod tests {
                     for i in keys {
                         assert_eq!(
                             i.to_string(),
-                            *list.get(&i, &crossbeam_epoch::pin()).unwrap()
+                            *list.get(&i, &mut crossbeam_epoch::pin()).unwrap()
                         );
                     }
                 });
