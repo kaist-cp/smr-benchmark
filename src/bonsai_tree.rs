@@ -76,25 +76,24 @@ where
     }
 }
 
-// Each op creates a new local state and tries to update (CAS) the tree with it.
+/// Each op creates a new local state and tries to update (CAS) the tree with it.
+///
+/// Since BonsaiTreeMap.curr_state is Atomic<State<_>>, *const Node<_> can't be used here.
 #[derive(Debug)]
 struct State<K, V> {
-    // TODO: this doesn't need to be Atomic
+    // TODO: this doesn't need to be Atomic (Owned is sufficient but nullable)
     root: Atomic<Node<K, V>>,
 
+    /// Nodes that current op wants to remove from the tree. Should be retired if CAS succeeds.
+    /// (`retire`). If not, ignore.
     retired_nodes: Vec<Atomic<Node<K, V>>>,
+    /// Nodes newly constructed by the op. Should be destroyed if CAS fails. (`destroy`)
     new_nodes: Vec<Atomic<Node<K, V>>>,
 }
 
 impl<K, V> Drop for State<K, V> {
     fn drop(&mut self) {
-        unsafe {
-            // TODO(@jeehoonkang): relcaim new nodes...
-            //
-            // for node in self.new_nodes.drain(..) {
-            //     drop(node.load(Ordering::Relaxed, unprotected()).into_owned());
-            // }
-        }
+        // TODO ??
     }
 }
 
@@ -111,16 +110,32 @@ where
         }
     }
 
-    /// destroy the newly created state (self) that lost the race
-    fn destroy(mut self) {
-        // TODO: drop?
+    /// Destroy the newly created state (self) that lost the race
+    /// reclaim_state
+    /// TODO: reclaim_state + retire_state?
+    fn destroy(mut new_state: Shared<Self>) {
+        unsafe {
+            let state_ref = new_state.deref_mut();
+            for node in state_ref.new_nodes.drain(..) {
+                drop(node.into_owned());
+            }
+            drop(new_state.into_owned());
+        }
     }
 
-    /// retired the old state (self) replaced by the new state
-    /// the second arg is retired_list of the new state
-    fn retire(mut self) {
-        // TODO
-        // retire all nodes in retired_nodes and itself
+    /// Retire the old state replaced by the new_state and the new_state.retired_nodes
+    fn retire<'g>(
+        old_state: Shared<'g, Self>,
+        retired_nodes: &mut Vec<Atomic<Node<K, V>>>,
+        guard: &'g Guard,
+    ) {
+        unsafe {
+            for node in retired_nodes.drain(..) {
+                let node = node.load(Ordering::Relaxed, guard);
+                guard.defer_destroy(node);
+            }
+            guard.defer_destroy(old_state);
+        }
     }
 
     fn retire_node(&mut self, node: Shared<Node<K, V>>) {
@@ -158,6 +173,7 @@ where
         new_node
     }
 
+    /// Make a new balanced tree from cur (the root of a subtree) and newly constructed left and right subtree
     fn mk_balanced<'g>(
         &mut self,
         cur: Shared<'g, Node<K, V>>,
@@ -539,7 +555,8 @@ where
             new_state_ref.root.store(new_root, Ordering::Relaxed);
 
             if Node::is_retired(new_root) {
-                // self.reclaim_state();
+                // TODO: reclaim_state(new_state, new_state.new_nodes)
+                State::destroy(new_state);
                 continue;
             }
 
@@ -548,11 +565,13 @@ where
                 .compare_and_set(old_state, new_state, Ordering::AcqRel, guard)
                 .is_ok()
             {
-                // TODO: retire_state
+                // TODO: retire_state(old_state, new_state.retired_nodes)
+                State::retire(old_state, &mut new_state_ref.retired_nodes, guard);
                 return inserted;
             }
 
-            // TODO: reclaim_state
+            // TODO: reclaim_state(new_state, new_state.new_nodes)
+            State::destroy(new_state);
         }
     }
 
@@ -570,7 +589,8 @@ where
             new_state_ref.root.store(new_root, Ordering::Relaxed);
 
             if Node::is_retired(new_root) {
-                // self.reclaim_state();
+                // TODO: reclaim_state(new_state, new_state.new_nodes)
+                State::destroy(new_state);
                 continue;
             }
 
@@ -579,11 +599,13 @@ where
                 .compare_and_set(old_state, new_state, Ordering::AcqRel, guard)
                 .is_ok()
             {
-                // TODO: retire_state
+                // TODO: retire_state(old_state, new_state.retired_nodes)
+                State::retire(old_state, &mut new_state_ref.retired_nodes, guard);
                 return value;
             }
 
-            // TODO: reclaim_state
+            // TODO: reclaim_state(new_state, new_state.new_nodes)
+            State::destroy(new_state);
         }
     }
 }
@@ -644,6 +666,11 @@ mod tests {
         .unwrap();
 
         println!("start removal");
+
+        for i in 0..100 {
+            assert_eq!(i, bonsai_tree_map.remove(&i, &crossbeam_epoch::pin()).unwrap().0);
+        }
+
         thread::scope(|s| {
             for _ in 0..10 {
                 s.spawn(move |_| {
