@@ -1,8 +1,6 @@
 use crossbeam_epoch::{unprotected, Atomic, Guard, Owned, Shared};
 
 use crate::concurrent_map::ConcurrentMap;
-use std::mem::ManuallyDrop;
-use std::ptr;
 use std::sync::atomic::Ordering;
 
 bitflags! {
@@ -79,7 +77,7 @@ struct Node<K, V> {
     key: Key<K>,
     // TODO(@jeehoonkang): how about having another type that is either (1) value, or (2) left and
     // right.
-    value: Option<ManuallyDrop<V>>,
+    value: Option<V>,
     left: Atomic<Node<K, V>>,
     right: Atomic<Node<K, V>>,
 }
@@ -87,11 +85,12 @@ struct Node<K, V> {
 impl<K, V> Node<K, V>
 where
     K: Clone,
+    V: Clone,
 {
     fn new_leaf(key: Key<K>, value: Option<V>) -> Node<K, V> {
         Node {
             key,
-            value: value.map(ManuallyDrop::new),
+            value,
             left: Atomic::null(),
             right: Atomic::null(),
         }
@@ -164,6 +163,7 @@ pub struct NMTreeMap<K, V> {
 impl<K, V> Default for NMTreeMap<K, V>
 where
     K: Ord + Clone,
+    V: Clone,
 {
     fn default() -> Self {
         Self::new()
@@ -186,10 +186,6 @@ impl<K, V> Drop for NMTreeMap<K, V> {
 
                 let node_ref = node.deref_mut();
 
-                if let Some(value) = node_ref.value.as_mut() {
-                    ManuallyDrop::drop(value);
-                }
-
                 stack.push(node_ref.left.load(Ordering::Relaxed, unprotected()));
                 stack.push(node_ref.right.load(Ordering::Relaxed, unprotected()));
                 drop(node.into_owned());
@@ -201,6 +197,7 @@ impl<K, V> Drop for NMTreeMap<K, V> {
 impl<K, V> NMTreeMap<K, V>
 where
     K: Ord + Clone,
+    V: Clone,
 {
     pub fn new() -> Self {
         // An empty tree has 5 default nodes with infinite keys so that the SeekRecord is allways
@@ -284,11 +281,7 @@ where
         // NOTE: the ibr implementation uses CAS
         // tag (parent, sibling) edge -> all of the parent's edges can't change now
         // TODO: Is Release enough?
-        target_sibling_addr.fetch_or(
-            Marks::TAG.bits(),
-            Ordering::AcqRel,
-            guard,
-        );
+        target_sibling_addr.fetch_or(Marks::TAG.bits(), Ordering::AcqRel, guard);
 
         // Try to replace (ancestor, successor) w/ (ancestor, sibling).
         // Since (parent, sibling) might have been concurrently flagged, copy
@@ -319,10 +312,6 @@ where
                     }
 
                     let node_ref = node.deref_mut();
-
-                    if let Some(value) = node_ref.value.as_mut() {
-                        ManuallyDrop::drop(value);
-                    }
 
                     stack.push(node_ref.left.load(Ordering::Relaxed, guard));
                     stack.push(node_ref.right.load(Ordering::Relaxed, guard));
@@ -365,8 +354,7 @@ where
             if leaf_node.key == key {
                 // Newly created nodes that failed to be inserted are free'd here.
                 unsafe {
-                    let value =
-                        ManuallyDrop::into_inner(new_leaf.deref_mut().value.take().unwrap());
+                    let value = new_leaf.deref_mut().value.take().unwrap();
                     drop(new_leaf.into_owned());
                     drop(new_internal.into_owned());
                     return Err((key, value));
@@ -418,9 +406,7 @@ where
             let temp_leaf = record.leaf;
             let temp_leaf_node = unsafe { record.leaf.as_ref().unwrap() };
             // Copy the value before the physical deletion.
-            let temp_value = unsafe {
-                ManuallyDrop::into_inner(ptr::read(temp_leaf_node.value.as_ref().unwrap()))
-            };
+            let temp_value = temp_leaf_node.value.as_ref().unwrap().clone();
             if temp_leaf_node.key != *key {
                 return None;
             }
@@ -473,6 +459,7 @@ where
 impl<K, V> ConcurrentMap<K, V> for NMTreeMap<K, V>
 where
     K: Ord + Clone,
+    V: Clone,
 {
     fn new() -> Self {
         Self::new()
