@@ -291,6 +291,11 @@ where
         let left_ref = unsafe { left.deref() };
         let left_right = left_ref.right.load(Ordering::Acquire, guard);
         let left_left = left_ref.left.load(Ordering::Acquire, guard);
+
+        if Node::is_retired_spot(left_right, guard) || Node::is_retired_spot(left_left, guard) {
+            return Node::retired_node();
+        }
+
         if Node::node_size(left_right) < Node::node_size(left_left) {
             // single right rotation (fig 3)
             return self.single_right(left, right, left_right, left_left, key, value, guard);
@@ -376,6 +381,11 @@ where
                 true,
             );
         }
+
+        if Node::is_retired_spot(node, guard) {
+            return (Node::retired_node(), false);
+        }
+
         let node_ref = unsafe { node.deref() };
         let left = node_ref.left.load(Ordering::Acquire, guard);
         let right = node_ref.right.load(Ordering::Acquire, guard);
@@ -399,6 +409,11 @@ where
         if node.is_null() {
             return (Shared::null(), None);
         }
+
+        if Node::is_retired_spot(node, guard) {
+            return (Node::retired_node(), None);
+        }
+
         let node_ref = unsafe { node.deref() };
         let left = node_ref.left.load(Ordering::Acquire, guard);
         let right = node_ref.right.load(Ordering::Acquire, guard);
@@ -419,11 +434,11 @@ where
         }
 
         if *key < node_ref.key {
-            let new_left = self.do_remove(left, key, guard).0;
-            return (self.mk_balanced(node, new_left, right, guard), None);
+            let (new_left, value) = self.do_remove(left, key, guard);
+            return (self.mk_balanced(node, new_left, right, guard), value);
         } else {
-            let new_right = self.do_remove(right, key, guard).0;
-            return (self.mk_balanced(node, left, new_right, guard), None);
+            let (new_right, value) = self.do_remove(right, key, guard);
+            return (self.mk_balanced(node, left, new_right, guard), value);
         }
     }
 
@@ -460,6 +475,10 @@ where
         node: Shared<'g, Node<K, V>>,
         guard: &'g Guard,
     ) -> (Shared<'g, Node<K, V>>, Shared<'g, Node<K, V>>) {
+        if Node::is_retired_spot(node, guard) {
+            return (Node::retired_node(), Node::retired_node());
+        }
+
         let node_ref = unsafe { node.deref() };
         let left = node_ref.left.load(Ordering::Acquire, guard);
         let right = node_ref.right.load(Ordering::Acquire, guard);
@@ -498,7 +517,7 @@ where
     pub fn get<'g>(&self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
         loop {
             let mut node = self.root.load(Ordering::Acquire, guard);
-            while !node.is_null() && Node::is_retired(node) {
+            while !node.is_null() && !Node::is_retired(node) {
                 let node_ref = unsafe { node.deref() };
                 if *key == node_ref.key {
                     break;
@@ -623,7 +642,7 @@ mod tests {
             for t in 0..10 {
                 s.spawn(move |_| {
                     let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (0..10000).collect();
+                    let mut keys: Vec<i32> = (0..3000).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
                         bonsai_tree_map.insert(i, (i, t), &crossbeam_epoch::pin());
@@ -649,7 +668,7 @@ mod tests {
             for _ in 0..10 {
                 s.spawn(move |_| {
                     let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (1..10000).collect();
+                    let mut keys: Vec<i32> = (1..3000).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
                         bonsai_tree_map.remove(&i, &crossbeam_epoch::pin());
@@ -663,6 +682,7 @@ mod tests {
 
         {
             let guard = crossbeam_epoch::pin();
+            assert!(bonsai_tree_map.insert(0, (0, 100), &guard));
             assert_eq!(bonsai_tree_map.get(&0, &guard).unwrap().0, 0);
             assert_eq!(bonsai_tree_map.remove(&0, &guard).unwrap().0, 0);
             assert_eq!(bonsai_tree_map.get(&0, &guard), None);
