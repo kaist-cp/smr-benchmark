@@ -215,39 +215,56 @@ mod tests {
     #[test]
     fn smoke_list() {
         let list = &List::new();
+
+        // insert
         thread::scope(|s| {
-            for t in 0..20 {
+            for t in 0..10 {
                 s.spawn(move |_| {
                     let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (0..1000).collect();
+                    let mut keys: Vec<i32> = (0..1000).map(|k| k * 10 + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        list.insert(i, (i, t), &crossbeam_epoch::pin());
+                        assert!(list.insert(i, i.to_string(), &crossbeam_epoch::pin()));
                     }
                 });
             }
         })
         .unwrap();
 
-        println!("start removal");
+        // remove
         thread::scope(|s| {
-            for _ in 0..20 {
+            for t in 0..5 {
                 s.spawn(move |_| {
                     let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (1..1000).collect();
+                    let mut keys: Vec<i32> = (0..1000).map(|k| k * 10 + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        list.remove(&i, &crossbeam_epoch::pin());
+                        assert_eq!(
+                            i.to_string(),
+                            list.remove(&i, &crossbeam_epoch::pin()).unwrap()
+                        );
                     }
                 });
             }
         })
         .unwrap();
-        println!("done");
 
-        let guard = &crossbeam_epoch::pin();
-        assert_eq!(list.get(&0, guard).unwrap().0, 0);
-        assert_eq!(list.remove(&0, guard).unwrap().0, 0);
-        assert_eq!(list.get(&0, guard), None);
+        // get
+        thread::scope(|s| {
+            for t in 5..10 {
+                s.spawn(move |_| {
+                    let mut rng = rand::thread_rng();
+                    let mut keys: Vec<i32> = (0..1000).map(|k| k * 10 + t).collect();
+                    keys.shuffle(&mut rng);
+                    for i in keys {
+                        assert_eq!(
+                            i.to_string(),
+                            *list.get(&i, &crossbeam_epoch::pin()).unwrap()
+                        );
+                    }
+                });
+            }
+        })
+        .unwrap();
     }
 }

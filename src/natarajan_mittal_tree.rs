@@ -490,48 +490,55 @@ mod tests {
     fn smoke_nm_tree() {
         let nm_tree_map = &NMTreeMap::new();
 
-        {
-            let guard = crossbeam_epoch::pin();
-            nm_tree_map.insert(0, (0, 100), &guard);
-            nm_tree_map.remove(&0, &guard);
-        }
-
+        // insert
         thread::scope(|s| {
-            for t in 0..30 {
+            for t in 0..10 {
                 s.spawn(move |_| {
                     let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (0..10000).collect();
+                    let mut keys: Vec<i32> = (0..3000).map(|k| k * 10 + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        nm_tree_map.insert(i, (i, t), &crossbeam_epoch::pin());
+                        assert!(nm_tree_map.insert(i, i.to_string(), &crossbeam_epoch::pin()).is_ok());
                     }
                 });
             }
         })
         .unwrap();
 
-        println!("start removal");
+        // remove
         thread::scope(|s| {
-            for _ in 0..30 {
+            for t in 0..5 {
                 s.spawn(move |_| {
                     let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (1..10000).collect();
+                    let mut keys: Vec<i32> = (0..3000).map(|k| k * 10 + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        nm_tree_map.remove(&i, &crossbeam_epoch::pin());
+                        assert_eq!(
+                            i.to_string(),
+                            nm_tree_map.remove(&i, &crossbeam_epoch::pin()).unwrap()
+                        );
                     }
                 });
             }
         })
         .unwrap();
 
-        println!("done");
-
-        {
-            let guard = crossbeam_epoch::pin();
-            assert_eq!(nm_tree_map.get(&0, &guard).unwrap().0, 0);
-            assert_eq!(nm_tree_map.remove(&0, &guard).unwrap().0, 0);
-            assert_eq!(nm_tree_map.get(&0, &guard), None);
-        }
+        // get
+        thread::scope(|s| {
+            for t in 5..10 {
+                s.spawn(move |_| {
+                    let mut rng = rand::thread_rng();
+                    let mut keys: Vec<i32> = (0..3000).map(|k| k * 10 + t).collect();
+                    keys.shuffle(&mut rng);
+                    for i in keys {
+                        assert_eq!(
+                            i.to_string(),
+                            *nm_tree_map.get(&i, &crossbeam_epoch::pin()).unwrap()
+                        );
+                    }
+                });
+            }
+        })
+        .unwrap();
     }
 }

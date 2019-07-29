@@ -34,7 +34,7 @@ impl Retired {
 #[derive(Debug)]
 struct Node<K, V> {
     key: K,
-    value: V, // TODO(@jeehoonkang): clone?
+    value: V,
     size: usize,
     left: Atomic<Node<K, V>>,
     right: Atomic<Node<K, V>>,
@@ -549,7 +549,6 @@ where
             let (new_root, inserted) = state.do_insert(old_root, &key, &value, guard);
 
             if Node::is_retired(new_root) {
-                // TODO: reclaim_state(new_state, new_state.new_nodes)
                 state.destroy();
                 continue;
             }
@@ -559,12 +558,10 @@ where
                 .compare_and_set(old_root, new_root, Ordering::AcqRel, guard)
                 .is_ok()
             {
-                // TODO: retire_state(old_state, new_state.retired_nodes)
                 state.retire(guard);
                 return inserted;
             }
 
-            // TODO: reclaim_state(new_state, new_state.new_nodes)
             state.destroy();
         }
     }
@@ -576,7 +573,6 @@ where
             let (new_root, value) = state.do_remove(old_root, key, guard);
 
             if Node::is_retired(new_root) {
-                // TODO: reclaim_state(new_state, new_state.new_nodes)
                 state.destroy();
                 continue;
             }
@@ -586,15 +582,17 @@ where
                 .compare_and_set(old_root, new_root, Ordering::AcqRel, guard)
                 .is_ok()
             {
-                // TODO: retire_state(old_state, new_state.retired_nodes)
                 state.retire(guard);
                 return value;
             }
 
-            // TODO: reclaim_state(new_state, new_state.new_nodes)
             state.destroy();
         }
     }
+}
+
+impl<K, V> Drop for BonsaiTreeMap<K, V> {
+    fn drop(&mut self) {}
 }
 
 // TODO: move it to somewhere else...
@@ -632,60 +630,55 @@ mod tests {
     fn smoke_bonsai_tree() {
         let bonsai_tree_map = &BonsaiTreeMap::new();
 
-        {
-            let guard = crossbeam_epoch::pin();
-            bonsai_tree_map.insert(0, (0, 100), &guard);
-            bonsai_tree_map.remove(&0, &guard);
-        }
-
+        // insert
         thread::scope(|s| {
             for t in 0..10 {
                 s.spawn(move |_| {
                     let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (0..3000).collect();
+                    let mut keys: Vec<i32> = (0..3000).map(|k| k * 10 + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        bonsai_tree_map.insert(i, (i, t), &crossbeam_epoch::pin());
+                        assert!(bonsai_tree_map.insert(i, i.to_string(), &crossbeam_epoch::pin()));
                     }
                 });
             }
         })
         .unwrap();
 
-        println!("start removal");
-
-        for i in 0..100 {
-            assert_eq!(
-                i,
-                bonsai_tree_map
-                    .remove(&i, &crossbeam_epoch::pin())
-                    .unwrap()
-                    .0
-            );
-        }
-
+        // remove
         thread::scope(|s| {
-            for _ in 0..10 {
+            for t in 0..5 {
                 s.spawn(move |_| {
                     let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (1..3000).collect();
+                    let mut keys: Vec<i32> = (0..3000).map(|k| k * 10 + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        bonsai_tree_map.remove(&i, &crossbeam_epoch::pin());
+                        assert_eq!(
+                            i.to_string(),
+                            bonsai_tree_map.remove(&i, &crossbeam_epoch::pin()).unwrap()
+                        );
                     }
                 });
             }
         })
         .unwrap();
 
-        println!("done");
-
-        {
-            let guard = crossbeam_epoch::pin();
-            assert!(bonsai_tree_map.insert(0, (0, 100), &guard));
-            assert_eq!(bonsai_tree_map.get(&0, &guard).unwrap().0, 0);
-            assert_eq!(bonsai_tree_map.remove(&0, &guard).unwrap().0, 0);
-            assert_eq!(bonsai_tree_map.get(&0, &guard), None);
-        }
+        // get
+        thread::scope(|s| {
+            for t in 5..10 {
+                s.spawn(move |_| {
+                    let mut rng = rand::thread_rng();
+                    let mut keys: Vec<i32> = (0..3000).map(|k| k * 10 + t).collect();
+                    keys.shuffle(&mut rng);
+                    for i in keys {
+                        assert_eq!(
+                            i.to_string(),
+                            *bonsai_tree_map.get(&i, &crossbeam_epoch::pin()).unwrap()
+                        );
+                    }
+                });
+            }
+        })
+        .unwrap();
     }
 }
