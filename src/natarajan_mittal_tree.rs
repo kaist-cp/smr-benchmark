@@ -109,6 +109,11 @@ where
     }
 }
 
+enum Direction {
+    L,
+    R,
+}
+
 /// All Shared<_> are unmarked.
 ///
 /// All of the edges of path from `successor` to `parent` are in the process of removal.
@@ -117,19 +122,38 @@ struct SeekRecord<'g, K, V> {
     ancestor: Shared<'g, Node<K, V>>,
     /// The first internal node with a marked outgoing edge
     successor: Shared<'g, Node<K, V>>,
-    /// The pointer from `ancestor` to `successor`. This field is not presented in the paper, but
-    /// added for convenience.
-    successor_addr: &'g Atomic<Node<K, V>>,
+    /// The direction of successor from ancestor.
+    successor_dir: Direction,
     /// Parent of `leaf`
     parent: Shared<'g, Node<K, V>>,
     /// The end of the access path.
     leaf: Shared<'g, Node<K, V>>,
-    /// The pointer from `parent` to `leaf`. This field is not presented in the paper, but
-    /// added for convenience.
-    leaf_addr: &'g Atomic<Node<K, V>>,
-    /// The pointer from `parent` to the sibling of `leaf`. This field is not presented in the
-    /// paper, but added for convenience.
-    sibling_addr: &'g Atomic<Node<K, V>>,
+    /// The direction of leaf from parent.
+    leaf_dir: Direction,
+}
+
+// TODO(@jeehoonkang): code duplication...
+impl<'g, K, V> SeekRecord<'g, K, V> {
+    fn successor_addr(&'g self) -> &'g Atomic<Node<K, V>> {
+        match self.successor_dir {
+            Direction::L => &unsafe { self.ancestor.deref() }.left,
+            Direction::R => &unsafe { self.ancestor.deref() }.right,
+        }
+    }
+
+    fn leaf_addr(&'g self) -> &'g Atomic<Node<K, V>> {
+        match self.leaf_dir {
+            Direction::L => &unsafe { self.parent.deref() }.left,
+            Direction::R => &unsafe { self.parent.deref() }.right,
+        }
+    }
+
+    fn leaf_sibling_addr(&'g self) -> &'g Atomic<Node<K, V>> {
+        match self.leaf_dir {
+            Direction::L => &unsafe { self.parent.deref() }.right,
+            Direction::R => &unsafe { self.parent.deref() }.left,
+        }
+    }
 }
 
 // COMMENT(@jeehoonkang): write down the invariant of the tree
@@ -207,18 +231,16 @@ where
         let mut record = SeekRecord {
             ancestor: Shared::from(&self.r as *const _),
             successor: s,
-            successor_addr: &self.r.left,
+            successor_dir: Direction::L,
             parent: s,
             leaf,
-            leaf_addr: &s_node.left,
-            sibling_addr: &s_node.right,
+            leaf_dir: Direction::L,
         };
 
         let mut prev_marked = leaf;
-        let mut curr_addr = &leaf_node.left;
         let mut curr_marked = leaf_node.left.load(Ordering::Relaxed, guard);
         let mut curr = curr_marked.with_tag(Marks::empty().bits());
-        let mut curr_sibling_addr = &leaf_node.right;
+        let mut curr_dir = Direction::L;
 
         while let Some(curr_node) = unsafe { curr.as_ref() } {
             let tag = Marks::from_bits_truncate(prev_marked.tag()).tag();
@@ -226,24 +248,21 @@ where
                 // untagged edge: advance ancestor and successor pointers
                 record.ancestor = record.parent;
                 record.successor = record.leaf;
-                record.successor_addr = record.leaf_addr;
+                record.successor_dir = record.leaf_dir;
             }
 
             // advance parent and leaf pointers
             record.parent = record.leaf;
             record.leaf = curr;
-            record.leaf_addr = curr_addr;
-            record.sibling_addr = curr_sibling_addr;
+            record.leaf_dir = curr_dir;
 
             // update other variables
             prev_marked = curr_marked;
             curr_marked = if curr_node.key > *key {
-                curr_addr = &curr_node.left;
-                curr_sibling_addr = &curr_node.right;
+                curr_dir = Direction::L;
                 curr_node.left.load(Ordering::Acquire, guard)
             } else {
-                curr_addr = &curr_node.right;
-                curr_sibling_addr = &curr_node.left;
+                curr_dir = Direction::R;
                 curr_node.right.load(Ordering::Acquire, guard)
             };
             curr = curr_marked.with_tag(Marks::empty().bits());
@@ -257,12 +276,12 @@ where
     /// Returns true if it successfully unlinks the flagged node in `record`.
     fn cleanup(&self, record: &SeekRecord<'_, K, V>, guard: &Guard) -> bool {
         // Identify the node(subtree) that will replace `successor`.
-        let leaf_marked = record.leaf_addr.load(Ordering::Acquire, guard);
+        let leaf_marked = record.leaf_addr().load(Ordering::Acquire, guard);
         let leaf_flag = Marks::from_bits_truncate(leaf_marked.tag()).flag();
         let target_sibling_addr = if leaf_flag {
-            record.sibling_addr
+            record.leaf_sibling_addr()
         } else {
-            record.leaf_addr
+            record.leaf_addr()
         };
 
         // NOTE: the ibr implementation uses CAS
@@ -276,7 +295,7 @@ where
         let target_sibling = target_sibling_addr.load(Ordering::Acquire, guard);
         let flag = Marks::from_bits_truncate(target_sibling.tag()).flag();
         let is_unlinked = record
-            .successor_addr
+            .successor_addr()
             .compare_and_set(
                 record.successor,
                 target_sibling.with_tag(Marks::new(flag, false).bits()),
@@ -363,7 +382,7 @@ where
             new_internal_node.right.store(new_right, Ordering::Relaxed);
 
             // NOTE: record.leaf_addr is called childAddr in the paper.
-            match record.leaf_addr.compare_and_set(
+            match record.leaf_addr().compare_and_set(
                 record.leaf,
                 new_internal,
                 Ordering::AcqRel,
@@ -404,7 +423,7 @@ where
             }
 
             // Try injecting the deletion flag.
-            match record.leaf_addr.compare_and_set(
+            match record.leaf_addr().compare_and_set(
                 record.leaf,
                 record.leaf.with_tag(Marks::new(true, false).bits()),
                 Ordering::AcqRel,
