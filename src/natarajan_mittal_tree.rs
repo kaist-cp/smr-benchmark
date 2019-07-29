@@ -33,9 +33,7 @@ impl Marks {
 #[derive(Clone, PartialEq, Eq, Ord, Debug)]
 enum Key<K> {
     Fin(K),
-    Inf0, // TODO(@jeehoonkang): is it really necessary to have multiple types of Inf*?
-    Inf1,
-    Inf2,
+    Inf,
 }
 
 impl<K> PartialOrd for Key<K>
@@ -45,18 +43,9 @@ where
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         match (self, other) {
             (Key::Fin(k1), Key::Fin(k2)) => k1.partial_cmp(k2),
-            (Key::Fin(_), _) => Some(std::cmp::Ordering::Less),
-
-            (Key::Inf0, Key::Fin(_)) => Some(std::cmp::Ordering::Greater),
-            (Key::Inf0, Key::Inf0) => Some(std::cmp::Ordering::Equal),
-            (Key::Inf0, _) => Some(std::cmp::Ordering::Less),
-
-            (Key::Inf1, Key::Inf2) => Some(std::cmp::Ordering::Less),
-            (Key::Inf1, Key::Inf1) => Some(std::cmp::Ordering::Equal),
-            (Key::Inf1, _) => Some(std::cmp::Ordering::Greater),
-
-            (Key::Inf2, Key::Inf2) => Some(std::cmp::Ordering::Equal),
-            (Key::Inf2, _) => Some(std::cmp::Ordering::Greater),
+            (Key::Fin(_), Key::Inf) => Some(std::cmp::Ordering::Less),
+            (Key::Inf, Key::Fin(_)) => Some(std::cmp::Ordering::Greater),
+            (Key::Inf, Key::Inf) => Some(std::cmp::Ordering::Equal),
         }
     }
 }
@@ -197,9 +186,9 @@ where
         //     s(inf1)  inf2
         //       / \
         //   inf0   inf1
-        let inf0 = Node::new_leaf(Key::Inf0, None);
-        let inf1 = Node::new_leaf(Key::Inf1, None);
-        let inf2 = Node::new_leaf(Key::Inf2, None);
+        let inf0 = Node::new_leaf(Key::Inf, None);
+        let inf1 = Node::new_leaf(Key::Inf, None);
+        let inf2 = Node::new_leaf(Key::Inf, None);
         let s = Node::new_internal(inf0, inf1);
         let r = Node::new_internal(s, inf2);
         NMTreeMap { r }
@@ -341,7 +330,7 @@ where
             .into_shared(unsafe { unprotected() });
 
         let mut new_internal = Owned::new(Node {
-            key: Key::Inf2, // temporary placeholder
+            key: Key::Inf, // temporary placeholder
             value: None,
             left: Atomic::null(),
             right: Atomic::null(),
