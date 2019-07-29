@@ -2,8 +2,6 @@ use crossbeam_epoch::{unprotected, Atomic, Guard, Owned, Shared};
 
 use crate::concurrent_map::ConcurrentMap;
 
-use std::mem::ManuallyDrop;
-use std::ptr;
 use std::sync::atomic::Ordering;
 
 static WEIGHT: usize = 2;
@@ -36,7 +34,7 @@ impl Retired {
 #[derive(Debug)]
 struct Node<K, V> {
     key: K,
-    value: ManuallyDrop<V>, // TODO(@jeehoonkang): clone?
+    value: V, // TODO(@jeehoonkang): clone?
     size: usize,
     left: Atomic<Node<K, V>>,
     right: Atomic<Node<K, V>>,
@@ -60,19 +58,21 @@ where
             return true;
         }
 
-        unsafe { node.as_ref() }
-            .map(|n| {
-                Self::is_retired(n.left.load(Ordering::Acquire, guard))
-                    || Self::is_retired(n.right.load(Ordering::Acquire, guard))
-            })
-            .unwrap_or_else(|| false)
+        if let Some(node_ref) = unsafe { node.as_ref() } {
+            Self::is_retired(node_ref.left.load(Ordering::Acquire, guard))
+                || Self::is_retired(node_ref.right.load(Ordering::Acquire, guard))
+        } else {
+            false
+        }
     }
 
     fn node_size(node: Shared<Self>) -> usize {
         debug_assert!(!Self::is_retired(node));
-        unsafe { node.as_ref() }
-            .map(|n| n.size)
-            .unwrap_or_else(|| 0)
+        if let Some(node_ref) = unsafe { node.as_ref() } {
+            node_ref.size
+        } else {
+            0
+        }
     }
 }
 
@@ -132,6 +132,8 @@ where
         unsafe {
             for node in retired_nodes.drain(..) {
                 let node = node.load(Ordering::Relaxed, guard);
+                node.deref().left.store(Node::retired_node(), Ordering::Release);
+                node.deref().right.store(Node::retired_node(), Ordering::Release);
                 guard.defer_destroy(node);
             }
             guard.defer_destroy(old_state);
@@ -163,7 +165,7 @@ where
         let right_size = Node::node_size(right);
         let new_node = Owned::new(Node {
             key,
-            value: ManuallyDrop::new(value),
+            value,
             size: left_size + right_size + 1,
             left: Atomic::from(left),
             right: Atomic::from(right),
@@ -194,17 +196,17 @@ where
         let res = if r_size > 0
             && ((l_size > 0 && r_size > WEIGHT * l_size) || (l_size == 0 && r_size > WEIGHT))
         {
-            self.mk_balanced_left(left, right, &cur_ref.key, &*cur_ref.value, guard)
+            self.mk_balanced_left(left, right, &cur_ref.key, &cur_ref.value, guard)
         } else if l_size > 0
             && ((r_size > 0 && l_size > WEIGHT * r_size) || (r_size == 0 && l_size > WEIGHT))
         {
-            self.mk_balanced_right(left, right, &cur_ref.key, &*cur_ref.value, guard)
+            self.mk_balanced_right(left, right, &cur_ref.key, &cur_ref.value, guard)
         } else {
             self.mk_node(
                 left,
                 right,
                 cur_ref.key.clone(),
-                (*cur_ref.value).clone(),
+                cur_ref.value.clone(),
                 guard,
             )
         };
@@ -253,7 +255,7 @@ where
             new_left,
             right_right,
             right_ref.key.clone(),
-            (*right_ref.value).clone(),
+            right_ref.value.clone(),
             guard,
         );
         self.retire_node(right);
@@ -280,14 +282,14 @@ where
             right_left_right,
             right_right,
             right_ref.key.clone(),
-            (*right_ref.value).clone(),
+            right_ref.value.clone(),
             guard,
         );
         let res = self.mk_node(
             new_left,
             new_right,
             right_left_ref.key.clone(),
-            (*right_left_ref.value).clone(),
+            right_left_ref.value.clone(),
             guard,
         );
         self.retire_node(right_left);
@@ -330,7 +332,7 @@ where
             left_left,
             new_right,
             left_ref.key.clone(),
-            (*left_ref.value).clone(),
+            left_ref.value.clone(),
             guard,
         );
         self.retire_node(left);
@@ -356,7 +358,7 @@ where
             left_left,
             left_right_left,
             left_ref.key.clone(),
-            (*left_ref.value).clone(),
+            left_ref.value.clone(),
             guard,
         );
         let new_right = self.mk_node(left_right_right, right, key.clone(), value.clone(), guard);
@@ -364,7 +366,7 @@ where
             new_left,
             new_right,
             left_right_ref.key.clone(),
-            (*left_right_ref.value).clone(),
+            left_right_ref.value.clone(),
             guard,
         );
         self.retire_node(left_right);
@@ -392,7 +394,6 @@ where
             );
         }
         let node_ref = unsafe { node.deref() };
-        // TODO: Acquire?
         let left = node_ref.left.load(Ordering::Acquire, guard);
         let right = node_ref.right.load(Ordering::Acquire, guard);
         if *key < node_ref.key {
@@ -420,7 +421,7 @@ where
         let right = node_ref.right.load(Ordering::Acquire, guard);
 
         if *key == node_ref.key {
-            let value = unsafe { Some(ManuallyDrop::into_inner(ptr::read(&node_ref.value))) };
+            let value = Some(node_ref.value.clone());
             self.retire_node(node);
             if node_ref.size == 1 {
                 return (Shared::null(), value);
@@ -464,7 +465,7 @@ where
             Shared::null(),
             Shared::null(),
             node_ref.key.clone(),
-            (*node_ref.value).clone(),
+            node_ref.value.clone(),
             guard,
         );
         self.retire_node(node);
@@ -488,7 +489,7 @@ where
             Shared::null(),
             Shared::null(),
             node_ref.key.clone(),
-            (*node_ref.value).clone(),
+            node_ref.value.clone(),
             guard,
         );
         self.retire_node(node);
