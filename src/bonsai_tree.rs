@@ -1,4 +1,4 @@
-use crossbeam_epoch::{unprotected, Atomic, Guard, Owned, Shared};
+use crossbeam_epoch::{Atomic, Guard, Owned, Shared};
 
 use crate::concurrent_map::ConcurrentMap;
 
@@ -81,20 +81,11 @@ where
 /// Since BonsaiTreeMap.curr_state is Atomic<State<_>>, *const Node<_> can't be used here.
 #[derive(Debug)]
 struct State<K, V> {
-    // TODO: this doesn't need to be Atomic (Owned is sufficient but nullable)
-    root: Atomic<Node<K, V>>,
-
     /// Nodes that current op wants to remove from the tree. Should be retired if CAS succeeds.
     /// (`retire`). If not, ignore.
     retired_nodes: Vec<Atomic<Node<K, V>>>,
     /// Nodes newly constructed by the op. Should be destroyed if CAS fails. (`destroy`)
     new_nodes: Vec<Atomic<Node<K, V>>>,
-}
-
-impl<K, V> Drop for State<K, V> {
-    fn drop(&mut self) {
-        // TODO ??
-    }
 }
 
 impl<K, V> State<K, V>
@@ -104,39 +95,31 @@ where
 {
     fn new<'g>() -> Self {
         Self {
-            root: Atomic::null(),
             retired_nodes: Vec::new(),
             new_nodes: Vec::new(),
         }
     }
 
-    /// Destroy the newly created state (self) that lost the race
-    /// reclaim_state
-    /// TODO: reclaim_state + retire_state?
-    fn destroy(mut new_state: Shared<Self>) {
-        unsafe {
-            let state_ref = new_state.deref_mut();
-            for node in state_ref.new_nodes.drain(..) {
-                drop(node.into_owned());
-            }
-            drop(new_state.into_owned());
+    /// Destroy the newly created state (self) that lost the race (reclaim_state)
+    fn destroy(mut self) {
+        for node in self.new_nodes.drain(..) {
+            drop(unsafe { node.into_owned() });
         }
     }
 
     /// Retire the old state replaced by the new_state and the new_state.retired_nodes
-    fn retire<'g>(
-        old_state: Shared<'g, Self>,
-        retired_nodes: &mut Vec<Atomic<Node<K, V>>>,
-        guard: &'g Guard,
-    ) {
-        unsafe {
-            for node in retired_nodes.drain(..) {
-                let node = node.load(Ordering::Relaxed, guard);
-                node.deref().left.store(Node::retired_node(), Ordering::Release);
-                node.deref().right.store(Node::retired_node(), Ordering::Release);
+    fn retire(mut self, guard: &Guard) {
+        for node in self.retired_nodes.drain(..) {
+            let node = node.load(Ordering::Relaxed, guard);
+            unsafe {
+                node.deref()
+                    .left
+                    .store(Node::retired_node(), Ordering::Release);
+                node.deref()
+                    .right
+                    .store(Node::retired_node(), Ordering::Release);
                 guard.defer_destroy(node);
             }
-            guard.defer_destroy(old_state);
         }
     }
 
@@ -498,7 +481,7 @@ where
 }
 
 pub struct BonsaiTreeMap<K, V> {
-    curr_state: Atomic<State<K, V>>,
+    root: Atomic<Node<K, V>>,
 }
 
 impl<K, V> BonsaiTreeMap<K, V>
@@ -508,14 +491,13 @@ where
 {
     pub fn new() -> Self {
         BonsaiTreeMap {
-            curr_state: Atomic::from(State::new()),
+            root: Atomic::null(),
         }
     }
+
     pub fn get<'g>(&self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
-        let curr_state = unsafe { self.curr_state.load(Ordering::Acquire, guard).deref() };
-        let mut node;
         loop {
-            node = curr_state.root.load(Ordering::Acquire, guard);
+            let mut node = self.root.load(Ordering::Acquire, guard);
             while !node.is_null() && Node::is_retired(node) {
                 let node_ref = unsafe { node.deref() };
                 if *key == node_ref.key {
@@ -543,70 +525,55 @@ where
 
     pub fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
         loop {
-            let old_state = self.curr_state.load(Ordering::Acquire, guard);
-            let old_state_ref = unsafe { old_state.deref() };
-            let mut new_state = Owned::new(State::new()).into_shared(unsafe { unprotected() });
-            let new_state_ref = unsafe { new_state.deref_mut() };
-            let (new_root, inserted) = new_state_ref.do_insert(
-                old_state_ref.root.load(Ordering::Acquire, guard),
-                &key,
-                &value,
-                guard,
-            );
-            new_state_ref.root.store(new_root, Ordering::Relaxed);
+            let old_root = self.root.load(Ordering::Acquire, guard);
+            let mut state = State::new();
+            let (new_root, inserted) = state.do_insert(old_root, &key, &value, guard);
 
             if Node::is_retired(new_root) {
                 // TODO: reclaim_state(new_state, new_state.new_nodes)
-                State::destroy(new_state);
+                state.destroy();
                 continue;
             }
 
             if self
-                .curr_state
-                .compare_and_set(old_state, new_state, Ordering::AcqRel, guard)
+                .root
+                .compare_and_set(old_root, new_root, Ordering::AcqRel, guard)
                 .is_ok()
             {
                 // TODO: retire_state(old_state, new_state.retired_nodes)
-                State::retire(old_state, &mut new_state_ref.retired_nodes, guard);
+                state.retire(guard);
                 return inserted;
             }
 
             // TODO: reclaim_state(new_state, new_state.new_nodes)
-            State::destroy(new_state);
+            state.destroy();
         }
     }
 
     pub fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
         loop {
-            let old_state = self.curr_state.load(Ordering::Acquire, guard);
-            let old_state_ref = unsafe { old_state.deref() };
-            let mut new_state = Owned::new(State::new()).into_shared(unsafe { unprotected() });
-            let new_state_ref = unsafe { new_state.deref_mut() };
-            let (new_root, value) = new_state_ref.do_remove(
-                old_state_ref.root.load(Ordering::Acquire, guard),
-                key,
-                guard,
-            );
-            new_state_ref.root.store(new_root, Ordering::Relaxed);
+            let old_root = self.root.load(Ordering::Acquire, guard);
+            let mut state = State::new();
+            let (new_root, value) = state.do_remove(old_root, key, guard);
 
             if Node::is_retired(new_root) {
                 // TODO: reclaim_state(new_state, new_state.new_nodes)
-                State::destroy(new_state);
+                state.destroy();
                 continue;
             }
 
             if self
-                .curr_state
-                .compare_and_set(old_state, new_state, Ordering::AcqRel, guard)
+                .root
+                .compare_and_set(old_root, new_root, Ordering::AcqRel, guard)
                 .is_ok()
             {
                 // TODO: retire_state(old_state, new_state.retired_nodes)
-                State::retire(old_state, &mut new_state_ref.retired_nodes, guard);
+                state.retire(guard);
                 return value;
             }
 
             // TODO: reclaim_state(new_state, new_state.new_nodes)
-            State::destroy(new_state);
+            state.destroy();
         }
     }
 }
@@ -669,7 +636,13 @@ mod tests {
         println!("start removal");
 
         for i in 0..100 {
-            assert_eq!(i, bonsai_tree_map.remove(&i, &crossbeam_epoch::pin()).unwrap().0);
+            assert_eq!(
+                i,
+                bonsai_tree_map
+                    .remove(&i, &crossbeam_epoch::pin())
+                    .unwrap()
+                    .0
+            );
         }
 
         thread::scope(|s| {
