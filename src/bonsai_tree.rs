@@ -36,7 +36,7 @@ impl Retired {
 #[derive(Debug)]
 struct Node<K, V> {
     key: K,
-    value: ManuallyDrop<V>,
+    value: ManuallyDrop<V>, // TODO(@jeehoonkang): clone?
     size: usize,
     left: Atomic<Node<K, V>>,
     right: Atomic<Node<K, V>>,
@@ -60,17 +60,19 @@ where
             return true;
         }
 
-        unsafe {
-            node.as_ref().map_or(false, |n| {
+        unsafe { node.as_ref() }
+            .map(|n| {
                 Self::is_retired(n.left.load(Ordering::Acquire, guard))
                     || Self::is_retired(n.right.load(Ordering::Acquire, guard))
             })
-        }
+            .unwrap_or_else(|| false)
     }
 
     fn node_size(node: Shared<Self>) -> usize {
         debug_assert!(!Self::is_retired(node));
-        unsafe { node.as_ref().map_or(0, |n| n.size) }
+        unsafe { node.as_ref() }
+            .map(|n| n.size)
+            .unwrap_or_else(|| 0)
     }
 }
 
@@ -87,9 +89,11 @@ struct State<K, V> {
 impl<K, V> Drop for State<K, V> {
     fn drop(&mut self) {
         unsafe {
-            for node in self.new_nodes.drain(..) {
-                // TODO: reclaim_state
-            }
+            // TODO(@jeehoonkang): relcaim new nodes...
+            //
+            // for node in self.new_nodes.drain(..) {
+            //     drop(node.load(Ordering::Relaxed, unprotected()).into_owned());
+            // }
         }
     }
 }
@@ -99,13 +103,12 @@ where
     K: Ord + Clone,
     V: Clone,
 {
-    fn new<'g>() -> Shared<'g, Self> {
-        Owned::new(State {
+    fn new<'g>() -> Self {
+        Self {
             root: Atomic::null(),
             retired_nodes: Vec::new(),
             new_nodes: Vec::new(),
-        })
-        .into_shared(unsafe { &unprotected() })
+        }
     }
 
     /// destroy the newly created state (self) that lost the race
@@ -525,7 +528,7 @@ where
         loop {
             let old_state = self.curr_state.load(Ordering::Acquire, guard);
             let old_state_ref = unsafe { old_state.deref() };
-            let mut new_state = State::new();
+            let mut new_state = Owned::new(State::new()).into_shared(unsafe { unprotected() });
             let new_state_ref = unsafe { new_state.deref_mut() };
             let (new_root, inserted) = new_state_ref.do_insert(
                 old_state_ref.root.load(Ordering::Acquire, guard),
@@ -557,7 +560,7 @@ where
         loop {
             let old_state = self.curr_state.load(Ordering::Acquire, guard);
             let old_state_ref = unsafe { old_state.deref() };
-            let mut new_state = State::new();
+            let mut new_state = Owned::new(State::new()).into_shared(unsafe { unprotected() });
             let new_state_ref = unsafe { new_state.deref_mut() };
             let (new_root, value) = new_state_ref.do_remove(
                 old_state_ref.root.load(Ordering::Acquire, guard),
@@ -585,6 +588,7 @@ where
     }
 }
 
+// TODO: move it to somewhere else...
 impl<K, V> ConcurrentMap<K, V> for BonsaiTreeMap<K, V>
 where
     K: Ord + Clone,
