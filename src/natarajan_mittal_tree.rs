@@ -205,9 +205,9 @@ where
     pub fn new() -> Self {
         // An empty tree has 5 default nodes with infinite keys so that the SeekRecord is allways
         // well-defined.
-        //         r(inf2)
-        //          /  \
-        //     s(inf1)  inf2
+        //          r
+        //         / \
+        //        s  inf2
         //       / \
         //   inf0   inf1
         let inf0 = Node::new_leaf(Key::Inf, None);
@@ -237,14 +237,12 @@ where
             leaf_dir: Direction::L,
         };
 
-        let mut prev_marked = leaf;
-        let mut curr_marked = leaf_node.left.load(Ordering::Relaxed, guard);
-        let mut curr = curr_marked.with_tag(Marks::empty().bits());
+        let mut prev_tag = Marks::from_bits_truncate(leaf.tag()).tag();
         let mut curr_dir = Direction::L;
+        let mut curr = leaf_node.left.load(Ordering::Relaxed, guard);
 
         while let Some(curr_node) = unsafe { curr.as_ref() } {
-            let tag = Marks::from_bits_truncate(prev_marked.tag()).tag();
-            if !tag {
+            if !prev_tag {
                 // untagged edge: advance ancestor and successor pointers
                 record.ancestor = record.parent;
                 record.successor = record.leaf;
@@ -253,19 +251,18 @@ where
 
             // advance parent and leaf pointers
             record.parent = record.leaf;
-            record.leaf = curr;
+            record.leaf = curr.with_tag(Marks::empty().bits());
             record.leaf_dir = curr_dir;
 
             // update other variables
-            prev_marked = curr_marked;
-            curr_marked = if curr_node.key > *key {
+            prev_tag = Marks::from_bits_truncate(curr.tag()).tag();
+            if curr_node.key > *key {
                 curr_dir = Direction::L;
-                curr_node.left.load(Ordering::Acquire, guard)
+                curr = curr_node.left.load(Ordering::Acquire, guard);
             } else {
                 curr_dir = Direction::R;
-                curr_node.right.load(Ordering::Acquire, guard)
-            };
-            curr = curr_marked.with_tag(Marks::empty().bits());
+                curr = curr_node.right.load(Ordering::Acquire, guard);
+            }
         }
 
         record
@@ -287,7 +284,11 @@ where
         // NOTE: the ibr implementation uses CAS
         // tag (parent, sibling) edge -> all of the parent's edges can't change now
         // TODO: Is Release enough?
-        target_sibling_addr.fetch_or(1, Ordering::AcqRel, guard);
+        target_sibling_addr.fetch_or(
+            Marks::TAG.bits(),
+            Ordering::AcqRel,
+            guard,
+        );
 
         // Try to replace (ancestor, successor) w/ (ancestor, sibling).
         // Since (parent, sibling) might have been concurrently flagged, copy
@@ -335,7 +336,7 @@ where
 
     pub fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
         let record = self.seek(key, guard);
-        let leaf_node = unsafe { record.leaf.as_ref()? };
+        let leaf_node = unsafe { record.leaf.deref() };
 
         if leaf_node.key != *key {
             return None;
@@ -344,8 +345,8 @@ where
         Some(leaf_node.value.as_ref().unwrap())
     }
 
-    pub fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
-        let new_leaf = Owned::new(Node::new_leaf(Key::Fin(key.clone()), Some(value)))
+    pub fn insert(&self, key: K, value: V, guard: &Guard) -> Result<(), (K, V)> {
+        let mut new_leaf = Owned::new(Node::new_leaf(Key::Fin(key.clone()), Some(value)))
             .into_shared(unsafe { unprotected() });
 
         let mut new_internal = Owned::new(Node {
@@ -364,10 +365,12 @@ where
             if leaf_node.key == key {
                 // Newly created nodes that failed to be inserted are free'd here.
                 unsafe {
+                    let value =
+                        ManuallyDrop::into_inner(new_leaf.deref_mut().value.take().unwrap());
                     drop(new_leaf.into_owned());
                     drop(new_internal.into_owned());
+                    return Err((key, value));
                 }
-                return false;
             }
 
             let (new_left, new_right) = if leaf_node.key > key {
@@ -388,7 +391,7 @@ where
                 Ordering::AcqRel,
                 &guard,
             ) {
-                Ok(_) => return true,
+                Ok(_) => return Ok(()),
                 Err(e) => {
                     // Insertion failed. Help the conflicting remove operation if needed.
                     // NOTE: The paper version checks if any of the mark is set, which is redundant.
@@ -481,7 +484,7 @@ where
     }
     #[inline]
     fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
-        self.insert(key, value, guard)
+        self.insert(key, value, guard).is_ok()
     }
     #[inline]
     fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
