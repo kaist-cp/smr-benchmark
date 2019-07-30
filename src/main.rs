@@ -29,12 +29,23 @@ arg_enum! {
 }
 
 #[derive(PartialEq, Debug)]
+pub enum MM {
+    NoMM,
+    EBR,
+    PEBR,
+}
+
+#[derive(PartialEq, Debug)]
 pub enum Op {
     Insert,
     Get,
     Remove,
 }
 
+// global config & run config
+// TODO: setup should make Iterator of Configs
+// TODO: Config.run(threads, MM)
+// TODO op_dist arg
 struct Config {
     dss: Vec<DS>,
     threads: Vec<usize>,
