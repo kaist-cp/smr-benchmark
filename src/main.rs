@@ -171,8 +171,8 @@ fn bench_all(config: &mut Config) -> (i64, i64) {
             let (ops_per_sec, avg_unreclaimed) = match ds {
                 DS::List => bench::<List<String, String>>(config, *threads),
                 DS::HashMap => bench::<HashMap<String, String>>(config, *threads),
-                DS::NMTree => bench::<NMTreeMap<String, String>>(config, *threads),
-                DS::BonsaiTree => bench::<BonsaiTreeMap<String, String>>(config, *threads),
+                DS::NMTree => unimplemented!(),
+                DS::BonsaiTree => unimplemented!(),
             };
             println!("ops / sec = {}", ops_per_sec);
             println!("avg unreclaimed at each op: {}", avg_unreclaimed);

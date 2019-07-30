@@ -612,28 +612,28 @@ impl<K, V> Drop for BonsaiTreeMap<K, V> {
 }
 
 // TODO: move it to somewhere else...
-impl<K, V> ConcurrentMap<K, V> for BonsaiTreeMap<K, V>
-where
-    K: Ord + Clone,
-    V: Clone,
-{
-    fn new() -> Self {
-        Self::new()
-    }
+// impl<K, V> ConcurrentMap<K, V> for BonsaiTreeMap<K, V>
+// where
+//     K: Ord + Clone,
+//     V: Clone,
+// {
+//     fn new() -> Self {
+//         Self::new()
+//     }
 
-    #[inline]
-    fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
-        self.get(key, guard)
-    }
-    #[inline]
-    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
-        self.insert(key, value, guard)
-    }
-    #[inline]
-    fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
-        self.remove(key, guard)
-    }
-}
+//     #[inline]
+//     fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
+//         self.get(key, guard)
+//     }
+//     #[inline]
+//     fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
+//         self.insert(key, value, guard)
+//     }
+//     #[inline]
+//     fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
+//         self.remove(key, guard)
+//     }
+// }
 
 #[cfg(test)]
 mod tests {

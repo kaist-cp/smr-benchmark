@@ -119,7 +119,6 @@ mod tests {
         })
         .unwrap();
 
-<<<<<<< HEAD
         // get
         thread::scope(|s| {
             for t in 5..10 {

@@ -298,6 +298,7 @@ mod tests {
                         assert_eq!(
                             i.to_string(),
                             list.remove(&i, &mut crossbeam_epoch::pin()).unwrap()
+                        )
                     }
                 });
             }
