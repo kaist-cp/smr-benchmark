@@ -10,6 +10,7 @@ use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
 
 use clap::{arg_enum, value_t, values_t, App, Arg, ArgMatches};
+use crossbeam_epoch::unprotected;
 use crossbeam_utils::thread::scope;
 
 use pebr_benchmark::bonsai_tree::BonsaiTreeMap;
@@ -202,14 +203,16 @@ fn bench<M: ConcurrentMap<String, String> + Send + Sync>(
     let op_choices = &[Op::Insert, Op::Get, Op::Remove];
 
     let collector = &crossbeam_epoch::Collector::new();
-    let main_handle = collector.register();
 
-    for _ in 0..config.prefill {
-        let mut rng = rand::thread_rng();
-        let mut guard = main_handle.pin();
-        let key = key_dist.sample(&mut rng).to_string();
-        let value = key.clone();
-        map.insert(key, value, &mut guard);
+    {
+        let guard = unsafe { unprotected() };
+        let mut handle = M::handle(&guard);
+        for _ in 0..config.prefill {
+            let mut rng = rand::thread_rng();
+            let key = key_dist.sample(&mut rng).to_string();
+            let value = key.clone();
+            map.insert(&mut handle, key, value, guard);
+        }
     }
 
     println!("prefilled");
@@ -223,6 +226,7 @@ fn bench<M: ConcurrentMap<String, String> + Send + Sync>(
             s.spawn(move |_| {
                 let mut rng = rand::thread_rng();
                 let handle = collector.register();
+                let mut map_handle = M::handle(&handle.pin());
                 let c = barrier.clone();
 
                 let mut ops: i64 = 0;
@@ -240,15 +244,16 @@ fn bench<M: ConcurrentMap<String, String> + Send + Sync>(
                     match op_choices[config.op_dist.sample(&mut rng)] {
                         Op::Insert => {
                             let value = key.clone();
-                            map.insert(key, value, &mut guard);
+                            map.insert(&mut map_handle, key, value, &mut guard);
                         }
                         Op::Get => {
-                            map.get(&key, &mut guard);
+                            map.get(&mut map_handle, &key, &mut guard);
                         }
                         Op::Remove => {
-                            map.remove(&key, &mut guard);
+                            map.remove(&mut map_handle, &key, &mut guard);
                         }
                     }
+                    M::clear(&mut map_handle);
                     ops += 1;
                 }
 

@@ -46,17 +46,22 @@ impl<K, V> Drop for List<K, V> {
     }
 }
 
-struct Cursor<K, V> {
+pub struct Cursor<K, V> {
     prev: Shield<Node<K, V>>,
     curr: Shield<Node<K, V>>,
 }
 
 impl<K, V> Cursor<K, V> {
-    fn new<'g>(prev: Shared<'g, Node<K, V>>, curr: Shared<'g, Node<K, V>>, guard: &Guard) -> Self {
+    pub fn new(guard: &Guard) -> Self {
         Self {
-            prev: Shield::new(prev, guard),
-            curr: Shield::new(curr, guard),
+            prev: Shield::null(guard),
+            curr: Shield::null(guard),
         }
+    }
+
+    pub fn release(&mut self) {
+        self.prev.release();
+        self.curr.release();
     }
 }
 
@@ -83,27 +88,6 @@ enum FindError {
     ShieldError(ShieldError),
 }
 
-impl FindError {
-    fn retry<R, F>(guard: &mut Guard, f: F) -> R
-    where
-        F: Fn(&Guard) -> Result<R, Self>,
-    {
-        loop {
-            match f(guard) {
-                Ok(r) => return r,
-                Err(Self::Retry) => continue,
-                Err(Self::ShieldError(ShieldError::Ejected)) => {
-                    unsafe {
-                        // HACK(@jeehoonkang): We wanted to say `guard.repin()`, which is totally
-                        // fine, but the current Rust's type checker cannot verify it.
-                        (&mut *(guard as &_ as *const _ as *mut Guard)).repin();
-                    }
-                }
-            }
-        }
-    }
-}
-
 impl<K, V> List<K, V>
 where
     K: Ord,
@@ -119,19 +103,26 @@ where
     fn find_inner<'g>(
         &'g self,
         key: &K,
+        cursor: &mut Cursor<K, V>,
         guard: &'g Guard,
-    ) -> Result<(bool, Cursor<K, V>), FindError> {
-        let mut cursor = Cursor::new(
-            // HACK(@jeehoonkang): we're unsafely assuming the first 8 bytes of both `Node<K, V>`
-            // and `List<K, V>` are `Atomic<Node<K, V>>`.
-            unsafe { Shared::from_usize(&self.head as *const _ as usize) },
-            self.head.load(Ordering::Acquire, guard),
-            guard,
-        );
+    ) -> Result<bool, FindError> {
+        // HACK(@jeehoonkang): we're unsafely assuming the first 8 bytes of both `Node<K, V>` and
+        // `List<K, V>` are `Atomic<Node<K, V>>`.
+        cursor
+            .prev
+            .defend(
+                unsafe { Shared::from_usize(&self.head as *const _ as usize) },
+                guard,
+            )
+            .map_err(FindError::ShieldError)?;
+        cursor
+            .curr
+            .defend(self.head.load(Ordering::Acquire, guard), guard)
+            .map_err(FindError::ShieldError)?;
 
         loop {
             let curr_node = match unsafe { cursor.curr.as_ref() } {
-                None => return Ok((false, cursor)),
+                None => return Ok(false),
                 Some(c) => c,
             };
 
@@ -148,7 +139,7 @@ where
             let curr_key = &curr_node.key;
             if next.tag() == 0 {
                 if curr_key >= key {
-                    return Ok((curr_key == key, cursor));
+                    return Ok(curr_key == key);
                 }
                 mem::swap(&mut cursor.prev, &mut cursor.curr);
             } else {
@@ -169,11 +160,11 @@ where
         }
     }
 
-    fn find<'g>(&'g self, key: &K, guard: &'g mut Guard) -> (bool, Cursor<K, V>) {
+    fn find<'g>(&'g self, key: &K, cursor: &mut Cursor<K, V>, guard: &'g mut Guard) -> bool {
         // TODO(@jeehoonkang): we want to use `FindError::retry`, but it requires higher-kinded
         // things...
         loop {
-            match self.find_inner(key, guard) {
+            match self.find_inner(key, cursor, guard) {
                 Ok(r) => return r,
                 Err(FindError::Retry) => continue,
                 Err(FindError::ShieldError(ShieldError::Ejected)) => {
@@ -187,46 +178,80 @@ where
         }
     }
 
-    pub fn get<'g>(&'g self, key: &K, mut guard: &'g mut Guard) -> Option<VRef<K, V>> {
-        let (found, cursor) = self.find(key, guard);
+    pub fn get<'g>(
+        &'g self,
+        cursor: &'g mut Cursor<K, V>,
+        key: &K,
+        guard: &'g mut Guard,
+    ) -> Option<&'g V> {
+        let found = self.find(key, cursor, guard);
 
         if found {
-            Some(VRef::new(cursor.curr))
+            Some(unsafe { &cursor.curr.deref().value })
         } else {
             None
         }
     }
 
-    pub fn insert(&self, key: K, value: V, guard: &mut Guard) -> bool {
-        let mut node = Owned::new(Node {
-            key,
-            value: ManuallyDrop::new(value),
-            next: Atomic::null(),
-        });
-
+    fn insert_inner<'g>(
+        &'g self,
+        node: Shared<'g, Node<K, V>>,
+        cursor: &mut Cursor<K, V>,
+        guard: &'g Guard,
+    ) -> Result<bool, FindError> {
         loop {
             // TODO: create cursor in this function.
-            let (found, cursor) = self.find(&node.key, guard);
+            let found = self.find_inner(&unsafe { node.deref() }.key, cursor, guard)?;
             if found {
-                return false;
+                return Ok(false);
             }
 
-            node.next.store(cursor.curr.shared(), Ordering::Relaxed);
-            match unsafe { cursor.prev.deref() }.next.compare_and_set(
+            unsafe { node.deref() }
+                .next
+                .store(cursor.curr.shared(), Ordering::Relaxed);
+            if unsafe { cursor.prev.deref() }.next.compare_and_set(
                 cursor.curr.shared(),
                 node,
                 Ordering::AcqRel,
                 guard,
-            ) {
-                Ok(_) => return true,
-                Err(e) => node = e.new,
+            )
+            .is_ok() {
+                return Ok(true);
             }
         }
     }
 
-    fn remove_inner(&self, key: &K, guard: &Guard) -> Result<Option<V>, FindError> {
+    pub fn insert(&self, cursor: &mut Cursor<K, V>, key: K, value: V, guard: &mut Guard) -> bool {
+        let node = Owned::new(Node {
+            key: key,
+            value: ManuallyDrop::new(value),
+            next: Atomic::null(),
+        })
+        .into_shared(unsafe { unprotected() });
+
         loop {
-            let (found, cursor) = self.find_inner(key, guard)?;
+            match self.insert_inner(node, cursor, guard) {
+                Ok(r) => return r,
+                Err(FindError::Retry) => continue,
+                Err(FindError::ShieldError(ShieldError::Ejected)) => {
+                    unsafe {
+                        // HACK(@jeehoonkang): We wanted to say `guard.repin()`, which is totally
+                        // fine, but the current Rust's type checker cannot verify it.
+                        (&mut *(guard as &_ as *const _ as *mut Guard)).repin();
+                    }
+                }
+            }
+        }
+    }
+
+    fn remove_inner<'g>(
+        &'g self,
+        key: &K,
+        cursor: &mut Cursor<K, V>,
+        guard: &'g Guard,
+    ) -> Result<Option<V>, FindError> {
+        loop {
+            let found = self.find_inner(key, cursor, guard)?;
             if !found {
                 return Ok(None);
             }
@@ -234,7 +259,7 @@ where
             let curr_node = unsafe { cursor.curr.as_ref() }.unwrap();
             let value = unsafe { ptr::read(&curr_node.value) };
 
-            let next = curr_node.next.fetch_or(1, Ordering::AcqRel, &guard);
+            let next = curr_node.next.fetch_or(1, Ordering::AcqRel, guard);
             if next.tag() == 1 {
                 continue;
             }
@@ -247,7 +272,7 @@ where
             ) {
                 Ok(_) => unsafe { guard.defer_destroy(cursor.curr.shared()) },
                 Err(_) => {
-                    self.find_inner(key, guard)?;
+                    self.find_inner(key, cursor, guard)?;
                 }
             }
 
@@ -255,39 +280,66 @@ where
         }
     }
 
-    pub fn remove(&self, key: &K, guard: &mut Guard) -> Option<V> {
-        FindError::retry(guard, |g| self.remove_inner(key, g))
+    pub fn remove(&self, cursor: &mut Cursor<K, V>, key: &K, guard: &mut Guard) -> Option<V> {
+        loop {
+            match self.remove_inner(key, cursor, guard) {
+                Ok(r) => return r,
+                Err(FindError::Retry) => continue,
+                Err(FindError::ShieldError(ShieldError::Ejected)) => {
+                    unsafe {
+                        // HACK(@jeehoonkang): We wanted to say `guard.repin()`, which is totally
+                        // fine, but the current Rust's type checker cannot verify it.
+                        (&mut *(guard as &_ as *const _ as *mut Guard)).repin();
+                    }
+                }
+            }
+        }
     }
 }
 
 impl<K, V> ConcurrentMap<K, V> for List<K, V>
 where
-    K: Ord,
+    K: Ord + 'static,
+    V: 'static,
 {
-    type VRef = VRef<K, V>;
+    type Handle = Cursor<K, V>;
 
     fn new() -> Self {
         Self::new()
     }
 
+    fn handle(guard: &Guard) -> Self::Handle {
+        Cursor::new(guard)
+    }
+
+    fn clear(handle: &mut Self::Handle) {
+        handle.release();
+    }
+
     #[inline]
-    fn get<'g>(&'g self, key: &K, guard: &'g mut Guard) -> Option<Self::VRef> {
-        self.get(key, guard)
+    fn get<'g>(
+        &'g self,
+        handle: &'g mut Self::Handle,
+        key: &K,
+        guard: &'g mut Guard,
+    ) -> Option<&'g V> {
+        self.get(handle, key, guard)
     }
     #[inline]
-    fn insert(&self, key: K, value: V, guard: &mut Guard) -> bool {
-        self.insert(key, value, guard)
+    fn insert(&self, handle: &mut Self::Handle, key: K, value: V, guard: &mut Guard) -> bool {
+        self.insert(handle, key, value, guard)
     }
     #[inline]
-    fn remove(&self, key: &K, guard: &mut Guard) -> Option<V> {
-        self.remove(key, guard)
+    fn remove(&self, handle: &mut Self::Handle, key: &K, guard: &mut Guard) -> Option<V> {
+        self.remove(handle, key, guard)
     }
 }
 
 #[cfg(test)]
 mod tests {
     extern crate rand;
-    use super::List;
+    use super::{Cursor, List};
+    use crossbeam_epoch::pin;
     use crossbeam_utils::thread;
     use rand::prelude::*;
 
@@ -299,11 +351,12 @@ mod tests {
         thread::scope(|s| {
             for t in 0..10 {
                 s.spawn(move |_| {
+                    let mut cursor = Cursor::new(&pin());
                     let mut rng = rand::thread_rng();
                     let mut keys: Vec<i32> = (0..1000).map(|k| k * 10 + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        assert!(list.insert(i, i.to_string(), &mut crossbeam_epoch::pin()));
+                        assert!(list.insert(&mut cursor, i, i.to_string(), &mut pin()));
                     }
                 });
             }
@@ -314,13 +367,14 @@ mod tests {
         thread::scope(|s| {
             for t in 0..5 {
                 s.spawn(move |_| {
+                    let mut cursor = Cursor::new(&pin());
                     let mut rng = rand::thread_rng();
                     let mut keys: Vec<i32> = (0..1000).map(|k| k * 10 + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
                         assert_eq!(
                             i.to_string(),
-                            list.remove(&i, &mut crossbeam_epoch::pin()).unwrap()
+                            list.remove(&mut cursor, &i, &mut pin()).unwrap()
                         )
                     }
                 });
@@ -332,13 +386,14 @@ mod tests {
         thread::scope(|s| {
             for t in 5..10 {
                 s.spawn(move |_| {
+                    let mut cursor = Cursor::new(&pin());
                     let mut rng = rand::thread_rng();
                     let mut keys: Vec<i32> = (0..1000).map(|k| k * 10 + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
                         assert_eq!(
                             i.to_string(),
-                            *list.get(&i, &mut crossbeam_epoch::pin()).unwrap()
+                            *list.get(&mut cursor, &i, &mut pin()).unwrap()
                         );
                     }
                 });

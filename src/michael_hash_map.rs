@@ -3,7 +3,8 @@ use crossbeam_epoch::Guard;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use crate::harris_michael_list::{List, VRef};
+pub use crate::harris_michael_list::Cursor;
+use crate::harris_michael_list::List;
 
 pub struct HashMap<K, V> {
     buckets: Vec<List<K, V>>,
@@ -35,19 +36,24 @@ where
         s.finish() as usize
     }
 
-    pub fn get<'g>(&'g self, k: &K, guard: &'g mut Guard) -> Option<VRef<K, V>> {
+    pub fn get<'g>(
+        &'g self,
+        cursor: &'g mut Cursor<K, V>,
+        k: &K,
+        guard: &'g mut Guard,
+    ) -> Option<&'g V> {
         let i = Self::hash(k);
-        self.get_bucket(i).get(k, guard)
+        self.get_bucket(i).get(cursor, k, guard)
     }
 
-    pub fn insert(&self, k: K, v: V, guard: &mut Guard) -> bool {
+    pub fn insert(&self, cursor: &mut Cursor<K, V>, k: K, v: V, guard: &mut Guard) -> bool {
         let i = Self::hash(&k);
-        self.get_bucket(i).insert(k, v, guard)
+        self.get_bucket(i).insert(cursor, k, v, guard)
     }
 
-    pub fn remove(&self, k: &K, guard: &mut Guard) -> Option<V> {
+    pub fn remove(&self, cursor: &mut Cursor<K, V>, k: &K, guard: &mut Guard) -> Option<V> {
         let i = Self::hash(&k);
-        self.get_bucket(i).remove(k, guard)
+        self.get_bucket(i).remove(cursor, k, guard)
     }
 }
 
@@ -55,30 +61,44 @@ impl<K, V> ConcurrentMap<K, V> for HashMap<K, V>
 where
     K: Ord + Hash,
 {
-    type VRef = VRef<K, V>;
+    type Handle = Cursor<K, V>;
 
     fn new() -> Self {
         Self::with_capacity(30000)
     }
 
+    fn handle(guard: &Guard) -> Self::Handle {
+        Cursor::new(guard)
+    }
+
+    fn clear(handle: &mut Self::Handle) {
+        handle.release();
+    }
+
     #[inline]
-    fn get<'g>(&'g self, key: &'g K, guard: &'g mut Guard) -> Option<Self::VRef> {
-        self.get(key, guard)
+    fn get<'g>(
+        &'g self,
+        handle: &'g mut Self::Handle,
+        key: &'g K,
+        guard: &'g mut Guard,
+    ) -> Option<&'g V> {
+        self.get(handle, key, guard)
     }
     #[inline]
-    fn insert(&self, key: K, value: V, guard: &mut Guard) -> bool {
-        self.insert(key, value, guard)
+    fn insert(&self, handle: &mut Self::Handle, key: K, value: V, guard: &mut Guard) -> bool {
+        self.insert(handle, key, value, guard)
     }
     #[inline]
-    fn remove(&self, key: &K, guard: &mut Guard) -> Option<V> {
-        self.remove(key, guard)
+    fn remove(&self, handle: &mut Self::Handle, key: &K, guard: &mut Guard) -> Option<V> {
+        self.remove(handle, key, guard)
     }
 }
 
 #[cfg(test)]
 mod tests {
     extern crate rand;
-    use super::HashMap;
+    use super::{Cursor, HashMap};
+    use crossbeam_epoch::pin;
     use crossbeam_utils::thread;
     use rand::prelude::*;
 
@@ -90,11 +110,17 @@ mod tests {
         thread::scope(|s| {
             for t in 0..10 {
                 s.spawn(move |_| {
+                    let mut cursor = Cursor::new(&pin());
                     let mut rng = rand::thread_rng();
                     let mut keys: Vec<i32> = (0..3000).map(|k| k * 10 + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        assert!(hash_map.insert(i, i.to_string(), &mut crossbeam_epoch::pin()));
+                        assert!(hash_map.insert(
+                            &mut cursor,
+                            i,
+                            i.to_string(),
+                            &mut crossbeam_epoch::pin()
+                        ));
                     }
                 });
             }
@@ -105,13 +131,16 @@ mod tests {
         thread::scope(|s| {
             for t in 0..5 {
                 s.spawn(move |_| {
+                    let mut cursor = Cursor::new(&pin());
                     let mut rng = rand::thread_rng();
                     let mut keys: Vec<i32> = (0..3000).map(|k| k * 10 + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
                         assert_eq!(
                             i.to_string(),
-                            hash_map.remove(&i, &mut crossbeam_epoch::pin()).unwrap()
+                            hash_map
+                                .remove(&mut cursor, &i, &mut crossbeam_epoch::pin())
+                                .unwrap()
                         );
                     }
                 });
@@ -123,13 +152,16 @@ mod tests {
         thread::scope(|s| {
             for t in 5..10 {
                 s.spawn(move |_| {
+                    let mut cursor = Cursor::new(&pin());
                     let mut rng = rand::thread_rng();
                     let mut keys: Vec<i32> = (0..3000).map(|k| k * 10 + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
                         assert_eq!(
                             i.to_string(),
-                            *hash_map.get(&i, &mut crossbeam_epoch::pin()).unwrap()
+                            *hash_map
+                                .get(&mut cursor, &i, &mut crossbeam_epoch::pin())
+                                .unwrap()
                         );
                     }
                 });
