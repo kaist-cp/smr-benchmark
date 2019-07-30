@@ -26,3 +26,6 @@ git = "https://github.com/jeehoonkang/crossbeam"
 branch = "tracker-new-pebr"
 package = "crossbeam-epoch"
 path = "crossbeam-epoch"
+
+[profile.release]
+debug = true

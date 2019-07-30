@@ -247,10 +247,7 @@ mod tests {
                     let mut keys: Vec<i32> = (0..1000).map(|k| k * 10 + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        assert_eq!(
-                            i.to_string(),
-                            *list.get(&i, &crossbeam_ebr::pin()).unwrap()
-                        );
+                        assert_eq!(i.to_string(), *list.get(&i, &crossbeam_ebr::pin()).unwrap());
                     }
                 });
             }
