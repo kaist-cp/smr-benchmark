@@ -2,9 +2,9 @@ use crate::concurrent_map::ConcurrentMap;
 use crossbeam_epoch::{unprotected, Atomic, Guard, Owned, Pointer, Shared, Shield, ShieldError};
 
 use std::mem::{self, ManuallyDrop};
+use std::ops::Deref;
 use std::ptr;
 use std::sync::atomic::Ordering;
-use std::ops::Deref;
 
 #[derive(Debug)]
 struct Node<K, V> {
@@ -62,7 +62,7 @@ impl<'g, K, V> Cursor<'g, K, V> {
     }
 }
 
-struct VRef<K, V> {
+pub struct VRef<K, V> {
     shield: Shield<Node<K, V>>,
 }
 
@@ -97,7 +97,11 @@ where
 
     /// Returns (1) whether it found an entry, and (2) a cursor.
     #[inline]
-    fn find_inner<'g>(&'g self, key: &K, guard: &'g Guard) -> Result<(bool, Cursor<'g, K, V>), FindError> {
+    fn find_inner<'g>(
+        &'g self,
+        key: &K,
+        guard: &'g Guard,
+    ) -> Result<(bool, Cursor<'g, K, V>), FindError> {
         let mut cursor = Cursor::new(
             // HACK(@jeehoonkang): we're unsafely assuming the first 8 bytes of both `Node<K, V>`
             // and `List<K, V>` are `Atomic<Node<K, V>>`.
@@ -139,7 +143,10 @@ where
                     Ok(_) => unsafe { guard.defer_destroy(cursor.curr.shared()) },
                 }
             }
-            cursor.curr.defend(cursor.next, guard).map_err(|e| FindError::ShieldError(e))?;
+            cursor
+                .curr
+                .defend(cursor.next, guard)
+                .map_err(|e| FindError::ShieldError(e))?;
         }
     }
 
@@ -234,12 +241,14 @@ impl<K, V> ConcurrentMap<K, V> for List<K, V>
 where
     K: Ord,
 {
+    type VRef = VRef<K, V>;
+
     fn new() -> Self {
         Self::new()
     }
 
     #[inline]
-    fn get<'g>(&'g self, key: &K, guard: &'g mut Guard) -> Option<&'g V> {
+    fn get<'g>(&'g self, key: &K, guard: &'g mut Guard) -> Option<Self::VRef> {
         self.get(key, guard)
     }
     #[inline]

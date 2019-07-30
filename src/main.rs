@@ -179,7 +179,7 @@ fn bench_all(config: &mut Config) -> (i64, i64) {
             config
                 .output
                 .write_record(&[
-                    String::from("ebr"), // TODO do this properly
+                    String::from("pebr"), // TODO do this properly
                     ds.to_string(),
                     threads.to_string(),
                     ops_per_sec.to_string(),

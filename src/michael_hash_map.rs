@@ -3,7 +3,7 @@ use crossbeam_epoch::Guard;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use crate::harris_michael_list::List;
+use crate::harris_michael_list::{List, VRef};
 
 pub struct HashMap<K, V> {
     buckets: Vec<List<K, V>>,
@@ -35,7 +35,7 @@ where
         s.finish() as usize
     }
 
-    pub fn get<'g>(&'g self, k: &K, guard: &'g mut Guard) -> Option<&'g V> {
+    pub fn get<'g>(&'g self, k: &K, guard: &'g mut Guard) -> Option<VRef<K, V>> {
         let i = Self::hash(k);
         self.get_bucket(i).get(k, guard)
     }
@@ -55,12 +55,14 @@ impl<K, V> ConcurrentMap<K, V> for HashMap<K, V>
 where
     K: Ord + Hash,
 {
+    type VRef = VRef<K, V>;
+
     fn new() -> Self {
         Self::with_capacity(30000)
     }
 
     #[inline]
-    fn get<'g>(&'g self, key: &'g K, guard: &'g mut Guard) -> Option<&'g V> {
+    fn get<'g>(&'g self, key: &'g K, guard: &'g mut Guard) -> Option<Self::VRef> {
         self.get(key, guard)
     }
     #[inline]

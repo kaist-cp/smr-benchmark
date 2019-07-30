@@ -456,28 +456,27 @@ where
     }
 }
 
-impl<K, V> ConcurrentMap<K, V> for NMTreeMap<K, V>
-where
-    K: Ord + Clone,
-    V: Clone,
-{
-    fn new() -> Self {
-        Self::new()
-    }
+// impl<K, V> ConcurrentMap<K, V> for NMTreeMap<K, V>
+// where
+//     K: Ord + Clone,
+// {
+//     fn new() -> Self {
+//         Self::new()
+//     }
 
-    #[inline]
-    fn get<'g>(&'g self, key: &'g K, guard: &'g mut Guard) -> Option<&'g V> {
-        self.get(key, guard)
-    }
-    #[inline]
-    fn insert(&self, key: K, value: V, guard: &mut Guard) -> bool {
-        self.insert(key, value, guard).is_ok()
-    }
-    #[inline]
-    fn remove(&self, key: &K, guard: &mut Guard) -> Option<V> {
-        self.remove(key, guard)
-    }
-}
+//     #[inline]
+//     fn get<'g>(&'g self, key: &'g K, guard: &'g mut Guard) -> Option<&'g V> {
+//         self.get(key, guard)
+//     }
+//     #[inline]
+//     fn insert(&self, key: K, value: V, guard: &mut Guard) -> bool {
+//         self.insert(key, value, guard)
+//     }
+//     #[inline]
+//     fn remove(&self, key: &K, guard: &mut Guard) -> Option<V> {
+//         self.remove(key, guard)
+//     }
+// }
 
 #[cfg(test)]
 mod tests {
