@@ -1,4 +1,4 @@
-use crossbeam_epoch::{Atomic, Guard, Owned, Shared};
+use crossbeam_epoch::{unprotected, Atomic, Guard, Owned, Shared};
 
 use crate::concurrent_map::ConcurrentMap;
 
@@ -592,7 +592,23 @@ where
 }
 
 impl<K, V> Drop for BonsaiTreeMap<K, V> {
-    fn drop(&mut self) {}
+    fn drop(&mut self) {
+        unsafe {
+            let mut stack = vec![self.root.load(Ordering::Relaxed, unprotected())];
+
+            while let Some(mut node) = stack.pop() {
+                if node.is_null() {
+                    continue;
+                }
+
+                let node_ref = node.deref_mut();
+
+                stack.push(node_ref.left.load(Ordering::Relaxed, unprotected()));
+                stack.push(node_ref.right.load(Ordering::Relaxed, unprotected()));
+                drop(node.into_owned());
+            }
+        }
+    }
 }
 
 // TODO: move it to somewhere else...
