@@ -206,10 +206,10 @@ fn bench<M: ConcurrentMap<String, String> + Send + Sync>(
 
     for _ in 0..config.prefill {
         let mut rng = rand::thread_rng();
-        let guard = main_handle.pin();
+        let mut guard = main_handle.pin();
         let key = key_dist.sample(&mut rng).to_string();
         let value = key.clone();
-        map.insert(key, value, &guard);
+        map.insert(key, value, &mut guard);
     }
 
     println!("prefilled");
@@ -235,18 +235,18 @@ fn bench<M: ConcurrentMap<String, String> + Send + Sync>(
 
                 while start.elapsed() < config.duration {
                     let key = key_dist.sample(&mut rng).to_string();
-                    let guard = handle.pin();
+                    let mut guard = handle.pin();
                     unreclaimd_acc += handle.retired_unreclaimed();
                     match op_choices[config.op_dist.sample(&mut rng)] {
                         Op::Insert => {
                             let value = key.clone();
-                            map.insert(key, value, &guard);
+                            map.insert(key, value, &mut guard);
                         }
                         Op::Get => {
-                            map.get(&key, &guard);
+                            map.get(&key, &mut guard);
                         }
                         Op::Remove => {
-                            map.remove(&key, &guard);
+                            map.remove(&key, &mut guard);
                         }
                     }
                     ops += 1;

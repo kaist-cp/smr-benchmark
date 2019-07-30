@@ -85,6 +85,27 @@ enum FindError {
     ShieldError(ShieldError),
 }
 
+impl FindError {
+    fn retry<R, F>(guard: &mut Guard, f: F) -> R
+    where
+        F: Fn(&Guard) -> Result<R, Self>,
+    {
+        loop {
+            match f(guard) {
+                Ok(r) => return r,
+                Err(Self::Retry) => continue,
+                Err(Self::ShieldError(ShieldError::Ejected)) => {
+                    unsafe {
+                        // HACK(@jeehoonkang): We wanted to say `guard.repin()`, which is totally
+                        // fine, but the current Rust's type checker cannot verify it.
+                        (&mut *(guard as &_ as *const _ as *mut Guard)).repin();
+                    }
+                }
+            }
+        }
+    }
+}
+
 impl<K, V> List<K, V>
 where
     K: Ord,
@@ -151,11 +172,19 @@ where
     }
 
     fn find<'g>(&'g self, key: &K, guard: &'g mut Guard) -> (bool, Cursor<'g, K, V>) {
+        // TODO(@jeehoonkang): we want to use `FindError::retry`, but it requires higher-kinded
+        // things...
         loop {
             match self.find_inner(key, guard) {
                 Ok(r) => return r,
                 Err(FindError::Retry) => continue,
-                Err(FindError::ShieldError(e)) => guard.repin(),
+                Err(FindError::ShieldError(ShieldError::Ejected)) => {
+                    unsafe {
+                        // HACK(@jeehoonkang): We wanted to say `guard.repin()`, which is totally
+                        // fine, but the current Rust's type checker cannot verify it.
+                        (&mut *(guard as &_ as *const _ as *mut Guard)).repin();
+                    }
+                }
             }
         }
     }
@@ -197,11 +226,11 @@ where
         }
     }
 
-    pub fn remove(&self, key: &K, guard: &mut Guard) -> Option<V> {
+    fn remove_inner(&self, key: &K, guard: &Guard) -> Result<Option<V>, FindError> {
         loop {
-            let (found, cursor) = self.find(key, guard);
+            let (found, cursor) = self.find_inner(key, guard)?;
             if !found {
-                return None;
+                return Ok(None);
             }
 
             let curr_node = unsafe { cursor.curr.as_ref() }.unwrap();
@@ -228,12 +257,16 @@ where
             ) {
                 Ok(_) => unsafe { guard.defer_destroy(cursor.curr.shared()) },
                 Err(_) => {
-                    self.find(key, guard);
+                    self.find_inner(key, guard)?;
                 }
             }
 
-            return Some(ManuallyDrop::into_inner(value));
+            return Ok(Some(ManuallyDrop::into_inner(value)));
         }
+    }
+
+    pub fn remove(&self, key: &K, guard: &mut Guard) -> Option<V> {
+        FindError::retry(guard, |g| self.remove_inner(key, g))
     }
 }
 

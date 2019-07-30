@@ -497,7 +497,9 @@ mod tests {
                     let mut keys: Vec<i32> = (0..3000).map(|k| k * 10 + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        assert!(nm_tree_map.insert(i, i.to_string(), &crossbeam_epoch::pin()).is_ok());
+                        assert!(nm_tree_map
+                            .insert(i, i.to_string(), &crossbeam_epoch::pin())
+                            .is_ok());
                     }
                 });
             }
