@@ -12,7 +12,10 @@ bitflags = "1.0"
 clap = "2.33.0"
 # crossbeam-epoch = "0.7.1"
 # crossbeam-utils = "0.6.5"
-crossbeam-epoch = { git = "https://github.com/tomtomjhj/crossbeam", path = "crossbeam-epoch", branch = "tracker-new-pebr"}
-crossbeam-utils = { git = "https://github.com/tomtomjhj/crossbeam", path = "crossbeam-utils", branch = "tracker-new-pebr"}
+crossbeam-epoch = { git = "https://github.com/jeehoonkang/crossbeam", path = "crossbeam-epoch", branch = "tracker-new-pebr"}
+crossbeam-utils = { git = "https://github.com/jeehoonkang/crossbeam", path = "crossbeam-utils", branch = "tracker-new-pebr"}
 jemallocator = "0.3.0"
 rand = "0.7"
+
+[profile.release]
+debug = true
