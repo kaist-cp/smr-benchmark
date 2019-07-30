@@ -48,7 +48,6 @@ impl<K, V> Drop for List<K, V> {
 struct Cursor<'g, K, V> {
     prev: &'g Atomic<Node<K, V>>,
     curr: Shared<'g, Node<K, V>>,
-    next: Shared<'g, Node<K, V>>,
 }
 
 impl<K, V> List<K, V>
@@ -67,7 +66,6 @@ where
         let mut cursor = Cursor {
             prev: &self.head,
             curr: self.head.load(Ordering::Acquire, guard),
-            next: Shared::null(),
         };
 
         loop {
@@ -80,10 +78,10 @@ where
                 return Err(());
             }
 
-            cursor.next = curr_node.next.load(Ordering::Acquire, guard);
+            let next = curr_node.next.load(Ordering::Acquire, guard);
 
             let curr_key = &curr_node.key;
-            if cursor.next.tag() == 0 {
+            if next.tag() == 0 {
                 if curr_key >= key {
                     return Ok((curr_key == key, cursor));
                 }
@@ -91,7 +89,7 @@ where
             } else {
                 match cursor.prev.compare_and_set(
                     cursor.curr.with_tag(0),
-                    cursor.next.with_tag(0),
+                    next.with_tag(0),
                     Ordering::AcqRel,
                     guard,
                 ) {
@@ -99,7 +97,7 @@ where
                     Ok(_) => unsafe { guard.defer_destroy(cursor.curr) },
                 }
             }
-            cursor.curr = cursor.next;
+            cursor.curr = next;
         }
     }
 
@@ -155,22 +153,14 @@ where
             let curr_node = unsafe { cursor.curr.as_ref() }.unwrap();
             let value = unsafe { ptr::read(&curr_node.value) };
 
-            if curr_node
-                .next
-                .compare_and_set(
-                    cursor.next,
-                    cursor.next.with_tag(1),
-                    Ordering::AcqRel,
-                    &guard,
-                )
-                .is_err()
-            {
+            let next = curr_node.next.fetch_or(1, Ordering::AcqRel, &guard);
+            if next.tag() == 1 {
                 continue;
             }
 
             match cursor
                 .prev
-                .compare_and_set(cursor.curr, cursor.next, Ordering::AcqRel, &guard)
+                .compare_and_set(cursor.curr, next, Ordering::AcqRel, &guard)
             {
                 Ok(_) => unsafe { guard.defer_destroy(cursor.curr) },
                 Err(_) => {
