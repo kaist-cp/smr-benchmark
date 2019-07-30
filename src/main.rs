@@ -12,11 +12,7 @@ use std::time::{Duration, Instant};
 use clap::{arg_enum, value_t, values_t, App, Arg, ArgMatches};
 use crossbeam_utils::thread::scope;
 
-use pebr_benchmark::bonsai_tree::BonsaiTreeMap;
-use pebr_benchmark::concurrent_map::ConcurrentMap;
-use pebr_benchmark::harris_michael_list::List;
-use pebr_benchmark::michael_hash_map::HashMap;
-use pebr_benchmark::natarajan_mittal_tree::NMTreeMap;
+use pebr_benchmark::ebr;
 
 arg_enum! {
     #[derive(PartialEq, Debug)]
@@ -180,10 +176,10 @@ fn bench_all(config: &mut Config) -> (i64, i64) {
         for ds in &config.dss {
             println!("{} threads, {:?}", threads, ds);
             let (ops_per_sec, avg_unreclaimed) = match ds {
-                DS::List => bench::<List<String, String>>(config, *threads),
-                DS::HashMap => bench::<HashMap<String, String>>(config, *threads),
-                DS::NMTree => bench::<NMTreeMap<String, String>>(config, *threads),
-                DS::BonsaiTree => bench::<BonsaiTreeMap<String, String>>(config, *threads),
+                DS::List => bench::<ebr::List<String, String>>(config, *threads),
+                DS::HashMap => bench::<ebr::HashMap<String, String>>(config, *threads),
+                DS::NMTree => bench::<ebr::NMTreeMap<String, String>>(config, *threads),
+                DS::BonsaiTree => bench::<ebr::BonsaiTreeMap<String, String>>(config, *threads),
             };
             println!("ops / sec = {}", ops_per_sec);
             println!("avg unreclaimed at each op: {}", avg_unreclaimed);
@@ -203,7 +199,7 @@ fn bench_all(config: &mut Config) -> (i64, i64) {
     (0, 0)
 }
 
-fn bench<M: ConcurrentMap<String, String> + Send + Sync>(
+fn bench<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
     config: &Config,
     threads: usize,
 ) -> (i64, i64) {

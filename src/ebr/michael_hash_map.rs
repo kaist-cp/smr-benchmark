@@ -1,9 +1,9 @@
-use crate::concurrent_map::ConcurrentMap;
+use super::concurrent_map::ConcurrentMap;
 use crossbeam_ebr::Guard;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use crate::harris_michael_list::List;
+use super::harris_michael_list::List;
 
 pub struct HashMap<K, V> {
     buckets: Vec<List<K, V>>,

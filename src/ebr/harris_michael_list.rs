@@ -1,4 +1,4 @@
-use crate::concurrent_map::ConcurrentMap;
+use super::concurrent_map::ConcurrentMap;
 use crossbeam_ebr::{unprotected, Atomic, Guard, Owned, Shared};
 
 use std::mem::ManuallyDrop;
