@@ -46,18 +46,16 @@ impl<K, V> Drop for List<K, V> {
     }
 }
 
-struct Cursor<'g, K, V> {
+struct Cursor<K, V> {
     prev: Shield<Node<K, V>>,
     curr: Shield<Node<K, V>>,
-    next: Shared<'g, Node<K, V>>,
 }
 
-impl<'g, K, V> Cursor<'g, K, V> {
-    fn new(prev: Shared<'g, Node<K, V>>, curr: Shared<'g, Node<K, V>>, guard: &Guard) -> Self {
+impl<K, V> Cursor<K, V> {
+    fn new<'g>(prev: Shared<'g, Node<K, V>>, curr: Shared<'g, Node<K, V>>, guard: &Guard) -> Self {
         Self {
             prev: Shield::new(prev, guard),
             curr: Shield::new(curr, guard),
-            next: Shared::null(),
         }
     }
 }
@@ -122,7 +120,7 @@ where
         &'g self,
         key: &K,
         guard: &'g Guard,
-    ) -> Result<(bool, Cursor<'g, K, V>), FindError> {
+    ) -> Result<(bool, Cursor<K, V>), FindError> {
         let mut cursor = Cursor::new(
             // HACK(@jeehoonkang): we're unsafely assuming the first 8 bytes of both `Node<K, V>`
             // and `List<K, V>` are `Atomic<Node<K, V>>`.
@@ -145,10 +143,10 @@ where
                 return Err(FindError::Retry);
             }
 
-            cursor.next = curr_node.next.load(Ordering::Acquire, guard);
+            let next = curr_node.next.load(Ordering::Acquire, guard);
 
             let curr_key = &curr_node.key;
-            if cursor.next.tag() == 0 {
+            if next.tag() == 0 {
                 if curr_key >= key {
                     return Ok((curr_key == key, cursor));
                 }
@@ -156,7 +154,7 @@ where
             } else {
                 match unsafe { cursor.prev.deref() }.next.compare_and_set(
                     cursor.curr.shared().with_tag(0),
-                    cursor.next.with_tag(0),
+                    next.with_tag(0),
                     Ordering::AcqRel,
                     guard,
                 ) {
@@ -166,12 +164,12 @@ where
             }
             cursor
                 .curr
-                .defend(cursor.next, guard)
+                .defend(next, guard)
                 .map_err(|e| FindError::ShieldError(e))?;
         }
     }
 
-    fn find<'g>(&'g self, key: &K, guard: &'g mut Guard) -> (bool, Cursor<'g, K, V>) {
+    fn find<'g>(&'g self, key: &K, guard: &'g mut Guard) -> (bool, Cursor<K, V>) {
         // TODO(@jeehoonkang): we want to use `FindError::retry`, but it requires higher-kinded
         // things...
         loop {
@@ -236,22 +234,14 @@ where
             let curr_node = unsafe { cursor.curr.as_ref() }.unwrap();
             let value = unsafe { ptr::read(&curr_node.value) };
 
-            if curr_node
-                .next
-                .compare_and_set(
-                    cursor.next,
-                    cursor.next.with_tag(1),
-                    Ordering::AcqRel,
-                    guard,
-                )
-                .is_err()
-            {
+            let next = curr_node.next.fetch_or(1, Ordering::AcqRel, &guard);
+            if next.tag() == 1 {
                 continue;
             }
 
             match unsafe { cursor.prev.deref() }.next.compare_and_set(
                 cursor.curr.shared(),
-                cursor.next,
+                next,
                 Ordering::AcqRel,
                 guard,
             ) {
