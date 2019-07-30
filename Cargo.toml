@@ -9,10 +9,20 @@ edition = "2018"
 [dependencies]
 bitflags = "1.0"
 clap = "2.33.0"
-# crossbeam-epoch = "0.7.1"
-# crossbeam-utils = "0.6.5"
-crossbeam-epoch = { git = "https://github.com/tomtomjhj/crossbeam", path = "crossbeam-epoch", branch = "tracker-ebr"}
-crossbeam-utils = { git = "https://github.com/tomtomjhj/crossbeam", path = "crossbeam-utils", branch = "tracker-ebr"}
+crossbeam-utils = "0.6.5"
 csv = "1.1.1"
 jemallocator = "0.3.0"
 rand = "0.7"
+
+# crossbeam-epoch = "0.7.1"
+[dependencies.crossbeam-ebr]
+git = "https://github.com/tomtomjhj/crossbeam"
+branch = "tracker-ebr"
+package = "crossbeam-epoch"
+path = "crossbeam-epoch"
+
+[dependencies.crossbeam-pebr]
+git = "https://github.com/jeehoonkang/crossbeam"
+branch = "tracker-new-pebr"
+package = "crossbeam-epoch"
+path = "crossbeam-epoch"

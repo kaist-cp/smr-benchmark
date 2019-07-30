@@ -1,5 +1,5 @@
 use crate::concurrent_map::ConcurrentMap;
-use crossbeam_epoch::{unprotected, Atomic, Guard, Owned, Shared};
+use crossbeam_ebr::{unprotected, Atomic, Guard, Owned, Shared};
 
 use std::mem::ManuallyDrop;
 use std::ptr;
@@ -214,7 +214,7 @@ mod tests {
                     let mut keys: Vec<i32> = (0..1000).map(|k| k * 10 + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        assert!(list.insert(i, i.to_string(), &crossbeam_epoch::pin()));
+                        assert!(list.insert(i, i.to_string(), &crossbeam_ebr::pin()));
                     }
                 });
             }
@@ -231,7 +231,7 @@ mod tests {
                     for i in keys {
                         assert_eq!(
                             i.to_string(),
-                            list.remove(&i, &crossbeam_epoch::pin()).unwrap()
+                            list.remove(&i, &crossbeam_ebr::pin()).unwrap()
                         );
                     }
                 });
@@ -249,7 +249,7 @@ mod tests {
                     for i in keys {
                         assert_eq!(
                             i.to_string(),
-                            *list.get(&i, &crossbeam_epoch::pin()).unwrap()
+                            *list.get(&i, &crossbeam_ebr::pin()).unwrap()
                         );
                     }
                 });

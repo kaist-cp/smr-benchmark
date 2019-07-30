@@ -212,7 +212,7 @@ fn bench<M: ConcurrentMap<String, String> + Send + Sync>(
     let key_dist = &Uniform::from(0..config.range);
     let op_choices = &[Op::Insert, Op::Get, Op::Remove];
 
-    let collector = &crossbeam_epoch::Collector::new();
+    let collector = &crossbeam_ebr::Collector::new();
     let main_handle = collector.register();
 
     for _ in 0..config.prefill {

@@ -1,4 +1,4 @@
-use crossbeam_epoch::{unprotected, Atomic, Guard, Owned, Shared};
+use crossbeam_ebr::{unprotected, Atomic, Guard, Owned, Shared};
 
 use crate::concurrent_map::ConcurrentMap;
 use std::sync::atomic::Ordering;
@@ -498,7 +498,9 @@ mod tests {
                     let mut keys: Vec<i32> = (0..3000).map(|k| k * 10 + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        assert!(nm_tree_map.insert(i, i.to_string(), &crossbeam_epoch::pin()).is_ok());
+                        assert!(nm_tree_map
+                            .insert(i, i.to_string(), &crossbeam_ebr::pin())
+                            .is_ok());
                     }
                 });
             }
@@ -515,7 +517,7 @@ mod tests {
                     for i in keys {
                         assert_eq!(
                             i.to_string(),
-                            nm_tree_map.remove(&i, &crossbeam_epoch::pin()).unwrap()
+                            nm_tree_map.remove(&i, &crossbeam_ebr::pin()).unwrap()
                         );
                     }
                 });
@@ -533,7 +535,7 @@ mod tests {
                     for i in keys {
                         assert_eq!(
                             i.to_string(),
-                            *nm_tree_map.get(&i, &crossbeam_epoch::pin()).unwrap()
+                            *nm_tree_map.get(&i, &crossbeam_ebr::pin()).unwrap()
                         );
                     }
                 });

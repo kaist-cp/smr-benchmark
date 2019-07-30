@@ -1,4 +1,4 @@
-use crossbeam_epoch::Guard;
+use crossbeam_ebr::Guard;
 
 // TODO: impls in this file & re-export
 pub trait ConcurrentMap<K, V> {

@@ -1,5 +1,5 @@
 use crate::concurrent_map::ConcurrentMap;
-use crossbeam_epoch::Guard;
+use crossbeam_ebr::Guard;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -92,7 +92,7 @@ mod tests {
                     let mut keys: Vec<i32> = (0..3000).map(|k| k * 10 + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        assert!(hash_map.insert(i, i.to_string(), &crossbeam_epoch::pin()));
+                        assert!(hash_map.insert(i, i.to_string(), &crossbeam_ebr::pin()));
                     }
                 });
             }
@@ -109,7 +109,7 @@ mod tests {
                     for i in keys {
                         assert_eq!(
                             i.to_string(),
-                            hash_map.remove(&i, &crossbeam_epoch::pin()).unwrap()
+                            hash_map.remove(&i, &crossbeam_ebr::pin()).unwrap()
                         );
                     }
                 });
@@ -127,7 +127,7 @@ mod tests {
                     for i in keys {
                         assert_eq!(
                             i.to_string(),
-                            *hash_map.get(&i, &crossbeam_epoch::pin()).unwrap()
+                            *hash_map.get(&i, &crossbeam_ebr::pin()).unwrap()
                         );
                     }
                 });
