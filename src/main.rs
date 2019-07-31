@@ -5,15 +5,15 @@ extern crate csv;
 extern crate pebr_benchmark;
 
 use clap::{arg_enum, value_t, values_t, App, Arg, ArgMatches};
+use crossbeam_utils::thread::scope;
 use csv::Writer;
 use rand::distributions::{Uniform, WeightedIndex};
 use rand::prelude::*;
 use std::convert::TryInto;
 use std::fs::{File, OpenOptions};
+use std::sync::atomic::spin_loop_hint;
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
-
-use crossbeam_utils::thread::scope;
 
 use pebr_benchmark::ebr;
 use pebr_benchmark::pebr;
@@ -400,27 +400,43 @@ fn bench_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(
     let map = &M::new();
 
     let collector = &crossbeam_pebr::Collector::new();
-    let main_handle = collector.register();
 
-    for _ in 0..config.prefill {
-        let mut rng = rand::thread_rng();
-        let mut guard = main_handle.pin();
-        let key = config.key_dist.sample(&mut rng).to_string();
-        let value = key.clone();
-        map.insert(key, value, &mut guard);
+    {
+        let guard = unsafe { crossbeam_pebr::unprotected() };
+        let mut handle = M::handle(guard);
+        for _ in 0..config.prefill {
+            let mut rng = rand::thread_rng();
+            let key = config.key_dist.sample(&mut rng).to_string();
+            let value = key.clone();
+            map.insert(&mut handle, key, value, guard);
+        }
     }
 
     println!("prefilled");
 
-    let barrier = &Arc::new(Barrier::new(threads));
+    let barrier = &Arc::new(Barrier::new(threads + 1));
     let (sender, receiver) = mpsc::channel();
 
     scope(|s| {
+        s.spawn(move |_| {
+            let handle = collector.register();
+            barrier.clone().wait();
+
+            let start = Instant::now();
+
+            let guard = handle.pin();
+            while start.elapsed() < config.duration {
+                spin_loop_hint();
+            }
+            drop(guard);
+        });
+
         for _ in 0..threads {
             let sender = sender.clone();
             s.spawn(move |_| {
                 let mut rng = rand::thread_rng();
                 let handle = collector.register();
+                let mut map_handle = M::handle(&handle.pin());
                 let c = barrier.clone();
 
                 let mut ops: i64 = 0;
@@ -432,20 +448,24 @@ fn bench_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(
                 let start = Instant::now();
 
                 // TODO: repin freq opt?
+                let mut guard = handle.pin();
                 while start.elapsed() < config.duration {
                     let key = config.key_dist.sample(&mut rng).to_string();
-                    let mut guard = handle.pin();
+                    if ops % 1 == 0 {
+                        M::clear(&mut map_handle);
+                        guard.repin();
+                    }
                     unreclaimd_acc += handle.retired_unreclaimed();
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
                         Op::Insert => {
                             let value = key.clone();
-                            map.insert(key, value, &mut guard);
+                            map.insert(&mut map_handle, key, value, &mut guard);
                         }
                         Op::Get => {
-                            map.get(&key, &mut guard);
+                            map.get(&mut map_handle, &key, &mut guard);
                         }
                         Op::Remove => {
-                            map.remove(&key, &mut guard);
+                            map.remove(&mut map_handle, &key, &mut guard);
                         }
                     }
                     ops += 1;
