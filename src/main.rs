@@ -1,7 +1,11 @@
 extern crate clap;
+extern crate crossbeam_ebr;
+extern crate crossbeam_pebr;
 extern crate csv;
 extern crate pebr_benchmark;
 
+use clap::{arg_enum, value_t, values_t, App, Arg, ArgMatches};
+use csv::Writer;
 use rand::distributions::{Uniform, WeightedIndex};
 use rand::prelude::*;
 use std::convert::TryInto;
@@ -9,10 +13,10 @@ use std::fs::{File, OpenOptions};
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
 
-use clap::{arg_enum, value_t, values_t, App, Arg, ArgMatches};
 use crossbeam_utils::thread::scope;
 
 use pebr_benchmark::ebr;
+use pebr_benchmark::pebr;
 
 arg_enum! {
     #[derive(PartialEq, Debug)]
@@ -40,20 +44,24 @@ pub enum Op {
     Remove,
 }
 
+impl Op {
+    const OPS: [Op; 3] = [Op::Insert, Op::Get, Op::Remove];
+}
+
 // TODO op_dist arg
 struct Config {
     dss: Vec<DS>,
     mms: Vec<MM>,
     threads: Vec<usize>,
-    range: usize,
+    key_dist: Uniform<usize>,
     prefill: usize,
     interval: i64,
     duration: Duration,
     op_dist: WeightedIndex<i32>,
-    output: csv::Writer<File>,
 }
 
 fn main() {
+    // TODO: normal mode & lazy thread mode
     let matches = App::new("pebr_benchmark")
         .arg(
             Arg::with_name("data structure")
@@ -120,15 +128,15 @@ fn main() {
         )
         .get_matches();
 
-    let mut config = setup(matches);
-
-    bench_all(&mut config);
+    let (config, mut output) = setup(matches);
+    bench_all(&config, &mut output);
 }
 
-fn setup(m: ArgMatches) -> Config {
+fn setup(m: ArgMatches) -> (Config, Writer<File>) {
     let dss = values_t!(m, "data structure", DS).unwrap();
     let mms = values_t!(m, "memory manager", MM).unwrap();
     let range = value_t!(m, "range", usize).unwrap();
+    let key_dist = Uniform::from(0..range);
     let prefill = value_t!(m, "prefill", usize).unwrap();
     let interval: i64 = value_t!(m, "interval", usize).unwrap().try_into().unwrap();
     let duration = Duration::from_secs(interval as u64);
@@ -169,55 +177,148 @@ fn setup(m: ArgMatches) -> Config {
             output
         }
     };
-    Config {
+    let config = Config {
         dss,
         mms,
         threads,
-        range,
+        key_dist,
         prefill,
         interval,
         duration,
         op_dist,
-        output,
-    }
+    };
+    (config, output)
 }
 
-fn bench_all(config: &mut Config) -> (i64, i64) {
-    for threads in &config.threads {
+fn bench_all(config: &Config, output: &mut Writer<File>) {
+    for mm in &config.mms {
         for ds in &config.dss {
-            println!("{} threads, {:?}", threads, ds);
-            let (ops_per_sec, avg_unreclaimed) = match ds {
-                DS::List => bench::<ebr::List<String, String>>(config, *threads),
-                DS::HashMap => bench::<ebr::HashMap<String, String>>(config, *threads),
-                DS::NMTree => bench::<ebr::NMTreeMap<String, String>>(config, *threads),
-                DS::BonsaiTree => bench::<ebr::BonsaiTreeMap<String, String>>(config, *threads),
-            };
-            println!("ops / sec = {}", ops_per_sec);
-            println!("avg unreclaimed at each op: {}", avg_unreclaimed);
-            config
-                .output
-                .write_record(&[
-                    String::from("ebr"), // TODO do this properly
-                    ds.to_string(),
-                    threads.to_string(),
-                    ops_per_sec.to_string(),
-                    avg_unreclaimed.to_string(),
-                ])
-                .unwrap();
-            config.output.flush().unwrap();
+            for threads in &config.threads {
+                println!("{} {} threads, {}", mm, threads, ds);
+                let (ops_per_sec, avg_unreclaimed) = bench(config, mm, ds, *threads);
+                println!("ops / sec = {}", ops_per_sec);
+                println!("avg unreclaimed at each op: {}", avg_unreclaimed);
+                output
+                    .write_record(&[
+                        mm.to_string(),
+                        ds.to_string(),
+                        threads.to_string(),
+                        ops_per_sec.to_string(),
+                        avg_unreclaimed.to_string(),
+                    ])
+                    .unwrap();
+                output.flush().unwrap();
+            }
         }
     }
-    (0, 0)
 }
 
-fn bench<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
+fn bench(config: &Config, mm: &MM, ds: &DS, threads: usize) -> (i64, i64) {
+    match mm {
+        MM::NoMM => {
+            return match ds {
+                DS::List => bench_no_mm::<ebr::List<String, String>>(config, threads),
+                DS::HashMap => bench_no_mm::<ebr::HashMap<String, String>>(config, threads),
+                DS::NMTree => bench_no_mm::<ebr::NMTreeMap<String, String>>(config, threads),
+                DS::BonsaiTree => {
+                    bench_no_mm::<ebr::BonsaiTreeMap<String, String>>(config, threads)
+                }
+            };
+        }
+        MM::EBR => {
+            return match ds {
+                DS::List => bench_ebr::<ebr::List<String, String>>(config, threads),
+                DS::HashMap => bench_ebr::<ebr::HashMap<String, String>>(config, threads),
+                DS::NMTree => bench_ebr::<ebr::NMTreeMap<String, String>>(config, threads),
+                DS::BonsaiTree => bench_ebr::<ebr::BonsaiTreeMap<String, String>>(config, threads),
+            };
+        }
+        MM::PEBR => {
+            return match ds {
+                DS::List => bench_pebr::<pebr::List<String, String>>(config, threads),
+                DS::HashMap => bench_pebr::<pebr::HashMap<String, String>>(config, threads),
+                DS::NMTree => {
+                    println!("Skip PEBR NMTree");
+                    (0, 0)
+                }
+                DS::BonsaiTree => {
+                    println!("Skip PEBR BonsaiTree");
+                    (0, 0)
+                }
+            };
+        }
+    }
+}
+
+// TODO: too much duplication
+fn bench_no_mm<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
     config: &Config,
     threads: usize,
 ) -> (i64, i64) {
     let map = &M::new();
 
-    let key_dist = &Uniform::from(0..config.range);
-    let op_choices = &[Op::Insert, Op::Get, Op::Remove];
+    for _ in 0..config.prefill {
+        let mut rng = rand::thread_rng();
+        let key = config.key_dist.sample(&mut rng).to_string();
+        let value = key.clone();
+        map.insert(key, value, unsafe { crossbeam_ebr::unprotected() });
+    }
+
+    println!("prefilled");
+
+    let barrier = &Arc::new(Barrier::new(threads));
+    let (sender, receiver) = mpsc::channel();
+
+    scope(|s| {
+        for _ in 0..threads {
+            let sender = sender.clone();
+            s.spawn(move |_| {
+                let mut rng = rand::thread_rng();
+                let c = barrier.clone();
+
+                let mut ops: i64 = 0;
+
+                c.wait();
+                let start = Instant::now();
+
+                while start.elapsed() < config.duration {
+                    let key = config.key_dist.sample(&mut rng).to_string();
+                    match Op::OPS[config.op_dist.sample(&mut rng)] {
+                        Op::Insert => {
+                            let value = key.clone();
+                            map.insert(key, value, unsafe { crossbeam_ebr::unprotected() });
+                        }
+                        Op::Get => {
+                            map.get(&key, unsafe { crossbeam_ebr::unprotected() });
+                        }
+                        Op::Remove => {
+                            map.remove(&key, unsafe { crossbeam_ebr::unprotected() });
+                        }
+                    }
+                    ops += 1;
+                }
+
+                sender.send(ops).unwrap();
+            });
+        }
+    })
+    .unwrap();
+
+    let mut ops = 0;
+    for _ in 0..threads {
+        let local_ops = receiver.recv().unwrap();
+        ops += local_ops;
+    }
+
+    let ops_per_sec = ops / config.interval;
+    (ops_per_sec, 0)
+}
+
+fn bench_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
+    config: &Config,
+    threads: usize,
+) -> (i64, i64) {
+    let map = &M::new();
 
     let collector = &crossbeam_ebr::Collector::new();
     let main_handle = collector.register();
@@ -225,7 +326,7 @@ fn bench<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
     for _ in 0..config.prefill {
         let mut rng = rand::thread_rng();
         let guard = main_handle.pin();
-        let key = key_dist.sample(&mut rng).to_string();
+        let key = config.key_dist.sample(&mut rng).to_string();
         let value = key.clone();
         map.insert(key, value, &guard);
     }
@@ -252,10 +353,10 @@ fn bench<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
                 let start = Instant::now();
 
                 while start.elapsed() < config.duration {
-                    let key = key_dist.sample(&mut rng).to_string();
+                    let key = config.key_dist.sample(&mut rng).to_string();
                     let guard = handle.pin();
                     unreclaimd_acc += handle.retired_unreclaimed();
-                    match op_choices[config.op_dist.sample(&mut rng)] {
+                    match Op::OPS[config.op_dist.sample(&mut rng)] {
                         Op::Insert => {
                             let value = key.clone();
                             map.insert(key, value, &guard);
@@ -265,6 +366,86 @@ fn bench<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
                         }
                         Op::Remove => {
                             map.remove(&key, &guard);
+                        }
+                    }
+                    ops += 1;
+                }
+
+                sender.send((ops, unreclaimd_acc)).unwrap();
+            });
+        }
+    })
+    .unwrap();
+
+    let mut ops = 0;
+    let mut unreclaimed_acc = 0;
+    for _ in 0..threads {
+        let (local_ops, local_unreclaimed_acc) = receiver.recv().unwrap();
+        ops += local_ops;
+        // First the local avg (w.r.t ops) of unreclaimed count.
+        // Then, compute the avg (w.r.t threads) of them.
+        unreclaimed_acc += local_unreclaimed_acc / local_ops;
+    }
+
+    let ops_per_sec = ops / config.interval;
+    let threads: i64 = threads.try_into().unwrap();
+    let avg_unreclaimed = unreclaimed_acc / threads;
+    (ops_per_sec, avg_unreclaimed)
+}
+
+fn bench_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(
+    config: &Config,
+    threads: usize,
+) -> (i64, i64) {
+    let map = &M::new();
+
+    let collector = &crossbeam_pebr::Collector::new();
+    let main_handle = collector.register();
+
+    for _ in 0..config.prefill {
+        let mut rng = rand::thread_rng();
+        let mut guard = main_handle.pin();
+        let key = config.key_dist.sample(&mut rng).to_string();
+        let value = key.clone();
+        map.insert(key, value, &mut guard);
+    }
+
+    println!("prefilled");
+
+    let barrier = &Arc::new(Barrier::new(threads));
+    let (sender, receiver) = mpsc::channel();
+
+    scope(|s| {
+        for _ in 0..threads {
+            let sender = sender.clone();
+            s.spawn(move |_| {
+                let mut rng = rand::thread_rng();
+                let handle = collector.register();
+                let c = barrier.clone();
+
+                let mut ops: i64 = 0;
+                // Add up unreclaimed block numbers at the beginning of each op and then divide by
+                // total num of ops later.
+                let mut unreclaimd_acc: i64 = 0;
+
+                c.wait();
+                let start = Instant::now();
+
+                // TODO: repin freq opt?
+                while start.elapsed() < config.duration {
+                    let key = config.key_dist.sample(&mut rng).to_string();
+                    let mut guard = handle.pin();
+                    unreclaimd_acc += handle.retired_unreclaimed();
+                    match Op::OPS[config.op_dist.sample(&mut rng)] {
+                        Op::Insert => {
+                            let value = key.clone();
+                            map.insert(key, value, &mut guard);
+                        }
+                        Op::Get => {
+                            map.get(&key, &mut guard);
+                        }
+                        Op::Remove => {
+                            map.remove(&key, &mut guard);
                         }
                     }
                     ops += 1;
