@@ -3,10 +3,10 @@
 // #![warn(missing_debug_implementations)]
 
 // TODO
-// extern crate jemallocator;
+extern crate jemallocator;
 
-// #[global_allocator]
-// static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+#[global_allocator]
+static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 extern crate crossbeam_epoch;
 extern crate crossbeam_utils;
