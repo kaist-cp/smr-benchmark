@@ -69,16 +69,18 @@ where
         };
 
         loop {
+            debug_assert_eq!(cursor.curr.tag(), 0);
+
             let curr_node = match unsafe { cursor.curr.as_ref() } {
                 None => return Ok((false, cursor)),
                 Some(c) => c,
             };
 
-            if cursor.prev.load(Ordering::Acquire, guard) != cursor.curr.with_tag(0) {
+            if cursor.prev.load(Ordering::Acquire, guard) != cursor.curr {
                 return Err(());
             }
 
-            let next = curr_node.next.load(Ordering::Acquire, guard);
+            let mut next = curr_node.next.load(Ordering::Acquire, guard);
 
             let curr_key = &curr_node.key;
             if next.tag() == 0 {
@@ -87,9 +89,10 @@ where
                 }
                 cursor.prev = &curr_node.next;
             } else {
+                next = next.with_tag(0);
                 match cursor.prev.compare_and_set(
-                    cursor.curr.with_tag(0),
-                    next.with_tag(0),
+                    cursor.curr,
+                    next,
                     Ordering::AcqRel,
                     guard,
                 ) {
@@ -129,6 +132,7 @@ where
         loop {
             let (found, cursor) = self.find(&node.key, &guard);
             if found {
+                unsafe { ManuallyDrop::drop(&mut node.value); }
                 return false;
             }
 
