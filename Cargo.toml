@@ -16,16 +16,12 @@ rand = "0.7"
 
 # crossbeam-epoch = "0.7.1"
 [dependencies.crossbeam-ebr]
-git = "https://github.com/tomtomjhj/crossbeam"
-branch = "tracker-ebr"
 package = "crossbeam-epoch"
-path = "crossbeam-epoch"
+path = "crossbeam-ebr/crossbeam-epoch"
 
 [dependencies.crossbeam-pebr]
-git = "https://github.com/jeehoonkang/crossbeam"
-branch = "tracker-new-pebr"
-package = "crossbeam-epoch"
-path = "crossbeam-epoch"
+package = "crossbeam-pebr-epoch"
+path = "crossbeam-pebr/crossbeam-epoch"
 
 [profile.release]
 debug = true

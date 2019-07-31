@@ -1,0 +1,6 @@
+[submodule "crossbeam-ebr"]
+	path = crossbeam-ebr
+	url = https://github.com/kaist-cp/crossbeam
+[submodule "crossbeam-pebr"]
+	path = crossbeam-pebr
+	url = https://github.com/kaist-cp/crossbeam

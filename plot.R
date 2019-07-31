@@ -16,10 +16,13 @@ for (ds in data_structures) {
   # pebr_data <- subset(data, mm == "PEBR")
   # data = rbind(no_mm_data, ebr_data, pebr_data)
 
+  # TODO: use avg or max of several runs
   ddply(.data=data,.(mm,threads),mutate,throughput= max(throughput)/1000000)->data
 
   # TODO: match the variant's str rep
   data$mm <- factor(data$mm, levels = c("NoMM", "ebr", "pebr"))
+
+  data$ds <- factor(data$mm, levels = c("NoMM", "ebr", "pebr"))
   print(data)
 
   # Set up colors and shapes (invariant for all plots)

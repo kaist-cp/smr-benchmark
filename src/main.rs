@@ -24,11 +24,13 @@ arg_enum! {
     }
 }
 
-#[derive(PartialEq, Debug)]
-pub enum MM {
-    NoMM,
-    EBR,
-    PEBR,
+arg_enum! {
+    #[derive(PartialEq, Debug)]
+    pub enum MM {
+        NoMM,
+        EBR,
+        PEBR,
+    }
 }
 
 #[derive(PartialEq, Debug)]
@@ -38,12 +40,10 @@ pub enum Op {
     Remove,
 }
 
-// global config & run config
-// TODO: setup should make Iterator of Configs
-// TODO: Config.run(threads, MM)
 // TODO op_dist arg
 struct Config {
     dss: Vec<DS>,
+    mms: Vec<MM>,
     threads: Vec<usize>,
     range: usize,
     prefill: usize,
@@ -63,6 +63,15 @@ fn main() {
                 .multiple(true)
                 .case_insensitive(true)
                 .help("Data structure(s)"),
+        )
+        .arg(
+            Arg::with_name("memory manager")
+                .short("m")
+                .value_name("MM")
+                .possible_values(&MM::variants())
+                .multiple(true)
+                .case_insensitive(true)
+                .help("Memeory manager(s)"),
         )
         .arg(
             Arg::with_name("threads")
@@ -118,6 +127,7 @@ fn main() {
 
 fn setup(m: ArgMatches) -> Config {
     let dss = values_t!(m, "data structure", DS).unwrap();
+    let mms = values_t!(m, "memory manager", MM).unwrap();
     let range = value_t!(m, "range", usize).unwrap();
     let prefill = value_t!(m, "prefill", usize).unwrap();
     let interval: i64 = value_t!(m, "interval", usize).unwrap().try_into().unwrap();
@@ -161,6 +171,7 @@ fn setup(m: ArgMatches) -> Config {
     };
     Config {
         dss,
+        mms,
         threads,
         range,
         prefill,
