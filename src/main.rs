@@ -7,6 +7,7 @@ use rand::prelude::*;
 use std::convert::TryInto;
 use std::fs::{File, OpenOptions};
 use std::sync::{mpsc, Arc, Barrier};
+use std::sync::atomic::spin_loop_hint;
 use std::time::{Duration, Instant};
 
 use clap::{arg_enum, value_t, values_t, App, Arg, ArgMatches};
@@ -217,11 +218,24 @@ fn bench<M: ConcurrentMap<String, String> + Send + Sync>(
 
     println!("prefilled");
 
-    let barrier = &Arc::new(Barrier::new(threads));
+    let barrier = &Arc::new(Barrier::new(threads + 1));
     let (sender, receiver) = mpsc::channel();
 
     scope(|s| {
-        for _ in 0..threads {
+        s.spawn(move |_| {
+            let handle = collector.register();
+            barrier.clone().wait();
+
+            let start = Instant::now();
+
+            let guard = handle.pin();
+            while start.elapsed() < config.duration {
+                spin_loop_hint();
+            }
+            drop(guard);
+        });
+
+        for tid in 0..threads {
             let sender = sender.clone();
             s.spawn(move |_| {
                 let mut rng = rand::thread_rng();
@@ -237,9 +251,13 @@ fn bench<M: ConcurrentMap<String, String> + Send + Sync>(
                 c.wait();
                 let start = Instant::now();
 
+                let mut guard = handle.pin();
                 while start.elapsed() < config.duration {
                     let key = key_dist.sample(&mut rng).to_string();
-                    let mut guard = handle.pin();
+                    if ops % 1 == 0 {
+                        M::clear(&mut map_handle);
+                        guard.repin();
+                    }
                     unreclaimd_acc += handle.retired_unreclaimed();
                     match op_choices[config.op_dist.sample(&mut rng)] {
                         Op::Insert => {
@@ -253,7 +271,6 @@ fn bench<M: ConcurrentMap<String, String> + Send + Sync>(
                             map.remove(&mut map_handle, &key, &mut guard);
                         }
                     }
-                    M::clear(&mut map_handle);
                     ops += 1;
                 }
 
