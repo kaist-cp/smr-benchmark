@@ -11,7 +11,7 @@ bitflags = "1.0"
 clap = "2.33.0"
 crossbeam-utils = "0.6.5"
 csv = "1.1.1"
-jemallocator = "0.3.0"
+jemallocator = "0.3"
 rand = "0.7"
 
 # crossbeam-epoch = "0.7.1"
@@ -25,3 +25,6 @@ path = "crossbeam-pebr/crossbeam-epoch"
 
 [profile.release]
 debug = true
+
+[features]
+profiling = ['jemallocator/profiling']
