@@ -11,7 +11,6 @@ use rand::distributions::{Uniform, WeightedIndex};
 use rand::prelude::*;
 use std::convert::TryInto;
 use std::fs::{File, OpenOptions};
-use std::sync::atomic::spin_loop_hint;
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
 
@@ -401,36 +400,21 @@ fn bench_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(
 
     let collector = &crossbeam_pebr::Collector::new();
 
-    {
-        let guard = unsafe { crossbeam_pebr::unprotected() };
-        let mut handle = M::handle(guard);
-        for _ in 0..config.prefill {
-            let mut rng = rand::thread_rng();
-            let key = config.key_dist.sample(&mut rng).to_string();
-            let value = key.clone();
-            map.insert(&mut handle, key, value, guard);
-        }
+    let guard = unsafe { crossbeam_pebr::unprotected() };
+    let mut handle = M::handle(guard);
+    for _ in 0..config.prefill {
+        let mut rng = rand::thread_rng();
+        let key = config.key_dist.sample(&mut rng).to_string();
+        let value = key.clone();
+        map.insert(&mut handle, key, value, guard);
     }
 
     println!("prefilled");
 
-    let barrier = &Arc::new(Barrier::new(threads + 1));
+    let barrier = &Arc::new(Barrier::new(threads));
     let (sender, receiver) = mpsc::channel();
 
     scope(|s| {
-        s.spawn(move |_| {
-            let handle = collector.register();
-            barrier.clone().wait();
-
-            let start = Instant::now();
-
-            let guard = handle.pin();
-            while start.elapsed() < config.duration {
-                spin_loop_hint();
-            }
-            drop(guard);
-        });
-
         for _ in 0..threads {
             let sender = sender.clone();
             s.spawn(move |_| {
@@ -448,13 +432,9 @@ fn bench_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(
                 let start = Instant::now();
 
                 // TODO: repin freq opt?
-                let mut guard = handle.pin();
                 while start.elapsed() < config.duration {
                     let key = config.key_dist.sample(&mut rng).to_string();
-                    if ops % 1 == 0 {
-                        M::clear(&mut map_handle);
-                        guard.repin();
-                    }
+                    let mut guard = handle.pin();
                     unreclaimd_acc += handle.retired_unreclaimed();
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
                         Op::Insert => {
@@ -469,6 +449,7 @@ fn bench_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(
                         }
                     }
                     ops += 1;
+                    M::clear(&mut map_handle);
                 }
 
                 sender.send((ops, unreclaimd_acc)).unwrap();
