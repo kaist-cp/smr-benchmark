@@ -260,6 +260,10 @@ where
         let right_left_left = right_left_ref.left.load(Ordering::Acquire, guard);
         let right_left_right = right_left_ref.right.load(Ordering::Acquire, guard);
 
+        if Node::is_retired_spot(right_left_left, guard) || Node::is_retired_spot(right_left_right, guard) {
+            return Node::retired_node();
+        }
+
         let new_left = self.mk_node(left, right_left_left, key.clone(), value.clone(), guard);
         let new_right = self.mk_node(
             right_left_right,
@@ -342,6 +346,10 @@ where
         let left_right_left = left_right_ref.left.load(Ordering::Acquire, guard);
         let left_right_right = left_right_ref.right.load(Ordering::Acquire, guard);
 
+        if Node::is_retired_spot(left_right_left, guard) || Node::is_retired_spot(left_right_right, guard) {
+            return Node::retired_node();
+        }
+
         let new_left = self.mk_node(
             left_left,
             left_right_left,
@@ -369,6 +377,10 @@ where
         value: &V,
         guard: &'g Guard,
     ) -> (Shared<'g, Node<K, V>>, bool) {
+        if Node::is_retired_spot(node, guard) {
+            return (Node::retired_node(), false);
+        }
+
         if node.is_null() {
             return (
                 self.mk_node(
@@ -382,13 +394,14 @@ where
             );
         }
 
-        if Node::is_retired_spot(node, guard) {
-            return (Node::retired_node(), false);
-        }
-
         let node_ref = unsafe { node.deref() };
         let left = node_ref.left.load(Ordering::Acquire, guard);
         let right = node_ref.right.load(Ordering::Acquire, guard);
+
+        if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
+            return (Node::retired_node(), false);
+        }
+
         if *key < node_ref.key {
             let (new_left, inserted) = self.do_insert(left, key, value, guard);
             return (self.mk_balanced(node, new_left, right, guard), inserted);
@@ -406,17 +419,21 @@ where
         key: &K,
         guard: &'g Guard,
     ) -> (Shared<'g, Node<K, V>>, Option<V>) {
-        if node.is_null() {
-            return (Shared::null(), None);
-        }
-
         if Node::is_retired_spot(node, guard) {
             return (Node::retired_node(), None);
+        }
+
+        if node.is_null() {
+            return (Shared::null(), None);
         }
 
         let node_ref = unsafe { node.deref() };
         let left = node_ref.left.load(Ordering::Acquire, guard);
         let right = node_ref.right.load(Ordering::Acquire, guard);
+
+        if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
+            return (Node::retired_node(), None);
+        }
 
         if *key == node_ref.key {
             let value = Some(node_ref.value.clone());
@@ -454,6 +471,11 @@ where
         let node_ref = unsafe { node.deref() };
         let left = node_ref.left.load(Ordering::Acquire, guard);
         let right = node_ref.right.load(Ordering::Acquire, guard);
+
+        if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
+            return (Node::retired_node(), Node::retired_node());
+        }
+
         if !left.is_null() {
             let (new_left, succ) = self.pull_leftmost(left, guard);
             return (self.mk_balanced(node, new_left, right, guard), succ);
@@ -482,6 +504,11 @@ where
         let node_ref = unsafe { node.deref() };
         let left = node_ref.left.load(Ordering::Acquire, guard);
         let right = node_ref.right.load(Ordering::Acquire, guard);
+
+        if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
+            return (Node::retired_node(), Node::retired_node());
+        }
+
         if !right.is_null() {
             let (new_right, succ) = self.pull_rightmost(right, guard);
             return (self.mk_balanced(node, left, new_right, guard), succ);
