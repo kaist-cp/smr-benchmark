@@ -4,7 +4,7 @@ extern crate crossbeam_pebr;
 extern crate csv;
 extern crate pebr_benchmark;
 
-use clap::{arg_enum, value_t, App, Arg, ArgMatches};
+use clap::{arg_enum, value_t, values_t, App, Arg, ArgMatches};
 use crossbeam_utils::thread::scope;
 use csv::Writer;
 use rand::distributions::{Uniform, WeightedIndex};
@@ -12,6 +12,7 @@ use rand::prelude::*;
 use std::convert::TryInto;
 use std::fs::{File, OpenOptions};
 use std::sync::{mpsc, Arc, Barrier};
+use std::sync::atomic::spin_loop_hint;
 use std::time::{Duration, Instant};
 
 use pebr_benchmark::ebr;
@@ -52,6 +53,9 @@ struct Config {
     ds: DS,
     mm: MM,
     threads: usize,
+    non_coop_threads: usize,
+    // TODO ms
+    non_coop_period: usize,
     key_dist: Uniform<usize>,
     prefill: usize,
     interval: i64,
@@ -89,6 +93,16 @@ fn main() {
                 .help("Numbers of threads to run."),
         )
         .arg(
+            Arg::with_name("non-coop")
+                .short("n")
+                .value_name("NON_COOPERATIVE_THREADS, PERIOD")
+                .takes_value(true)
+                .number_of_values(2)
+                .use_delimiter(true)
+                .help("The number of non-cooperative threads and their length of dormant period")
+                .default_value("0,0"),
+        )
+        .arg(
             Arg::with_name("range")
                 .short("r")
                 .value_name("RANGE")
@@ -101,6 +115,7 @@ fn main() {
                 .short("p")
                 .value_name("PREFILL")
                 .takes_value(true)
+                .help("The number of pre-inserted elements before starting")
                 .default_value("50000"),
         )
         .arg(
@@ -131,13 +146,13 @@ fn main() {
 fn setup(m: ArgMatches) -> (Config, Writer<File>) {
     let ds = value_t!(m, "data structure", DS).unwrap();
     let mm = value_t!(m, "memory manager", MM).unwrap();
+    let threads = value_t!(m, "threads", usize).unwrap();
+    let non_coop = values_t!(m, "non-coop", usize).unwrap();
     let range = value_t!(m, "range", usize).unwrap();
     let key_dist = Uniform::from(0..range);
     let prefill = value_t!(m, "prefill", usize).unwrap();
     let interval: i64 = value_t!(m, "interval", usize).unwrap().try_into().unwrap();
     let duration = Duration::from_secs(interval as u64);
-
-    let threads = value_t!(m, "threads", usize).unwrap();
 
     // TODO use arg
     let op_weights = &[1, 0, 1];
@@ -162,7 +177,15 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
                 .unwrap();
             let mut output = csv::Writer::from_writer(f);
             output
-                .write_record(&["ds", "mm", "threads", "throughput", "avg_unreclaimed"])
+                .write_record(&[
+                    "ds",
+                    "mm",
+                    "threads",
+                    "non_coop_threads",
+                    "non_coop_period",
+                    "throughput",
+                    "avg_unreclaimed",
+                ])
                 .unwrap();
             output.flush().unwrap();
             output
@@ -172,6 +195,8 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
         ds,
         mm,
         threads,
+        non_coop_threads: non_coop[0],
+        non_coop_period: non_coop[1],
         key_dist,
         prefill,
         interval,
@@ -214,6 +239,8 @@ fn bench(config: &Config, output: &mut Writer<File>) {
             config.ds.to_string(),
             config.mm.to_string(),
             config.threads.to_string(),
+            config.non_coop_threads.to_string(),
+            config.non_coop_period.to_string(),
             ops_per_sec.to_string(),
             avg_unreclaimed.to_string(),
         ])
@@ -300,10 +327,30 @@ fn bench_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(config: &Confi
 
     println!("prefilled");
 
-    let barrier = &Arc::new(Barrier::new(config.threads));
+    let barrier = &Arc::new(Barrier::new(config.threads + config.non_coop_threads));
     let (sender, receiver) = mpsc::channel();
 
     scope(|s| {
+        for _ in 0..config.non_coop_threads {
+            s.spawn(move |_| {
+                let handle = collector.register();
+                barrier.clone().wait();
+
+                let start = Instant::now();
+
+                let mut guard = handle.pin();
+                let mut ops = 0;
+                while start.elapsed() < config.duration {
+                    spin_loop_hint();
+                    ops += 1;
+
+                    if ops % config.non_coop_period == 0 {
+                        guard.repin();
+                    }
+                }
+                drop(guard);
+            });
+        }
         for _ in 0..config.threads {
             let sender = sender.clone();
             s.spawn(move |_| {
@@ -376,10 +423,30 @@ fn bench_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(config: &Con
 
     println!("prefilled");
 
-    let barrier = &Arc::new(Barrier::new(config.threads));
+    let barrier = &Arc::new(Barrier::new(config.threads + config.non_coop_threads));
     let (sender, receiver) = mpsc::channel();
 
     scope(|s| {
+        for _ in 0..config.non_coop_threads {
+            s.spawn(move |_| {
+                let handle = collector.register();
+                barrier.clone().wait();
+
+                let start = Instant::now();
+
+                let mut guard = handle.pin();
+                let mut ops = 0;
+                while start.elapsed() < config.duration {
+                    spin_loop_hint();
+                    ops += 1;
+
+                    if ops % config.non_coop_period == 0 {
+                        guard.repin();
+                    }
+                }
+                drop(guard);
+            });
+        }
         for _ in 0..config.threads {
             let sender = sender.clone();
             s.spawn(move |_| {

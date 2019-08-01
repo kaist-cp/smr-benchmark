@@ -5,8 +5,7 @@ ticks = c(c(1), seq(5,100, by=5))
 # TODO: color blind friendly palette
 color_key = c("#000000", "#2080FF", "#FF80B0")
 
-# data_structures <- c("List", "HashMap", "NMTree", "BonsaiTree")
-data_structures <- c("HashMap")
+data_structures <- c("List", "HashMap", "NMTree", "BonsaiTree")
 for (ds in data_structures) {
   read.csv(paste(ds, "_results.csv", sep = "")) -> data
 
