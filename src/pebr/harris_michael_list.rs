@@ -80,35 +80,34 @@ where
     }
 
     /// Returns (1) whether it found an entry, and (2) a cursor.
-    #[inline]
+    #[inline(always)]
     fn find_inner<'g>(
         &'g self,
         key: &K,
-        cursor: &mut Cursor<K, V>,
+        c: &mut Cursor<K, V>,
         guard: &'g Guard,
     ) -> Result<bool, FindError> {
-        let mut prev = mem::replace(&mut cursor.prev, Shield::null(unsafe { unprotected() }));
-        let mut curr = mem::replace(&mut cursor.curr, Shield::null(unsafe { unprotected() }));
+        let mut cursor = mem::replace(c, Cursor::new(unsafe { unprotected() }));
 
         // HACK(@jeehoonkang): we're unsafely assuming the first 8 bytes of both `Node<K, V>` and
         // `List<K, V>` are `Atomic<Node<K, V>>`.
-        prev.defend(
+        cursor.prev.defend(
             unsafe { Shared::from_usize(&self.head as *const _ as usize) },
             guard,
         )
         .map_err(FindError::ShieldError)?;
-        curr.defend(self.head.load(Ordering::Acquire, guard), guard)
+        cursor.curr.defend(self.head.load(Ordering::Acquire, guard), guard)
             .map_err(FindError::ShieldError)?;
 
         let result = loop {
-            debug_assert_eq!(curr.tag(), 0);
+            debug_assert_eq!(cursor.curr.tag(), 0);
 
-            let curr_node = match unsafe { curr.as_ref() } {
+            let curr_node = match unsafe { cursor.curr.as_ref() } {
                 None => break Ok(false),
                 Some(c) => c,
             };
 
-            if unsafe { prev.deref() }.next.load(Ordering::Acquire, guard) != curr.shared() {
+            if unsafe { cursor.prev.deref() }.next.load(Ordering::Acquire, guard) != cursor.curr.shared() {
                 break Err(FindError::Retry);
             }
 
@@ -119,27 +118,26 @@ where
                 if curr_key >= key {
                     break Ok(curr_key == key);
                 }
-                let tmp = prev;
-                prev = curr;
-                curr = tmp;
+                let tmp = cursor.prev;
+                cursor.prev = cursor.curr;
+                cursor.curr = tmp;
             } else {
                 next = next.with_tag(0);
-                match unsafe { prev.deref() }.next.compare_and_set(
-                    curr.shared(),
+                match unsafe { cursor.prev.deref() }.next.compare_and_set(
+                    cursor.curr.shared(),
                     next,
                     Ordering::AcqRel,
                     guard,
                 ) {
                     Err(_) => break Err(FindError::Retry),
-                    Ok(_) => unsafe { guard.defer_destroy(curr.shared()) },
+                    Ok(_) => unsafe { guard.defer_destroy(cursor.curr.shared()) },
                 }
             }
-            curr.defend(next, guard)
+            cursor.curr.defend(next, guard)
                 .map_err(|e| FindError::ShieldError(e))?;
         };
 
-        drop(mem::replace(&mut cursor.prev, prev));
-        drop(mem::replace(&mut cursor.curr, curr));
+        drop(mem::replace(c, cursor));
         result
     }
 
