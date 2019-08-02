@@ -236,18 +236,16 @@ where
         guard: &'g Guard,
     ) -> Result<(), ShieldError> {
         let s = self.r.left.load(Ordering::Relaxed, guard);
-        record
-            .ancestor
-            .defend(Shared::from(&self.r as *const _), guard);
-        record.successor.defend(s, guard);
+        record.ancestor.defend(Shared::from(&self.r as *const _), guard)?;
+        record.successor.defend(s, guard)?;
         record.successor_dir = Direction::L;
 
         let leaf = unsafe { record.successor.deref() }
             .left
             .load(Ordering::Relaxed, guard)
             .with_tag(Marks::empty().bits());
-        record.parent.defend(s, guard);
-        record.leaf.defend(leaf, guard);
+        record.parent.defend(s, guard)?;
+        record.leaf.defend(leaf, guard)?;
         record.leaf_dir = Direction::L;
 
         let mut prev_tag = Marks::from_bits_truncate(leaf.tag()).tag();
@@ -259,8 +257,8 @@ where
         while !curr.is_null() {
             if !prev_tag {
                 // untagged edge: advance ancestor and successor pointers
-                record.ancestor.defend(record.parent.shared(), guard);
-                record.successor.defend(record.leaf.shared(), guard);
+                record.ancestor.defend(record.parent.shared(), guard)?;
+                record.successor.defend(record.leaf.shared(), guard)?;
                 record.successor_dir = record.leaf_dir;
             }
 
