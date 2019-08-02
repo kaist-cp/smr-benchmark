@@ -1,7 +1,8 @@
-use crossbeam_pebr::{unprotected, Atomic, Guard, Owned, Shared};
+use crossbeam_pebr::{unprotected, Atomic, Guard, Owned, Shared, Shield, ShieldError};
 
 use super::concurrent_map::ConcurrentMap;
 
+use std::cmp;
 use std::sync::atomic::Ordering;
 
 static WEIGHT: usize = 2;
@@ -32,7 +33,7 @@ impl Retired {
 /// a real node in tree or a wrapper of State node
 /// Retired node if Shared ptr of Node has RETIRED tag.
 #[derive(Debug)]
-struct Node<K, V> {
+pub struct Node<K, V> {
     key: K,
     value: V,
     size: usize,
@@ -80,7 +81,8 @@ where
 ///
 /// Since BonsaiTreeMap.curr_state is Atomic<State<_>>, *const Node<_> can't be used here.
 #[derive(Debug)]
-struct State<K, V> {
+pub struct State<K, V> {
+    shield: Shield<Node<K, V>>,
     /// Nodes that current op wants to remove from the tree. Should be retired if CAS succeeds.
     /// (`retire`). If not, ignore.
     retired_nodes: Vec<Atomic<Node<K, V>>>,
@@ -93,22 +95,29 @@ where
     K: Ord + Clone,
     V: Clone,
 {
-    fn new<'g>() -> Self {
+    fn new<'g>(guard: &'g Guard) -> Self {
         Self {
+            shield: Shield::null(guard),
             retired_nodes: Vec::new(),
             new_nodes: Vec::new(),
         }
     }
 
     /// Destroy the newly created state (self) that lost the race (reclaim_state)
-    fn destroy(mut self) {
+    fn abort(&mut self) {
+        self.shield.release();
+        self.retired_nodes.clear();
+
         for node in self.new_nodes.drain(..) {
             drop(unsafe { node.into_owned() });
         }
     }
 
     /// Retire the old state replaced by the new_state and the new_state.retired_nodes
-    fn retire(mut self, guard: &Guard) {
+    fn commit(&mut self, guard: &Guard) {
+        self.shield.release();
+        self.new_nodes.clear();
+
         for node in self.retired_nodes.drain(..) {
             let node = node.load(Ordering::Relaxed, guard);
             unsafe {
@@ -165,52 +174,51 @@ where
         left: Shared<'g, Node<K, V>>,
         right: Shared<'g, Node<K, V>>,
         guard: &'g Guard,
-    ) -> Shared<'g, Node<K, V>> {
+    ) -> Result<Shared<'g, Node<K, V>>, ShieldError> {
         if Node::is_retired_spot(cur, guard)
             || Node::is_retired_spot(left, guard)
             || Node::is_retired_spot(right, guard)
         {
-            return Node::retired_node();
+            return Ok(Node::retired_node());
         }
 
-        let cur_ref = unsafe { cur.deref() };
+        self.shield.defend(cur, guard)?;
+        let cur_ref = unsafe { self.shield.deref() };
+        let key = cur_ref.key.clone();
+        let value = cur_ref.value.clone();
+
         let l_size = Node::node_size(left);
         let r_size = Node::node_size(right);
         let res = if r_size > 0
             && ((l_size > 0 && r_size > WEIGHT * l_size) || (l_size == 0 && r_size > WEIGHT))
         {
-            self.mk_balanced_left(left, right, &cur_ref.key, &cur_ref.value, guard)
+            self.mk_balanced_left(left, right, key, value, guard)
         } else if l_size > 0
             && ((r_size > 0 && l_size > WEIGHT * r_size) || (r_size == 0 && l_size > WEIGHT))
         {
-            self.mk_balanced_right(left, right, &cur_ref.key, &cur_ref.value, guard)
+            self.mk_balanced_right(left, right, key, value, guard)
         } else {
-            self.mk_node(
-                left,
-                right,
-                cur_ref.key.clone(),
-                cur_ref.value.clone(),
-                guard,
-            )
+            Ok(self.mk_node(left, right, key, value, guard))
         };
         self.retire_node(cur);
         res
     }
 
+    #[inline]
     fn mk_balanced_left<'g>(
         &mut self,
         left: Shared<'g, Node<K, V>>,
         right: Shared<'g, Node<K, V>>,
-        key: &K,
-        value: &V,
+        key: K,
+        value: V,
         guard: &'g Guard,
-    ) -> Shared<'g, Node<K, V>> {
+    ) -> Result<Shared<'g, Node<K, V>>, ShieldError> {
         let right_ref = unsafe { right.deref() };
         let right_left = right_ref.left.load(Ordering::Acquire, guard);
         let right_right = right_ref.right.load(Ordering::Acquire, guard);
 
         if Node::is_retired_spot(right_left, guard) || Node::is_retired_spot(right_right, guard) {
-            return Node::retired_node();
+            return Ok(Node::retired_node());
         }
 
         if Node::node_size(right_left) < Node::node_size(right_right) {
@@ -222,18 +230,19 @@ where
         return self.double_left(left, right, right_left, right_right, key, value, guard);
     }
 
+    #[inline]
     fn single_left<'g>(
         &mut self,
         left: Shared<'g, Node<K, V>>,
         right: Shared<'g, Node<K, V>>,
         right_left: Shared<'g, Node<K, V>>,
         right_right: Shared<'g, Node<K, V>>,
-        key: &K,
-        value: &V,
+        key: K,
+        value: V,
         guard: &'g Guard,
-    ) -> Shared<'g, Node<K, V>> {
+    ) -> Result<Shared<'g, Node<K, V>>, ShieldError> {
         let right_ref = unsafe { right.deref() };
-        let new_left = self.mk_node(left, right_left, key.clone(), value.clone(), guard);
+        let new_left = self.mk_node(left, right_left, key, value, guard);
         let res = self.mk_node(
             new_left,
             right_right,
@@ -242,19 +251,20 @@ where
             guard,
         );
         self.retire_node(right);
-        return res;
+        return Ok(res);
     }
 
+    #[inline]
     fn double_left<'g>(
         &mut self,
         left: Shared<'g, Node<K, V>>,
         right: Shared<'g, Node<K, V>>,
         right_left: Shared<'g, Node<K, V>>,
         right_right: Shared<'g, Node<K, V>>,
-        key: &K,
-        value: &V,
+        key: K,
+        value: V,
         guard: &'g Guard,
-    ) -> Shared<'g, Node<K, V>> {
+    ) -> Result<Shared<'g, Node<K, V>>, ShieldError> {
         let right_ref = unsafe { right.deref() };
         let right_left_ref = unsafe { right_left.deref() };
         let right_left_left = right_left_ref.left.load(Ordering::Acquire, guard);
@@ -263,10 +273,10 @@ where
         if Node::is_retired_spot(right_left_left, guard)
             || Node::is_retired_spot(right_left_right, guard)
         {
-            return Node::retired_node();
+            return Ok(Node::retired_node());
         }
 
-        let new_left = self.mk_node(left, right_left_left, key.clone(), value.clone(), guard);
+        let new_left = self.mk_node(left, right_left_left, key, value, guard);
         let new_right = self.mk_node(
             right_left_right,
             right_right,
@@ -283,23 +293,24 @@ where
         );
         self.retire_node(right_left);
         self.retire_node(right);
-        res
+        Ok(res)
     }
 
+    #[inline]
     fn mk_balanced_right<'g>(
         &mut self,
         left: Shared<'g, Node<K, V>>,
         right: Shared<'g, Node<K, V>>,
-        key: &K,
-        value: &V,
+        key: K,
+        value: V,
         guard: &'g Guard,
-    ) -> Shared<'g, Node<K, V>> {
+    ) -> Result<Shared<'g, Node<K, V>>, ShieldError> {
         let left_ref = unsafe { left.deref() };
         let left_right = left_ref.right.load(Ordering::Acquire, guard);
         let left_left = left_ref.left.load(Ordering::Acquire, guard);
 
         if Node::is_retired_spot(left_right, guard) || Node::is_retired_spot(left_left, guard) {
-            return Node::retired_node();
+            return Ok(Node::retired_node());
         }
 
         if Node::node_size(left_right) < Node::node_size(left_left) {
@@ -310,18 +321,19 @@ where
         return self.double_right(left, right, left_right, left_left, key, value, guard);
     }
 
+    #[inline]
     fn single_right<'g>(
         &mut self,
         left: Shared<'g, Node<K, V>>,
         right: Shared<'g, Node<K, V>>,
         left_right: Shared<'g, Node<K, V>>,
         left_left: Shared<'g, Node<K, V>>,
-        key: &K,
-        value: &V,
+        key: K,
+        value: V,
         guard: &'g Guard,
-    ) -> Shared<'g, Node<K, V>> {
+    ) -> Result<Shared<'g, Node<K, V>>, ShieldError> {
         let left_ref = unsafe { left.deref() };
-        let new_right = self.mk_node(left_right, right, key.clone(), value.clone(), guard);
+        let new_right = self.mk_node(left_right, right, key, value, guard);
         let res = self.mk_node(
             left_left,
             new_right,
@@ -330,19 +342,20 @@ where
             guard,
         );
         self.retire_node(left);
-        return res;
+        return Ok(res);
     }
 
+    #[inline]
     fn double_right<'g>(
         &mut self,
         left: Shared<'g, Node<K, V>>,
         right: Shared<'g, Node<K, V>>,
         left_right: Shared<'g, Node<K, V>>,
         left_left: Shared<'g, Node<K, V>>,
-        key: &K,
-        value: &V,
+        key: K,
+        value: V,
         guard: &'g Guard,
-    ) -> Shared<'g, Node<K, V>> {
+    ) -> Result<Shared<'g, Node<K, V>>, ShieldError> {
         let left_ref = unsafe { left.deref() };
         let left_right_ref = unsafe { left_right.deref() };
         let left_right_left = left_right_ref.left.load(Ordering::Acquire, guard);
@@ -351,7 +364,7 @@ where
         if Node::is_retired_spot(left_right_left, guard)
             || Node::is_retired_spot(left_right_right, guard)
         {
-            return Node::retired_node();
+            return Ok(Node::retired_node());
         }
 
         let new_left = self.mk_node(
@@ -361,7 +374,7 @@ where
             left_ref.value.clone(),
             guard,
         );
-        let new_right = self.mk_node(left_right_right, right, key.clone(), value.clone(), guard);
+        let new_right = self.mk_node(left_right_right, right, key, value, guard);
         let res = self.mk_node(
             new_left,
             new_right,
@@ -371,22 +384,23 @@ where
         );
         self.retire_node(left_right);
         self.retire_node(left);
-        res
+        Ok(res)
     }
 
+    #[inline]
     fn do_insert<'g>(
         &mut self,
         node: Shared<'g, Node<K, V>>,
         key: &K,
         value: &V,
         guard: &'g Guard,
-    ) -> (Shared<'g, Node<K, V>>, bool) {
+    ) -> Result<(Shared<'g, Node<K, V>>, bool), ShieldError> {
         if Node::is_retired_spot(node, guard) {
-            return (Node::retired_node(), false);
+            return Ok((Node::retired_node(), false));
         }
 
         if node.is_null() {
-            return (
+            return Ok((
                 self.mk_node(
                     Shared::null(),
                     Shared::null(),
@@ -395,7 +409,7 @@ where
                     guard,
                 ),
                 true,
-            );
+            ));
         }
 
         let node_ref = unsafe { node.deref() };
@@ -403,32 +417,33 @@ where
         let right = node_ref.right.load(Ordering::Acquire, guard);
 
         if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
-            return (Node::retired_node(), false);
+            return Ok((Node::retired_node(), false));
         }
 
         if *key < node_ref.key {
-            let (new_left, inserted) = self.do_insert(left, key, value, guard);
-            return (self.mk_balanced(node, new_left, right, guard), inserted);
+            let (new_left, inserted) = self.do_insert(left, key, value, guard)?;
+            return Ok((self.mk_balanced(node, new_left, right, guard)?, inserted));
         }
         if *key > node_ref.key {
-            let (new_right, inserted) = self.do_insert(right, key, value, guard);
-            return (self.mk_balanced(node, left, new_right, guard), inserted);
+            let (new_right, inserted) = self.do_insert(right, key, value, guard)?;
+            return Ok((self.mk_balanced(node, left, new_right, guard)?, inserted));
         }
-        (node, false)
+        Ok((node, false))
     }
 
+    #[inline]
     fn do_remove<'g>(
         &mut self,
         node: Shared<'g, Node<K, V>>,
         key: &K,
         guard: &'g Guard,
-    ) -> (Shared<'g, Node<K, V>>, Option<V>) {
+    ) -> Result<(Shared<'g, Node<K, V>>, Option<V>), ShieldError> {
         if Node::is_retired_spot(node, guard) {
-            return (Node::retired_node(), None);
+            return Ok((Node::retired_node(), None));
         }
 
         if node.is_null() {
-            return (Shared::null(), None);
+            return Ok((Shared::null(), None));
         }
 
         let node_ref = unsafe { node.deref() };
@@ -436,30 +451,30 @@ where
         let right = node_ref.right.load(Ordering::Acquire, guard);
 
         if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
-            return (Node::retired_node(), None);
+            return Ok((Node::retired_node(), None));
         }
 
         if *key == node_ref.key {
             let value = Some(node_ref.value.clone());
             self.retire_node(node);
             if node_ref.size == 1 {
-                return (Shared::null(), value);
+                return Ok((Shared::null(), value));
             }
 
             if !left.is_null() {
-                let (new_left, succ) = self.pull_rightmost(left, guard);
-                return (self.mk_balanced(succ, new_left, right, guard), value);
+                let (new_left, succ) = self.pull_rightmost(left, guard)?;
+                return Ok((self.mk_balanced(succ, new_left, right, guard)?, value));
             }
-            let (new_right, succ) = self.pull_leftmost(right, guard);
-            return (self.mk_balanced(succ, left, new_right, guard), value);
+            let (new_right, succ) = self.pull_leftmost(right, guard)?;
+            return Ok((self.mk_balanced(succ, left, new_right, guard)?, value));
         }
 
         if *key < node_ref.key {
-            let (new_left, value) = self.do_remove(left, key, guard);
-            return (self.mk_balanced(node, new_left, right, guard), value);
+            let (new_left, value) = self.do_remove(left, key, guard)?;
+            return Ok((self.mk_balanced(node, new_left, right, guard)?, value));
         } else {
-            let (new_right, value) = self.do_remove(right, key, guard);
-            return (self.mk_balanced(node, left, new_right, guard), value);
+            let (new_right, value) = self.do_remove(right, key, guard)?;
+            return Ok((self.mk_balanced(node, left, new_right, guard)?, value));
         }
     }
 
@@ -467,9 +482,9 @@ where
         &mut self,
         node: Shared<'g, Node<K, V>>,
         guard: &'g Guard,
-    ) -> (Shared<'g, Node<K, V>>, Shared<'g, Node<K, V>>) {
+    ) -> Result<(Shared<'g, Node<K, V>>, Shared<'g, Node<K, V>>), ShieldError> {
         if Node::is_retired_spot(node, guard) {
-            return (Node::retired_node(), Node::retired_node());
+            return Ok((Node::retired_node(), Node::retired_node()));
         }
 
         let node_ref = unsafe { node.deref() };
@@ -477,12 +492,12 @@ where
         let right = node_ref.right.load(Ordering::Acquire, guard);
 
         if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
-            return (Node::retired_node(), Node::retired_node());
+            return Ok((Node::retired_node(), Node::retired_node()));
         }
 
         if !left.is_null() {
-            let (new_left, succ) = self.pull_leftmost(left, guard);
-            return (self.mk_balanced(node, new_left, right, guard), succ);
+            let (new_left, succ) = self.pull_leftmost(left, guard)?;
+            return Ok((self.mk_balanced(node, new_left, right, guard)?, succ));
         }
         // node is the leftmost
         let succ = self.mk_node(
@@ -493,16 +508,16 @@ where
             guard,
         );
         self.retire_node(node);
-        return (right, succ);
+        return Ok((right, succ));
     }
 
     fn pull_rightmost<'g>(
         &mut self,
         node: Shared<'g, Node<K, V>>,
         guard: &'g Guard,
-    ) -> (Shared<'g, Node<K, V>>, Shared<'g, Node<K, V>>) {
+    ) -> Result<(Shared<'g, Node<K, V>>, Shared<'g, Node<K, V>>), ShieldError> {
         if Node::is_retired_spot(node, guard) {
-            return (Node::retired_node(), Node::retired_node());
+            return Ok((Node::retired_node(), Node::retired_node()));
         }
 
         let node_ref = unsafe { node.deref() };
@@ -510,12 +525,12 @@ where
         let right = node_ref.right.load(Ordering::Acquire, guard);
 
         if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
-            return (Node::retired_node(), Node::retired_node());
+            return Ok((Node::retired_node(), Node::retired_node()));
         }
 
         if !right.is_null() {
-            let (new_right, succ) = self.pull_rightmost(right, guard);
-            return (self.mk_balanced(node, left, new_right, guard), succ);
+            let (new_right, succ) = self.pull_rightmost(right, guard)?;
+            return Ok((self.mk_balanced(node, left, new_right, guard)?, succ));
         }
         // node is the rightmost
         let succ = self.mk_node(
@@ -526,7 +541,7 @@ where
             guard,
         );
         self.retire_node(node);
-        return (left, succ);
+        return Ok((left, succ));
     }
 }
 
@@ -540,23 +555,48 @@ where
     V: Clone,
 {
     pub fn new() -> Self {
-        BonsaiTreeMap {
+        Self {
             root: Atomic::null(),
         }
     }
 
-    pub fn get<'g>(&self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
+    pub fn get<'g>(&self, key: &'g K, state: &mut State<K, V>, guard: &'g Guard) -> Option<&'g V> {
+        // TODO(@jeehoonkang): we want to use `FindError::retry`, but it requires higher-kinded
+        // things...
+        loop {
+            match self.get_inner(
+                key,
+                unsafe { &mut *(&mut state.shield as &_ as *const _ as *mut Shield<_>) },
+                guard,
+            ) {
+                Ok(r) => return r,
+                Err(ShieldError::Ejected) => {
+                    unsafe {
+                        // HACK(@jeehoonkang): We wanted to say `guard.repin()`, which is totally
+                        // fine, but the current Rust's type checker cannot verify it.
+                        (&mut *(guard as &_ as *const _ as *mut Guard)).repin();
+                    }
+                }
+            }
+        }
+    }
+
+    #[inline]
+    fn get_inner<'g>(
+        &self,
+        key: &'g K,
+        shield: &'g mut Shield<Node<K, V>>,
+        guard: &'g Guard,
+    ) -> Result<Option<&'g V>, ShieldError> {
         loop {
             let mut node = self.root.load(Ordering::Acquire, guard);
             while !node.is_null() && !Node::is_retired(node) {
-                let node_ref = unsafe { node.deref() };
-                if *key == node_ref.key {
-                    break;
-                }
-                node = if *key < node_ref.key {
-                    node_ref.left.load(Ordering::Acquire, guard)
-                } else {
-                    node_ref.right.load(Ordering::Acquire, guard)
+                shield.defend(node, guard)?;
+                let node_ref = unsafe { shield.deref() };
+                match key.cmp(&node_ref.key) {
+                    cmp::Ordering::Equal => break,
+                    cmp::Ordering::Less => node = node_ref.left.load(Ordering::Acquire, guard),
+                    cmp::Ordering::Greater => node = node_ref.right.load(Ordering::Acquire, guard),
                 }
             }
 
@@ -565,59 +605,76 @@ where
             }
 
             if node.is_null() {
-                return None;
+                return Ok(None);
             }
 
-            let node_ref = unsafe { node.deref() };
-            return Some(&node_ref.value);
+            return Ok(Some(&unsafe { shield.deref() }.value));
         }
     }
 
-    pub fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
+    pub fn insert(&self, key: K, value: V, state: &mut State<K, V>, guard: &mut Guard) -> bool {
         loop {
             let old_root = self.root.load(Ordering::Acquire, guard);
-            let mut state = State::new();
-            let (new_root, inserted) = state.do_insert(old_root, &key, &value, guard);
+            match state.do_insert(old_root, &key, &value, guard) {
+                Err(ShieldError::Ejected) => {
+                    unsafe {
+                        // HACK(@jeehoonkang): We wanted to say `guard.repin()`, which is totally
+                        // fine, but the current Rust's type checker cannot verify it.
+                        (&mut *(guard as &_ as *const _ as *mut Guard)).repin();
+                    }
+                    state.abort();
+                }
+                Ok((new_root, inserted)) => {
+                    if Node::is_retired(new_root) {
+                        state.abort();
+                        continue;
+                    }
 
-            if Node::is_retired(new_root) {
-                state.destroy();
-                continue;
+                    if self
+                        .root
+                        .compare_and_set(old_root, new_root, Ordering::AcqRel, guard)
+                        .is_ok()
+                    {
+                        state.commit(guard);
+                        return inserted;
+                    }
+
+                    state.abort();
+                }
             }
-
-            if self
-                .root
-                .compare_and_set(old_root, new_root, Ordering::AcqRel, guard)
-                .is_ok()
-            {
-                state.retire(guard);
-                return inserted;
-            }
-
-            state.destroy();
         }
     }
 
-    pub fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
+    pub fn remove(&self, key: &K, state: &mut State<K, V>, guard: &Guard) -> Option<V> {
         loop {
             let old_root = self.root.load(Ordering::Acquire, guard);
-            let mut state = State::new();
-            let (new_root, value) = state.do_remove(old_root, key, guard);
+            match state.do_remove(old_root, key, guard) {
+                Err(ShieldError::Ejected) => {
+                    unsafe {
+                        // HACK(@jeehoonkang): We wanted to say `guard.repin()`, which is totally
+                        // fine, but the current Rust's type checker cannot verify it.
+                        (&mut *(guard as &_ as *const _ as *mut Guard)).repin();
+                    }
+                    state.abort();
+                }
+                Ok((new_root, value)) => {
+                    if Node::is_retired(new_root) {
+                        state.abort();
+                        continue;
+                    }
 
-            if Node::is_retired(new_root) {
-                state.destroy();
-                continue;
+                    if self
+                        .root
+                        .compare_and_set(old_root, new_root, Ordering::AcqRel, guard)
+                        .is_ok()
+                    {
+                        state.commit(guard);
+                        return value;
+                    }
+
+                    state.abort();
+                }
             }
-
-            if self
-                .root
-                .compare_and_set(old_root, new_root, Ordering::AcqRel, guard)
-                .is_ok()
-            {
-                state.retire(guard);
-                return value;
-            }
-
-            state.destroy();
         }
     }
 }
@@ -642,34 +699,51 @@ impl<K, V> Drop for BonsaiTreeMap<K, V> {
     }
 }
 
-// TODO: move it to somewhere else...
-// impl<K, V> ConcurrentMap<K, V> for BonsaiTreeMap<K, V>
-// where
-//     K: Ord + Clone,
-//     V: Clone,
-// {
-//     fn new() -> Self {
-//         Self::new()
-//     }
+impl<K, V> ConcurrentMap<K, V> for BonsaiTreeMap<K, V>
+where
+    K: Ord + Clone + 'static,
+    V: Clone + 'static,
+{
+    type Handle = State<K, V>;
 
-//     #[inline]
-//     fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
-//         self.get(key, guard)
-//     }
-//     #[inline]
-//     fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
-//         self.insert(key, value, guard)
-//     }
-//     #[inline]
-//     fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
-//         self.remove(key, guard)
-//     }
-// }
+    fn new() -> Self {
+        Self::new()
+    }
+
+    fn handle(guard: &Guard) -> Self::Handle {
+        State::new(guard)
+    }
+
+    fn clear(handle: &mut Self::Handle) {
+        handle.shield.release();
+    }
+
+    #[inline]
+    fn get<'g>(
+        &'g self,
+        handle: &'g mut Self::Handle,
+        key: &'g K,
+        guard: &'g mut Guard,
+    ) -> Option<&'g V> {
+        self.get(key, handle, guard)
+    }
+
+    #[inline]
+    fn insert(&self, handle: &mut Self::Handle, key: K, value: V, guard: &mut Guard) -> bool {
+        self.insert(key, value, handle, guard)
+    }
+
+    #[inline]
+    fn remove(&self, handle: &mut Self::Handle, key: &K, guard: &mut Guard) -> Option<V> {
+        self.remove(key, handle, guard)
+    }
+}
 
 #[cfg(test)]
 mod tests {
     extern crate rand;
-    use super::BonsaiTreeMap;
+    use super::{BonsaiTreeMap, State};
+    use crossbeam_pebr::Shield;
     use crossbeam_utils::thread;
     use rand::prelude::*;
 
@@ -681,11 +755,17 @@ mod tests {
         thread::scope(|s| {
             for t in 0..10 {
                 s.spawn(move |_| {
+                    let mut state = State::new(&crossbeam_pebr::pin());
                     let mut rng = rand::thread_rng();
                     let mut keys: Vec<i32> = (0..3000).map(|k| k * 10 + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        assert!(bonsai_tree_map.insert(i, i.to_string(), &crossbeam_pebr::pin()));
+                        assert!(bonsai_tree_map.insert(
+                            i,
+                            i.to_string(),
+                            &mut state,
+                            &mut crossbeam_pebr::pin()
+                        ));
                     }
                 });
             }
@@ -696,13 +776,16 @@ mod tests {
         thread::scope(|s| {
             for t in 0..5 {
                 s.spawn(move |_| {
+                    let mut state = State::new(&crossbeam_pebr::pin());
                     let mut rng = rand::thread_rng();
                     let mut keys: Vec<i32> = (0..3000).map(|k| k * 10 + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
                         assert_eq!(
                             i.to_string(),
-                            bonsai_tree_map.remove(&i, &crossbeam_pebr::pin()).unwrap()
+                            bonsai_tree_map
+                                .remove(&i, &mut state, &mut crossbeam_pebr::pin())
+                                .unwrap()
                         );
                     }
                 });
@@ -714,13 +797,16 @@ mod tests {
         thread::scope(|s| {
             for t in 5..10 {
                 s.spawn(move |_| {
+                    let mut state = State::new(&crossbeam_pebr::pin());
                     let mut rng = rand::thread_rng();
                     let mut keys: Vec<i32> = (0..3000).map(|k| k * 10 + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
                         assert_eq!(
                             i.to_string(),
-                            *bonsai_tree_map.get(&i, &crossbeam_pebr::pin()).unwrap()
+                            *bonsai_tree_map
+                                .get(&i, &mut state, &mut crossbeam_pebr::pin())
+                                .unwrap()
                         );
                     }
                 });

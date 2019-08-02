@@ -197,6 +197,7 @@ where
         res
     }
 
+    #[inline]
     fn mk_balanced_left<'g>(
         &mut self,
         left: Shared<'g, Node<K, V>>,
@@ -222,6 +223,7 @@ where
         return self.double_left(left, right, right_left, right_right, key, value, guard);
     }
 
+    #[inline]
     fn single_left<'g>(
         &mut self,
         left: Shared<'g, Node<K, V>>,
@@ -245,6 +247,7 @@ where
         return res;
     }
 
+    #[inline]
     fn double_left<'g>(
         &mut self,
         left: Shared<'g, Node<K, V>>,
@@ -286,6 +289,7 @@ where
         res
     }
 
+    #[inline]
     fn mk_balanced_right<'g>(
         &mut self,
         left: Shared<'g, Node<K, V>>,
@@ -310,6 +314,7 @@ where
         return self.double_right(left, right, left_right, left_left, key, value, guard);
     }
 
+    #[inline]
     fn single_right<'g>(
         &mut self,
         left: Shared<'g, Node<K, V>>,
@@ -333,6 +338,7 @@ where
         return res;
     }
 
+    #[inline]
     fn double_right<'g>(
         &mut self,
         left: Shared<'g, Node<K, V>>,
@@ -374,6 +380,7 @@ where
         res
     }
 
+    #[inline]
     fn do_insert<'g>(
         &mut self,
         node: Shared<'g, Node<K, V>>,
@@ -417,6 +424,7 @@ where
         (node, false)
     }
 
+    #[inline]
     fn do_remove<'g>(
         &mut self,
         node: Shared<'g, Node<K, V>>,
@@ -540,7 +548,7 @@ where
     V: Clone,
 {
     pub fn new() -> Self {
-        BonsaiTreeMap {
+        Self {
             root: Atomic::null(),
         }
     }
