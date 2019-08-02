@@ -91,12 +91,16 @@ where
 
         // HACK(@jeehoonkang): we're unsafely assuming the first 8 bytes of both `Node<K, V>` and
         // `List<K, V>` are `Atomic<Node<K, V>>`.
-        cursor.prev.defend(
-            unsafe { Shared::from_usize(&self.head as *const _ as usize) },
-            guard,
-        )
-        .map_err(FindError::ShieldError)?;
-        cursor.curr.defend(self.head.load(Ordering::Acquire, guard), guard)
+        cursor
+            .prev
+            .defend(
+                unsafe { Shared::from_usize(&self.head as *const _ as usize) },
+                guard,
+            )
+            .map_err(FindError::ShieldError)?;
+        cursor
+            .curr
+            .defend(self.head.load(Ordering::Acquire, guard), guard)
             .map_err(FindError::ShieldError)?;
 
         let result = loop {
@@ -107,7 +111,11 @@ where
                 Some(c) => c,
             };
 
-            if unsafe { cursor.prev.deref() }.next.load(Ordering::Acquire, guard) != cursor.curr.shared() {
+            if unsafe { cursor.prev.deref() }
+                .next
+                .load(Ordering::Acquire, guard)
+                != cursor.curr.shared()
+            {
                 break Err(FindError::Retry);
             }
 
@@ -133,7 +141,9 @@ where
                     Ok(_) => unsafe { guard.defer_destroy(cursor.curr.shared()) },
                 }
             }
-            cursor.curr.defend(next, guard)
+            cursor
+                .curr
+                .defend(next, guard)
                 .map_err(|e| FindError::ShieldError(e))?;
         };
 

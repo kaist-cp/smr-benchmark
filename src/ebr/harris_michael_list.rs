@@ -90,12 +90,10 @@ where
                 cursor.prev = &curr_node.next;
             } else {
                 next = next.with_tag(0);
-                match cursor.prev.compare_and_set(
-                    cursor.curr,
-                    next,
-                    Ordering::AcqRel,
-                    guard,
-                ) {
+                match cursor
+                    .prev
+                    .compare_and_set(cursor.curr, next, Ordering::AcqRel, guard)
+                {
                     Err(_) => return Err(()),
                     Ok(_) => unsafe { guard.defer_destroy(cursor.curr) },
                 }
@@ -132,7 +130,9 @@ where
         loop {
             let (found, cursor) = self.find(&node.key, &guard);
             if found {
-                unsafe { ManuallyDrop::drop(&mut node.value); }
+                unsafe {
+                    ManuallyDrop::drop(&mut node.value);
+                }
                 return false;
             }
 

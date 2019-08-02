@@ -1,8 +1,8 @@
 use crossbeam_pebr::{unprotected, Atomic, Guard, Owned, Shared, Shield, ShieldError};
 
 use super::concurrent_map::ConcurrentMap;
-use std::sync::atomic::Ordering;
 use std::mem;
+use std::sync::atomic::Ordering;
 
 bitflags! {
     /// TODO
@@ -229,9 +229,16 @@ where
     }
 
     // All `Shared<_>` fields are unmarked.
-    fn seek<'g>(&'g self, key: &K, record: &mut SeekRecord<K, V>, guard: &'g Guard) -> Result<(), ShieldError> {
+    fn seek<'g>(
+        &'g self,
+        key: &K,
+        record: &mut SeekRecord<K, V>,
+        guard: &'g Guard,
+    ) -> Result<(), ShieldError> {
         let s = self.r.left.load(Ordering::Relaxed, guard);
-        record.ancestor.defend(Shared::from(&self.r as *const _), guard);
+        record
+            .ancestor
+            .defend(Shared::from(&self.r as *const _), guard);
         record.successor.defend(s, guard);
         record.successor_dir = Direction::L;
 
@@ -245,7 +252,9 @@ where
 
         let mut prev_tag = Marks::from_bits_truncate(leaf.tag()).tag();
         let mut curr_dir = Direction::L;
-        let mut curr = unsafe { record.leaf.deref() }.left.load(Ordering::Relaxed, guard);
+        let mut curr = unsafe { record.leaf.deref() }
+            .left
+            .load(Ordering::Relaxed, guard);
 
         while !curr.is_null() {
             if !prev_tag {
@@ -257,7 +266,9 @@ where
 
             // advance parent and leaf pointers
             mem::swap(&mut record.parent, &mut record.leaf);
-            record.leaf.defend(curr.with_tag(Marks::empty().bits()), guard)?;
+            record
+                .leaf
+                .defend(curr.with_tag(Marks::empty().bits()), guard)?;
             record.leaf_dir = curr_dir;
 
             // update other variables
@@ -334,7 +345,12 @@ where
     }
 
     #[inline]
-    pub fn get_inner<'g>(&'g self, key: &'g K, record: &'g mut SeekRecord<K, V>, guard: &'g Guard) -> Result<Option<&'g V>, ShieldError> {
+    pub fn get_inner<'g>(
+        &'g self,
+        key: &'g K,
+        record: &'g mut SeekRecord<K, V>,
+        guard: &'g Guard,
+    ) -> Result<Option<&'g V>, ShieldError> {
         self.seek(key, record, guard)?;
         let leaf_node = unsafe { record.leaf.deref() };
 
@@ -351,7 +367,11 @@ where
         // TODO(@jeehoonkang): we want to use `FindError::retry`, but it requires higher-kinded
         // things...
         loop {
-            match self.get_inner(key, unsafe { &mut *(&mut record as &_ as *const _ as *mut SeekRecord<K, V>) }, guard) {
+            match self.get_inner(
+                key,
+                unsafe { &mut *(&mut record as &_ as *const _ as *mut SeekRecord<K, V>) },
+                guard,
+            ) {
                 Ok(r) => return r,
                 Err(ShieldError::Ejected) => {
                     unsafe {
@@ -365,7 +385,13 @@ where
     }
 
     #[inline]
-    pub fn insert_inner(&self, key: &K, value: V, record: &mut SeekRecord<K, V>, guard: &Guard) -> Result<(), (V, Option<ShieldError>)> {
+    pub fn insert_inner(
+        &self,
+        key: &K,
+        value: V,
+        record: &mut SeekRecord<K, V>,
+        guard: &Guard,
+    ) -> Result<(), (V, Option<ShieldError>)> {
         let mut new_leaf = Owned::new(Node::new_leaf(Key::Fin(key.clone()), Some(value)))
             .into_shared(unsafe { unprotected() });
 
@@ -409,12 +435,10 @@ where
             new_internal_node.right.store(new_right, Ordering::Relaxed);
 
             // NOTE: record.leaf_addr is called childAddr in the paper.
-            match record.leaf_addr().compare_and_set(
-                leaf,
-                new_internal,
-                Ordering::AcqRel,
-                &guard,
-            ) {
+            match record
+                .leaf_addr()
+                .compare_and_set(leaf, new_internal, Ordering::AcqRel, &guard)
+            {
                 Ok(_) => return Ok(()),
                 Err(e) => {
                     // Insertion failed. Help the conflicting remove operation if needed.
@@ -449,7 +473,12 @@ where
     }
 
     #[inline]
-    fn remove_inner(&self, key: &K, record: &mut SeekRecord<K, V>, guard: &Guard) -> Result<Option<V>, ShieldError> {
+    fn remove_inner(
+        &self,
+        key: &K,
+        record: &mut SeekRecord<K, V>,
+        guard: &Guard,
+    ) -> Result<Option<V>, ShieldError> {
         // NOTE: The paper version uses one big loop for both phases.
         // injection phase
         //
@@ -609,7 +638,7 @@ mod tests {
                     for i in keys {
                         assert_eq!(
                             i.to_string(),
-                            *nm_tree_map.get(&i, &crossbeam_pebr::pin()).unwrap()
+                            *nm_tree_map.get(&i, &mut crossbeam_pebr::pin()).unwrap()
                         );
                     }
                 });

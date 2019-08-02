@@ -260,7 +260,9 @@ where
         let right_left_left = right_left_ref.left.load(Ordering::Acquire, guard);
         let right_left_right = right_left_ref.right.load(Ordering::Acquire, guard);
 
-        if Node::is_retired_spot(right_left_left, guard) || Node::is_retired_spot(right_left_right, guard) {
+        if Node::is_retired_spot(right_left_left, guard)
+            || Node::is_retired_spot(right_left_right, guard)
+        {
             return Node::retired_node();
         }
 
@@ -346,7 +348,9 @@ where
         let left_right_left = left_right_ref.left.load(Ordering::Acquire, guard);
         let left_right_right = left_right_ref.right.load(Ordering::Acquire, guard);
 
-        if Node::is_retired_spot(left_right_left, guard) || Node::is_retired_spot(left_right_right, guard) {
+        if Node::is_retired_spot(left_right_left, guard)
+            || Node::is_retired_spot(left_right_right, guard)
+        {
             return Node::retired_node();
         }
 

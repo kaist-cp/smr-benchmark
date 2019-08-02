@@ -11,8 +11,8 @@ use rand::distributions::{Uniform, WeightedIndex};
 use rand::prelude::*;
 use std::convert::TryInto;
 use std::fs::{File, OpenOptions};
-use std::sync::{mpsc, Arc, Barrier};
 use std::sync::atomic::spin_loop_hint;
+use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
 
 use pebr_benchmark::ebr;
@@ -224,8 +224,14 @@ fn bench(config: &Config, output: &mut Writer<File>) {
         MM::PEBR => match config.ds {
             DS::List => bench_pebr::<pebr::List<String, String>>(config),
             DS::HashMap => bench_pebr::<pebr::HashMap<String, String>>(config),
-            DS::NMTree => bench_pebr::<pebr::NMTreeMap<String, String>>(config),
-            DS::BonsaiTree => bench_pebr::<pebr::BonsaiTreeMap<String, String>>(config),
+            DS::NMTree => {
+                println!("skip PEBR NMTree!");
+                (0, 0)
+            }
+            DS::BonsaiTree => {
+                println!("skip PEBR BonsaiTree!");
+                (0, 0)
+            }
         },
     };
     output
