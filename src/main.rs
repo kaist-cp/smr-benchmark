@@ -4,14 +4,14 @@ extern crate crossbeam_pebr;
 extern crate csv;
 extern crate pebr_benchmark;
 
-use clap::{arg_enum, value_t, values_t, App, Arg, ArgMatches};
+use clap::{arg_enum, value_t, App, Arg, ArgMatches};
 use crossbeam_utils::thread::scope;
 use csv::Writer;
 use rand::distributions::{Uniform, WeightedIndex};
 use rand::prelude::*;
 use std::convert::TryInto;
+use std::cmp::min;
 use std::fs::{File, OpenOptions};
-use std::sync::atomic::spin_loop_hint;
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
 
@@ -31,7 +31,7 @@ arg_enum! {
 arg_enum! {
     #[derive(PartialEq, Debug)]
     pub enum MM {
-        NoMM,
+        NR,
         EBR,
         PEBR,
     }
@@ -39,23 +39,22 @@ arg_enum! {
 
 #[derive(PartialEq, Debug)]
 pub enum Op {
-    Insert,
     Get,
+    Insert,
     Remove,
 }
 
 impl Op {
-    const OPS: [Op; 3] = [Op::Insert, Op::Get, Op::Remove];
+    const OPS: [Op; 3] = [Op::Get, Op::Insert, Op::Remove];
 }
 
-// TODO op_dist arg
 struct Config {
     ds: DS,
     mm: MM,
     threads: usize,
     non_coop_threads: usize,
-    // TODO ms
     non_coop_period: usize,
+    get_rate: usize,
     key_dist: Uniform<usize>,
     prefill: usize,
     interval: i64,
@@ -64,7 +63,6 @@ struct Config {
 }
 
 fn main() {
-    // TODO: normal mode & lazy thread mode
     let matches = App::new("pebr_benchmark")
         .arg(
             Arg::with_name("data structure")
@@ -95,12 +93,22 @@ fn main() {
         .arg(
             Arg::with_name("non-coop")
                 .short("n")
-                .value_name("NON_COOPERATIVE_THREADS, PERIOD")
-                .takes_value(true)
-                .number_of_values(2)
-                .use_delimiter(true)
-                .help("The number of non-cooperative threads and their length of dormant period")
-                .default_value("0,0"),
+                .takes_value(false)
+                .multiple(true)
+                .help(
+                    "The degree of non-cooperation. \
+                     -n for 10ms, -nn for inf",
+                ),
+        )
+        .arg(
+            Arg::with_name("get rate")
+                .short("g")
+                .takes_value(false)
+                .multiple(true)
+                .help(
+                    "The proportion of `get`(read) operations. \
+                    none: 0%, -g: 50%, -gg: 90%",
+                ),
         )
         .arg(
             Arg::with_name("range")
@@ -147,15 +155,19 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
     let ds = value_t!(m, "data structure", DS).unwrap();
     let mm = value_t!(m, "memory manager", MM).unwrap();
     let threads = value_t!(m, "threads", usize).unwrap();
-    let non_coop = values_t!(m, "non-coop", usize).unwrap();
+    let non_coop = m.occurrences_of("non-coop");
+    let get_rate = min(2, m.occurrences_of("get rate")) as usize;
     let range = value_t!(m, "range", usize).unwrap();
     let key_dist = Uniform::from(0..range);
     let prefill = value_t!(m, "prefill", usize).unwrap();
     let interval: i64 = value_t!(m, "interval", usize).unwrap().try_into().unwrap();
     let duration = Duration::from_secs(interval as u64);
 
-    // TODO use arg
-    let op_weights = &[1, 0, 1];
+    let op_weights = match get_rate {
+        0 => &[0, 1, 1],
+        1 => &[2, 1, 1],
+        _ => &[18, 1, 1],
+    };
     let op_dist = WeightedIndex::new(op_weights).unwrap();
 
     let output_name = &m
@@ -183,6 +195,7 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
                     "threads",
                     "non_coop_threads",
                     "non_coop_period",
+                    "get_rate",
                     "throughput",
                     "avg_unreclaimed",
                 ])
@@ -195,8 +208,9 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
         ds,
         mm,
         threads,
-        non_coop_threads: non_coop[0],
-        non_coop_period: non_coop[1],
+        non_coop_threads: min(non_coop, 1) as usize,
+        non_coop_period: min(non_coop, 2) as usize,
+        get_rate,
         key_dist,
         prefill,
         interval,
@@ -209,11 +223,11 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
 fn bench(config: &Config, output: &mut Writer<File>) {
     println!("{}: {}, {} threads", config.ds, config.mm, config.threads);
     let (ops_per_sec, avg_unreclaimed) = match config.mm {
-        MM::NoMM => match config.ds {
-            DS::List => bench_no_mm::<ebr::List<String, String>>(config),
-            DS::HashMap => bench_no_mm::<ebr::HashMap<String, String>>(config),
-            DS::NMTree => bench_no_mm::<ebr::NMTreeMap<String, String>>(config),
-            DS::BonsaiTree => bench_no_mm::<ebr::BonsaiTreeMap<String, String>>(config),
+        MM::NR => match config.ds {
+            DS::List => bench_nr::<ebr::List<String, String>>(config),
+            DS::HashMap => bench_nr::<ebr::HashMap<String, String>>(config),
+            DS::NMTree => bench_nr::<ebr::NMTreeMap<String, String>>(config),
+            DS::BonsaiTree => bench_nr::<ebr::BonsaiTreeMap<String, String>>(config),
         },
         MM::EBR => match config.ds {
             DS::List => bench_ebr::<ebr::List<String, String>>(config),
@@ -235,6 +249,7 @@ fn bench(config: &Config, output: &mut Writer<File>) {
             config.threads.to_string(),
             config.non_coop_threads.to_string(),
             config.non_coop_period.to_string(),
+            config.get_rate.to_string(),
             ops_per_sec.to_string(),
             avg_unreclaimed.to_string(),
         ])
@@ -245,7 +260,7 @@ fn bench(config: &Config, output: &mut Writer<File>) {
 }
 
 // TODO: too much duplication
-fn bench_no_mm<M: ebr::ConcurrentMap<String, String> + Send + Sync>(config: &Config) -> (i64, i64) {
+fn bench_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(config: &Config) -> (i64, i64) {
     let map = &M::new();
 
     for _ in 0..config.prefill {
@@ -275,12 +290,12 @@ fn bench_no_mm<M: ebr::ConcurrentMap<String, String> + Send + Sync>(config: &Con
                 while start.elapsed() < config.duration {
                     let key = config.key_dist.sample(&mut rng).to_string();
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
+                        Op::Get => {
+                            map.get(&key, unsafe { crossbeam_ebr::unprotected() });
+                        }
                         Op::Insert => {
                             let value = key.clone();
                             map.insert(key, value, unsafe { crossbeam_ebr::unprotected() });
-                        }
-                        Op::Get => {
-                            map.get(&key, unsafe { crossbeam_ebr::unprotected() });
                         }
                         Op::Remove => {
                             map.remove(&key, unsafe { crossbeam_ebr::unprotected() });
@@ -329,18 +344,18 @@ fn bench_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(config: &Confi
             s.spawn(move |_| {
                 let handle = collector.register();
                 barrier.clone().wait();
-
                 let start = Instant::now();
 
                 let mut guard = handle.pin();
-                let mut ops = 0;
-                while start.elapsed() < config.duration {
-                    spin_loop_hint();
-                    ops += 1;
-
-                    if ops % config.non_coop_period == 0 {
+                if config.non_coop_period == 1 {
+                    while start.elapsed() < config.duration {
+                        std::thread::sleep(Duration::from_millis(10));
                         guard.repin();
                     }
+                } else if config.non_coop_period == 2 {
+                    std::thread::sleep(Duration::from_millis(
+                        (config.interval * 1000).try_into().unwrap(),
+                    ));
                 }
                 drop(guard);
             });
@@ -365,12 +380,12 @@ fn bench_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(config: &Confi
                     let guard = handle.pin();
                     unreclaimd_acc += handle.retired_unreclaimed();
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
+                        Op::Get => {
+                            map.get(&key, &guard);
+                        }
                         Op::Insert => {
                             let value = key.clone();
                             map.insert(key, value, &guard);
-                        }
-                        Op::Get => {
-                            map.get(&key, &guard);
                         }
                         Op::Remove => {
                             map.remove(&key, &guard);
@@ -425,18 +440,18 @@ fn bench_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(config: &Con
             s.spawn(move |_| {
                 let handle = collector.register();
                 barrier.clone().wait();
-
                 let start = Instant::now();
 
                 let mut guard = handle.pin();
-                let mut ops = 0;
-                while start.elapsed() < config.duration {
-                    spin_loop_hint();
-                    ops += 1;
-
-                    if ops % config.non_coop_period == 0 {
+                if config.non_coop_period == 1 {
+                    while start.elapsed() < config.duration {
+                        std::thread::sleep(Duration::from_millis(10));
                         guard.repin();
                     }
+                } else if config.non_coop_period == 2 {
+                    std::thread::sleep(Duration::from_millis(
+                        (config.interval * 1000).try_into().unwrap(),
+                    ));
                 }
                 drop(guard);
             });
@@ -463,12 +478,12 @@ fn bench_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(config: &Con
                     let mut guard = handle.pin();
                     unreclaimd_acc += handle.retired_unreclaimed();
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
+                        Op::Get => {
+                            map.get(&mut map_handle, &key, &mut guard);
+                        }
                         Op::Insert => {
                             let value = key.clone();
                             map.insert(&mut map_handle, key, value, &mut guard);
-                        }
-                        Op::Get => {
-                            map.get(&mut map_handle, &key, &mut guard);
                         }
                         Op::Remove => {
                             map.remove(&mut map_handle, &key, &mut guard);

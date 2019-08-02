@@ -3,7 +3,7 @@
 import subprocess
 
 dss = ['List', 'HashMap', 'NMTree', 'BonsaiTree']
-mms = ['EBR', 'PEBR', 'NoMM']
+mms = ['EBR', 'PEBR', 'NR']
 threadss = [1] + list(range(5, 101, 5))
 
 subprocess.run(['git', 'submodule', 'update', '--init'])
@@ -23,7 +23,7 @@ for ds in dss:
                 ['cargo', 'run', '--release', '--'] +
                 ['-d', ds, '-m', mm, '-t', threads, '-r100', '-p50'])
 
-# non-cooperative threads (don't test NoMM)
+# non-cooperative threads (don't test NR)
 for ds in dss:
     for mm in ['EBR', 'PEBR']:
         for threads in map(str, threadss):

@@ -12,7 +12,7 @@ for (ds in data_structures) {
   # TODO: use avg or max of several runs
   ddply(.data=data,.(mm,threads),mutate,throughput= max(throughput)/1000000)->data
 
-  data$mm <- factor(data$mm, levels = c("NoMM", "EBR", "PEBR"))
+  data$mm <- factor(data$mm, levels = c("NR", "EBR", "PEBR"))
 
   # Set up colors and shapes (invariant for all plots)
   names(color_key) <- unique(c(as.character(data$mm)))
