@@ -224,14 +224,8 @@ fn bench(config: &Config, output: &mut Writer<File>) {
         MM::PEBR => match config.ds {
             DS::List => bench_pebr::<pebr::List<String, String>>(config),
             DS::HashMap => bench_pebr::<pebr::HashMap<String, String>>(config),
-            DS::NMTree => {
-                println!("Skip PEBR NMTree");
-                return;
-            }
-            DS::BonsaiTree => {
-                println!("Skip PEBR BonsaiTree");
-                return;
-            }
+            DS::NMTree => bench_pebr::<pebr::NMTreeMap<String, String>>(config),
+            DS::BonsaiTree => bench_pebr::<pebr::BonsaiTreeMap<String, String>>(config),
         },
     };
     output

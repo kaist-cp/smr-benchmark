@@ -1,7 +1,8 @@
-use crossbeam_pebr::{unprotected, Atomic, Guard, Owned, Shared};
+use crossbeam_pebr::{unprotected, Atomic, Guard, Owned, Shared, Shield, ShieldError};
 
 use super::concurrent_map::ConcurrentMap;
 use std::sync::atomic::Ordering;
+use std::mem;
 
 bitflags! {
     /// TODO
@@ -108,6 +109,7 @@ where
     }
 }
 
+#[derive(Clone, Copy)]
 enum Direction {
     L,
     R,
@@ -116,38 +118,49 @@ enum Direction {
 /// All Shared<_> are unmarked.
 ///
 /// All of the edges of path from `successor` to `parent` are in the process of removal.
-struct SeekRecord<'g, K, V> {
+pub struct SeekRecord<K, V> {
     /// Parent of `successor`
-    ancestor: Shared<'g, Node<K, V>>,
+    ancestor: Shield<Node<K, V>>,
     /// The first internal node with a marked outgoing edge
-    successor: Shared<'g, Node<K, V>>,
+    successor: Shield<Node<K, V>>,
     /// The direction of successor from ancestor.
     successor_dir: Direction,
     /// Parent of `leaf`
-    parent: Shared<'g, Node<K, V>>,
+    parent: Shield<Node<K, V>>,
     /// The end of the access path.
-    leaf: Shared<'g, Node<K, V>>,
+    leaf: Shield<Node<K, V>>,
     /// The direction of leaf from parent.
     leaf_dir: Direction,
 }
 
 // TODO(@jeehoonkang): code duplication...
-impl<'g, K, V> SeekRecord<'g, K, V> {
-    fn successor_addr(&'g self) -> &'g Atomic<Node<K, V>> {
+impl<K, V> SeekRecord<K, V> {
+    fn new(guard: &Guard) -> Self {
+        Self {
+            ancestor: Shield::null(guard),
+            successor: Shield::null(guard),
+            successor_dir: Direction::L,
+            parent: Shield::null(guard),
+            leaf: Shield::null(guard),
+            leaf_dir: Direction::L,
+        }
+    }
+
+    fn successor_addr(&self) -> &Atomic<Node<K, V>> {
         match self.successor_dir {
             Direction::L => &unsafe { self.ancestor.deref() }.left,
             Direction::R => &unsafe { self.ancestor.deref() }.right,
         }
     }
 
-    fn leaf_addr(&'g self) -> &'g Atomic<Node<K, V>> {
+    fn leaf_addr(&self) -> &Atomic<Node<K, V>> {
         match self.leaf_dir {
             Direction::L => &unsafe { self.parent.deref() }.left,
             Direction::R => &unsafe { self.parent.deref() }.right,
         }
     }
 
-    fn leaf_sibling_addr(&'g self) -> &'g Atomic<Node<K, V>> {
+    fn leaf_sibling_addr(&self) -> &Atomic<Node<K, V>> {
         match self.leaf_dir {
             Direction::L => &unsafe { self.parent.deref() }.right,
             Direction::R => &unsafe { self.parent.deref() }.left,
@@ -216,43 +229,40 @@ where
     }
 
     // All `Shared<_>` fields are unmarked.
-    fn seek<'g>(&'g self, key: &K, guard: &'g Guard) -> SeekRecord<'g, K, V> {
+    fn seek<'g>(&'g self, key: &K, record: &mut SeekRecord<K, V>, guard: &'g Guard) -> Result<(), ShieldError> {
         let s = self.r.left.load(Ordering::Relaxed, guard);
-        let s_node = unsafe { s.deref() };
-        let leaf = s_node
+        record.ancestor.defend(Shared::from(&self.r as *const _), guard);
+        record.successor.defend(s, guard);
+        record.successor_dir = Direction::L;
+
+        let leaf = unsafe { record.successor.deref() }
             .left
             .load(Ordering::Relaxed, guard)
             .with_tag(Marks::empty().bits());
-        let leaf_node = unsafe { leaf.deref() };
-
-        let mut record = SeekRecord {
-            ancestor: Shared::from(&self.r as *const _),
-            successor: s,
-            successor_dir: Direction::L,
-            parent: s,
-            leaf,
-            leaf_dir: Direction::L,
-        };
+        record.parent.defend(s, guard);
+        record.leaf.defend(leaf, guard);
+        record.leaf_dir = Direction::L;
 
         let mut prev_tag = Marks::from_bits_truncate(leaf.tag()).tag();
         let mut curr_dir = Direction::L;
-        let mut curr = leaf_node.left.load(Ordering::Relaxed, guard);
+        let mut curr = unsafe { record.leaf.deref() }.left.load(Ordering::Relaxed, guard);
 
-        while let Some(curr_node) = unsafe { curr.as_ref() } {
+        while !curr.is_null() {
             if !prev_tag {
                 // untagged edge: advance ancestor and successor pointers
-                record.ancestor = record.parent;
-                record.successor = record.leaf;
+                record.ancestor.defend(record.parent.shared(), guard);
+                record.successor.defend(record.leaf.shared(), guard);
                 record.successor_dir = record.leaf_dir;
             }
 
             // advance parent and leaf pointers
-            record.parent = record.leaf;
-            record.leaf = curr.with_tag(Marks::empty().bits());
+            mem::swap(&mut record.parent, &mut record.leaf);
+            record.leaf.defend(curr.with_tag(Marks::empty().bits()), guard)?;
             record.leaf_dir = curr_dir;
 
             // update other variables
             prev_tag = Marks::from_bits_truncate(curr.tag()).tag();
+            let curr_node = unsafe { record.leaf.deref() };
             if curr_node.key > *key {
                 curr_dir = Direction::L;
                 curr = curr_node.left.load(Ordering::Acquire, guard);
@@ -262,13 +272,13 @@ where
             }
         }
 
-        record
+        Ok(())
     }
 
     /// Physically removes node.
     ///
     /// Returns true if it successfully unlinks the flagged node in `record`.
-    fn cleanup(&self, record: &SeekRecord<'_, K, V>, guard: &Guard) -> bool {
+    fn cleanup(&self, record: &SeekRecord<K, V>, guard: &Guard) -> bool {
         // Identify the node(subtree) that will replace `successor`.
         let leaf_marked = record.leaf_addr().load(Ordering::Acquire, guard);
         let leaf_flag = Marks::from_bits_truncate(leaf_marked.tag()).flag();
@@ -291,7 +301,7 @@ where
         let is_unlinked = record
             .successor_addr()
             .compare_and_set(
-                record.successor,
+                record.successor.shared(),
                 target_sibling.with_tag(Marks::new(flag, false).bits()),
                 Ordering::AcqRel,
                 &guard,
@@ -301,7 +311,7 @@ where
         if is_unlinked {
             unsafe {
                 // destroy the subtree of successor except target_sibling
-                let mut stack = vec![record.successor];
+                let mut stack = vec![record.successor.shared()];
 
                 while let Some(mut node) = stack.pop() {
                     if node.is_null()
@@ -323,18 +333,39 @@ where
         is_unlinked
     }
 
-    pub fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
-        let record = self.seek(key, guard);
+    #[inline]
+    pub fn get_inner<'g>(&'g self, key: &'g K, record: &'g mut SeekRecord<K, V>, guard: &'g Guard) -> Result<Option<&'g V>, ShieldError> {
+        self.seek(key, record, guard)?;
         let leaf_node = unsafe { record.leaf.deref() };
 
         if leaf_node.key != *key {
-            return None;
+            return Ok(None);
         }
 
-        Some(leaf_node.value.as_ref().unwrap())
+        Ok(Some(leaf_node.value.as_ref().unwrap()))
     }
 
-    pub fn insert(&self, key: K, value: V, guard: &Guard) -> Result<(), (K, V)> {
+    pub fn get<'g>(&'g self, key: &'g K, guard: &'g mut Guard) -> Option<&'g V> {
+        let mut record = SeekRecord::<K, V>::new(guard);
+
+        // TODO(@jeehoonkang): we want to use `FindError::retry`, but it requires higher-kinded
+        // things...
+        loop {
+            match self.get_inner(key, unsafe { &mut *(&mut record as &_ as *const _ as *mut SeekRecord<K, V>) }, guard) {
+                Ok(r) => return r,
+                Err(ShieldError::Ejected) => {
+                    unsafe {
+                        // HACK(@jeehoonkang): We wanted to say `guard.repin()`, which is totally
+                        // fine, but the current Rust's type checker cannot verify it.
+                        (&mut *(guard as &_ as *const _ as *mut Guard)).repin();
+                    }
+                }
+            }
+        }
+    }
+
+    #[inline]
+    pub fn insert_inner(&self, key: &K, value: V, record: &mut SeekRecord<K, V>, guard: &Guard) -> Result<(), (V, Option<ShieldError>)> {
         let mut new_leaf = Owned::new(Node::new_leaf(Key::Fin(key.clone()), Some(value)))
             .into_shared(unsafe { unprotected() });
 
@@ -347,21 +378,26 @@ where
         .into_shared(unsafe { unprotected() });
 
         loop {
-            let record = self.seek(&key, guard);
-            let leaf = record.leaf;
+            self.seek(key, record, guard).map_err(|e| unsafe {
+                let value = new_leaf.deref_mut().value.take().unwrap();
+                drop(new_leaf.into_owned());
+                drop(new_internal.into_owned());
+                (value, Some(e))
+            })?;
+            let leaf = record.leaf.shared();
             let leaf_node = unsafe { leaf.deref() };
 
-            if leaf_node.key == key {
+            if leaf_node.key == *key {
                 // Newly created nodes that failed to be inserted are free'd here.
                 unsafe {
                     let value = new_leaf.deref_mut().value.take().unwrap();
                     drop(new_leaf.into_owned());
                     drop(new_internal.into_owned());
-                    return Err((key, value));
+                    return Err((value, None));
                 }
             }
 
-            let (new_left, new_right) = if leaf_node.key > key {
+            let (new_left, new_right) = if leaf_node.key > *key {
                 (new_leaf, leaf)
             } else {
                 (leaf, new_leaf)
@@ -374,7 +410,7 @@ where
 
             // NOTE: record.leaf_addr is called childAddr in the paper.
             match record.leaf_addr().compare_and_set(
-                record.leaf,
+                leaf,
                 new_internal,
                 Ordering::AcqRel,
                 &guard,
@@ -383,7 +419,7 @@ where
                 Err(e) => {
                     // Insertion failed. Help the conflicting remove operation if needed.
                     // NOTE: The paper version checks if any of the mark is set, which is redundant.
-                    if e.current.with_tag(Marks::empty().bits()) == record.leaf {
+                    if e.current.with_tag(Marks::empty().bits()) == leaf {
                         self.cleanup(&record, guard);
                     }
                 }
@@ -391,66 +427,105 @@ where
         }
     }
 
-    pub fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
-        let mut record;
-        // `leaf` and `value` are the snapshot of the node to be deleted.
-        let leaf;
-        let value;
+    pub fn insert(&self, key: K, mut value: V, guard: &Guard) -> Result<(), (K, V)> {
+        let mut record = SeekRecord::new(guard);
 
+        // TODO(@jeehoonkang): we want to use `FindError::retry`, but it requires higher-kinded
+        // things...
+        loop {
+            match self.insert_inner(&key, value, &mut record, guard) {
+                Ok(()) => return Ok(()),
+                Err((v, None)) => return Err((key, v)),
+                Err((v, Some(ShieldError::Ejected))) => {
+                    value = v;
+                    unsafe {
+                        // HACK(@jeehoonkang): We wanted to say `guard.repin()`, which is totally
+                        // fine, but the current Rust's type checker cannot verify it.
+                        (&mut *(guard as &_ as *const _ as *mut Guard)).repin();
+                    }
+                }
+            }
+        }
+    }
+
+    #[inline]
+    fn remove_inner(&self, key: &K, record: &mut SeekRecord<K, V>, guard: &Guard) -> Result<Option<V>, ShieldError> {
         // NOTE: The paper version uses one big loop for both phases.
         // injection phase
-        loop {
-            record = self.seek(key, guard);
+        //
+        // `leaf` and `value` are the snapshot of the node to be deleted.
+        let (leaf, value) = loop {
+            self.seek(key, record, guard)?;
 
             // candidates
-            let temp_leaf = record.leaf;
-            let temp_leaf_node = unsafe { record.leaf.as_ref().unwrap() };
+            let leaf = record.leaf.shared();
+            let leaf_node = unsafe { record.leaf.as_ref().unwrap() };
             // Copy the value before the physical deletion.
-            let temp_value = temp_leaf_node.value.as_ref().unwrap().clone();
-            if temp_leaf_node.key != *key {
-                return None;
+            let value = leaf_node.value.as_ref().unwrap().clone();
+            if leaf_node.key != *key {
+                return Ok(None);
             }
 
             // Try injecting the deletion flag.
             match record.leaf_addr().compare_and_set(
-                record.leaf,
-                record.leaf.with_tag(Marks::new(true, false).bits()),
+                leaf,
+                leaf.with_tag(Marks::new(true, false).bits()),
                 Ordering::AcqRel,
                 &guard,
             ) {
                 Ok(_) => {
                     // Finalize the node to be removed
-                    leaf = temp_leaf;
-                    value = temp_value;
                     if self.cleanup(&record, guard) {
-                        return Some(value);
+                        return Ok(Some(value));
                     }
+
                     // In-place cleanup failed. Enter the cleanup phase.
-                    break;
+                    break (leaf, value);
                 }
                 Err(e) => {
                     // Flagging failed.
                     // case 1. record.leaf_addr(e.current) points to another node: restart.
                     // case 2. Another thread flagged/tagged the edge to leaf: help and restart
                     // NOTE: The paper version checks if any of the mark is set, which is redundant.
-                    if record.leaf == e.current.with_tag(Marks::empty().bits()) {
+                    if leaf == e.current.with_tag(Marks::empty().bits()) {
                         self.cleanup(&record, guard);
                     }
                 }
             }
-        }
+        };
+
+        let leaf = Shared::from(leaf.as_raw());
 
         // cleanup phase
         loop {
-            record = self.seek(key, guard);
-            if record.leaf != leaf {
+            self.seek(key, record, guard)?;
+            if record.leaf.shared() != leaf {
                 // The edge to leaf flagged for deletion was removed by a helping thread
-                return Some(value);
+                return Ok(Some(value));
             }
 
             // leaf is still present in the tree.
             if self.cleanup(&record, guard) {
-                return Some(value);
+                return Ok(Some(value));
+            }
+        }
+    }
+
+    pub fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
+        let mut record = SeekRecord::new(guard);
+
+        // TODO(@jeehoonkang): we want to use `FindError::retry`, but it requires higher-kinded
+        // things...
+        loop {
+            match self.remove_inner(key, &mut record, guard) {
+                Ok(r) => return r,
+                Err(ShieldError::Ejected) => {
+                    unsafe {
+                        // HACK(@jeehoonkang): We wanted to say `guard.repin()`, which is totally
+                        // fine, but the current Rust's type checker cannot verify it.
+                        (&mut *(guard as &_ as *const _ as *mut Guard)).repin();
+                    }
+                }
             }
         }
     }
