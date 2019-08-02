@@ -317,10 +317,12 @@ where
     ) -> Option<&'g V> {
         self.get(handle, key, guard)
     }
+
     #[inline]
     fn insert(&self, handle: &mut Self::Handle, key: K, value: V, guard: &mut Guard) -> bool {
         self.insert(handle, key, value, guard)
     }
+
     #[inline]
     fn remove(&self, handle: &mut Self::Handle, key: &K, guard: &mut Guard) -> Option<V> {
         self.remove(handle, key, guard)

@@ -146,6 +146,13 @@ impl<K, V> SeekRecord<K, V> {
         }
     }
 
+    fn release(&mut self) {
+        self.ancestor.release();
+        self.successor.release();
+        self.parent.release();
+        self.leaf.release();
+    }
+
     fn successor_addr(&self) -> &Atomic<Node<K, V>> {
         match self.successor_dir {
             Direction::L => &unsafe { self.ancestor.deref() }.left,
@@ -236,7 +243,9 @@ where
         guard: &'g Guard,
     ) -> Result<(), ShieldError> {
         let s = self.r.left.load(Ordering::Relaxed, guard);
-        record.ancestor.defend(Shared::from(&self.r as *const _), guard)?;
+        record
+            .ancestor
+            .defend(Shared::from(&self.r as *const _), guard)?;
         record.successor.defend(s, guard)?;
         record.successor_dir = Direction::L;
 
@@ -359,15 +368,18 @@ where
         Ok(Some(leaf_node.value.as_ref().unwrap()))
     }
 
-    pub fn get<'g>(&'g self, key: &'g K, guard: &'g mut Guard) -> Option<&'g V> {
-        let mut record = SeekRecord::<K, V>::new(guard);
-
+    pub fn get<'g>(
+        &'g self,
+        key: &'g K,
+        record: &'g mut SeekRecord<K, V>,
+        guard: &'g mut Guard,
+    ) -> Option<&'g V> {
         // TODO(@jeehoonkang): we want to use `FindError::retry`, but it requires higher-kinded
         // things...
         loop {
             match self.get_inner(
                 key,
-                unsafe { &mut *(&mut record as &_ as *const _ as *mut SeekRecord<K, V>) },
+                unsafe { &mut *(record as &_ as *const _ as *mut SeekRecord<K, V>) },
                 guard,
             ) {
                 Ok(r) => return r,
@@ -449,13 +461,17 @@ where
         }
     }
 
-    pub fn insert(&self, key: K, mut value: V, guard: &Guard) -> Result<(), (K, V)> {
-        let mut record = SeekRecord::new(guard);
-
+    pub fn insert(
+        &self,
+        key: K,
+        mut value: V,
+        record: &mut SeekRecord<K, V>,
+        guard: &Guard,
+    ) -> Result<(), (K, V)> {
         // TODO(@jeehoonkang): we want to use `FindError::retry`, but it requires higher-kinded
         // things...
         loop {
-            match self.insert_inner(&key, value, &mut record, guard) {
+            match self.insert_inner(&key, value, record, guard) {
                 Ok(()) => return Ok(()),
                 Err((v, None)) => return Err((key, v)),
                 Err((v, Some(ShieldError::Ejected))) => {
@@ -538,13 +554,11 @@ where
         }
     }
 
-    pub fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
-        let mut record = SeekRecord::new(guard);
-
+    pub fn remove(&self, key: &K, record: &mut SeekRecord<K, V>, guard: &Guard) -> Option<V> {
         // TODO(@jeehoonkang): we want to use `FindError::retry`, but it requires higher-kinded
         // things...
         loop {
-            match self.remove_inner(key, &mut record, guard) {
+            match self.remove_inner(key, record, guard) {
                 Ok(r) => return r,
                 Err(ShieldError::Ejected) => {
                     unsafe {
@@ -558,27 +572,45 @@ where
     }
 }
 
-// impl<K, V> ConcurrentMap<K, V> for NMTreeMap<K, V>
-// where
-//     K: Ord + Clone,
-// {
-//     fn new() -> Self {
-//         Self::new()
-//     }
+impl<K, V> ConcurrentMap<K, V> for NMTreeMap<K, V>
+where
+    K: Ord + Clone + 'static,
+    V: Clone + 'static,
+{
+    type Handle = SeekRecord<K, V>;
 
-//     #[inline]
-//     fn get<'g>(&'g self, key: &'g K, guard: &'g mut Guard) -> Option<&'g V> {
-//         self.get(key, guard)
-//     }
-//     #[inline]
-//     fn insert(&self, key: K, value: V, guard: &mut Guard) -> bool {
-//         self.insert(key, value, guard)
-//     }
-//     #[inline]
-//     fn remove(&self, key: &K, guard: &mut Guard) -> Option<V> {
-//         self.remove(key, guard)
-//     }
-// }
+    fn new() -> Self {
+        Self::new()
+    }
+
+    fn handle(guard: &Guard) -> Self::Handle {
+        SeekRecord::new(guard)
+    }
+
+    fn clear(handle: &mut Self::Handle) {
+        handle.release();
+    }
+
+    #[inline]
+    fn get<'g>(
+        &'g self,
+        handle: &'g mut Self::Handle,
+        key: &'g K,
+        guard: &'g mut Guard,
+    ) -> Option<&'g V> {
+        self.get(key, handle, guard)
+    }
+
+    #[inline]
+    fn insert(&self, handle: &mut Self::Handle, key: K, value: V, guard: &mut Guard) -> bool {
+        self.insert(key, value, handle, guard).is_ok()
+    }
+
+    #[inline]
+    fn remove(&self, handle: &mut Self::Handle, key: &K, guard: &mut Guard) -> Option<V> {
+        self.remove(key, handle, guard)
+    }
+}
 
 #[cfg(test)]
 mod tests {
