@@ -32,3 +32,4 @@ rusty-tags.vi
 perf.data*
 *.svg
 jeprof.*
+.Rproj.user

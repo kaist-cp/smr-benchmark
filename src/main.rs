@@ -11,6 +11,7 @@ use rand::distributions::{Uniform, WeightedIndex};
 use rand::prelude::*;
 use std::cmp::min;
 use std::convert::TryInto;
+use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
@@ -43,6 +44,15 @@ pub enum OpsPerCs {
     Four,
 }
 
+impl fmt::Display for OpsPerCs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            OpsPerCs::One => write!(f, "1"),
+            OpsPerCs::Four => write!(f, "4"),
+        }
+    }
+}
+
 #[derive(PartialEq, Debug)]
 pub enum Op {
     Get,
@@ -59,7 +69,7 @@ struct Config {
     mm: MM,
     threads: usize,
     non_coop_threads: usize,
-    non_coop_period: usize,
+    non_coop: usize,
     get_rate: usize,
     key_dist: Uniform<usize>,
     prefill: usize,
@@ -146,6 +156,7 @@ fn main() {
                 .short("c")
                 .value_name("OPS_PER_CS")
                 .takes_value(true)
+                .possible_values(&["1", "4"])
                 .help("Operations per each critical section")
                 .default_value("1"),
         )
@@ -173,7 +184,7 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
     let ds = value_t!(m, "data structure", DS).unwrap();
     let mm = value_t!(m, "memory manager", MM).unwrap();
     let threads = value_t!(m, "threads", usize).unwrap();
-    let non_coop = m.occurrences_of("non-coop");
+    let non_coop = min(2, m.occurrences_of("non-coop")) as usize;
     let get_rate = min(2, m.occurrences_of("get rate")) as usize;
     let range = value_t!(m, "range", usize).unwrap();
     let key_dist = Uniform::from(0..range);
@@ -211,16 +222,17 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
                 .open(output_name)
                 .unwrap();
             let mut output = csv::Writer::from_writer(f);
+            // NOTE: `write_record` on `bench`
             output
                 .write_record(&[
                     "ds",
                     "mm",
                     "threads",
-                    "non_coop_threads",
-                    "non_coop_period",
+                    "non_coop",
                     "get_rate",
+                    "ops_per_cs",
                     "throughput",
-                    // TODO peak mem
+                    // TODO peak mem using jemalloc_ctl
                 ])
                 .unwrap();
             output.flush().unwrap();
@@ -231,8 +243,8 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
         ds,
         mm,
         threads,
-        non_coop_threads: min(non_coop, 1) as usize,
-        non_coop_period: min(non_coop, 2) as usize,
+        non_coop_threads: min(non_coop, 1),
+        non_coop,
         get_rate,
         key_dist,
         prefill,
@@ -294,9 +306,9 @@ fn bench<N: Integer>(config: &Config, output: &mut Writer<File>) {
             config.ds.to_string(),
             config.mm.to_string(),
             config.threads.to_string(),
-            config.non_coop_threads.to_string(),
-            config.non_coop_period.to_string(),
+            config.non_coop.to_string(),
             config.get_rate.to_string(),
+            config.ops_per_cs.to_string(),
             ops_per_sec.to_string(),
         ])
         .unwrap();
@@ -451,12 +463,12 @@ fn bench_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync, N: Integer>(
                 let start = Instant::now();
 
                 let mut guard = handle.pin();
-                if config.non_coop_period == 1 {
+                if config.non_coop == 1 {
                     while start.elapsed() < config.duration {
                         std::thread::sleep(Duration::from_millis(10));
                         guard.repin();
                     }
-                } else if config.non_coop_period == 2 {
+                } else if config.non_coop == 2 {
                     std::thread::sleep(Duration::from_millis(
                         (config.interval * 1000).try_into().unwrap(),
                     ));
@@ -534,12 +546,12 @@ fn bench_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync, N: Integer>(
                 let start = Instant::now();
 
                 let mut guard = handle.pin();
-                if config.non_coop_period == 1 {
+                if config.non_coop == 1 {
                     while start.elapsed() < config.duration {
                         std::thread::sleep(Duration::from_millis(10));
                         guard.repin();
                     }
-                } else if config.non_coop_period == 2 {
+                } else if config.non_coop == 2 {
                     std::thread::sleep(Duration::from_millis(
                         (config.interval * 1000).try_into().unwrap(),
                     ));
