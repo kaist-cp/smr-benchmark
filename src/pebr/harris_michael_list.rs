@@ -85,20 +85,16 @@ where
     fn find_inner<'g>(
         &'g self,
         key: &K,
-        c: &mut Cursor<K, V>,
+        cursor: &mut Cursor<K, V>,
         guard: &'g Guard,
     ) -> Result<bool, FindError> {
-        let mut cursor = mem::replace(c, Cursor::new(unsafe { unprotected() }));
-
         // HACK(@jeehoonkang): we're unsafely assuming the first 8 bytes of both `Node<K, V>` and
         // `List<K, V>` are `Atomic<Node<K, V>>`.
-        cursor
-            .prev
-            .defend(
-                unsafe { Shared::from_usize(&self.head as *const _ as usize) },
-                guard,
-            )
-            .map_err(FindError::ShieldError)?;
+        unsafe {
+            cursor
+                .prev
+                .defend_fake(Shared::from_usize(&self.head as *const _ as usize));
+        }
         cursor
             .curr
             .defend(self.head.load(Ordering::Acquire, guard), guard)
@@ -112,23 +108,11 @@ where
                 Some(c) => c,
             };
 
-            if unsafe { cursor.prev.deref() }
-                .next
-                .load(Ordering::Acquire, guard)
-                != cursor.curr.shared()
-            {
-                break Err(FindError::Retry);
-            }
-
             let mut next = curr_node.next.load(Ordering::Acquire, guard);
 
             if next.tag() == 0 {
                 match curr_node.key.cmp(key) {
-                    cmp::Ordering::Less => {
-                        let tmp = cursor.prev;
-                        cursor.prev = cursor.curr;
-                        cursor.curr = tmp;
-                    }
+                    cmp::Ordering::Less => mem::swap(&mut cursor.prev, &mut cursor.curr),
                     cmp::Ordering::Equal => break Ok(true),
                     cmp::Ordering::Greater => break Ok(false),
                 }
@@ -150,7 +134,6 @@ where
                 .map_err(|e| FindError::ShieldError(e))?;
         };
 
-        drop(mem::replace(c, cursor));
         result
     }
 

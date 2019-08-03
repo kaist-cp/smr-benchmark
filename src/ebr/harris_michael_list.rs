@@ -77,10 +77,6 @@ where
                 Some(c) => c,
             };
 
-            if cursor.prev.load(Ordering::Acquire, guard) != cursor.curr {
-                return Err(());
-            }
-
             let mut next = curr_node.next.load(Ordering::Acquire, guard);
 
             if next.tag() == 0 {
