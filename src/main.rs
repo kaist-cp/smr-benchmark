@@ -14,6 +14,7 @@ use std::convert::TryInto;
 use std::fs::{File, OpenOptions};
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
+use typenum::{Integer, P1, P4};
 
 use pebr_benchmark::ebr;
 use pebr_benchmark::pebr;
@@ -236,10 +237,10 @@ fn bench(config: &Config, output: &mut Writer<File>) {
             DS::BonsaiTree => bench_ebr::<ebr::BonsaiTreeMap<String, String>>(config),
         },
         MM::PEBR => match config.ds {
-            DS::List => bench_pebr::<pebr::List<String, String>>(config),
-            DS::HashMap => bench_pebr::<pebr::HashMap<String, String>>(config),
-            DS::NMTree => bench_pebr::<pebr::NMTreeMap<String, String>>(config),
-            DS::BonsaiTree => bench_pebr::<pebr::BonsaiTreeMap<String, String>>(config),
+            DS::List => bench_pebr::<pebr::List<String, String>, P1>(config),
+            DS::HashMap => bench_pebr::<pebr::HashMap<String, String>, P4>(config),
+            DS::NMTree => bench_pebr::<pebr::NMTreeMap<String, String>, P1>(config),
+            DS::BonsaiTree => bench_pebr::<pebr::BonsaiTreeMap<String, String>, P1>(config),
         },
     };
     output
@@ -404,7 +405,9 @@ fn bench_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(config: &Confi
     ops_per_sec
 }
 
-fn bench_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(config: &Config) -> i64 {
+fn bench_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync, N: Integer>(
+    config: &Config,
+) -> i64 {
     let map = &M::new();
 
     let collector = &crossbeam_pebr::Collector::new();
@@ -458,9 +461,9 @@ fn bench_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(config: &Con
                 let start = Instant::now();
 
                 // TODO: repin freq opt?
+                let mut guard = handle.pin();
                 while start.elapsed() < config.duration {
                     let key = config.key_dist.sample(&mut rng).to_string();
-                    let mut guard = handle.pin();
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
                         Op::Get => {
                             map.get(&mut map_handle, &key, &mut guard);
@@ -474,7 +477,10 @@ fn bench_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(config: &Con
                         }
                     }
                     ops += 1;
-                    M::clear(&mut map_handle);
+                    if ops % N::to_i64() == 0 {
+                        M::clear(&mut map_handle);
+                        guard.repin();
+                    }
                 }
 
                 sender.send(ops).unwrap();

@@ -13,6 +13,7 @@ crossbeam-utils = "0.6.5"
 csv = "1.1.1"
 jemallocator = "0.3"
 rand = "0.7"
+typenum = "1.10"
 
 # crossbeam-epoch = "0.7.1"
 [dependencies.crossbeam-ebr]
