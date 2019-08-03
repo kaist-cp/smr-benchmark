@@ -197,7 +197,7 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
                     "non_coop_period",
                     "get_rate",
                     "throughput",
-                    "avg_unreclaimed",
+                    // TODO peak mem
                 ])
                 .unwrap();
             output.flush().unwrap();
@@ -222,7 +222,7 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
 
 fn bench(config: &Config, output: &mut Writer<File>) {
     println!("{}: {}, {} threads", config.ds, config.mm, config.threads);
-    let (ops_per_sec, avg_unreclaimed) = match config.mm {
+    let ops_per_sec = match config.mm {
         MM::NR => match config.ds {
             DS::List => bench_nr::<ebr::List<String, String>>(config),
             DS::HashMap => bench_nr::<ebr::HashMap<String, String>>(config),
@@ -251,16 +251,14 @@ fn bench(config: &Config, output: &mut Writer<File>) {
             config.non_coop_period.to_string(),
             config.get_rate.to_string(),
             ops_per_sec.to_string(),
-            avg_unreclaimed.to_string(),
         ])
         .unwrap();
     output.flush().unwrap();
     println!("ops / sec = {}", ops_per_sec);
-    println!("avg unreclaimed at each op: {}", avg_unreclaimed);
 }
 
 // TODO: too much duplication
-fn bench_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(config: &Config) -> (i64, i64) {
+fn bench_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(config: &Config) -> i64 {
     let map = &M::new();
 
     for _ in 0..config.prefill {
@@ -317,10 +315,10 @@ fn bench_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(config: &Config
     }
 
     let ops_per_sec = ops / config.interval;
-    (ops_per_sec, 0)
+    ops_per_sec
 }
 
-fn bench_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(config: &Config) -> (i64, i64) {
+fn bench_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(config: &Config) -> i64 {
     let map = &M::new();
 
     let collector = &crossbeam_ebr::Collector::new();
@@ -368,9 +366,6 @@ fn bench_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(config: &Confi
                 let c = barrier.clone();
 
                 let mut ops: i64 = 0;
-                // Add up unreclaimed block numbers at the beginning of each op and then divide by
-                // total num of ops later.
-                let mut unreclaimd_acc: i64 = 0;
 
                 c.wait();
                 let start = Instant::now();
@@ -378,7 +373,6 @@ fn bench_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(config: &Confi
                 while start.elapsed() < config.duration {
                     let key = config.key_dist.sample(&mut rng).to_string();
                     let guard = handle.pin();
-                    unreclaimd_acc += handle.retired_unreclaimed();
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
                         Op::Get => {
                             map.get(&key, &guard);
@@ -394,29 +388,23 @@ fn bench_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(config: &Confi
                     ops += 1;
                 }
 
-                sender.send((ops, unreclaimd_acc)).unwrap();
+                sender.send(ops).unwrap();
             });
         }
     })
     .unwrap();
 
     let mut ops = 0;
-    let mut unreclaimed_acc = 0;
     for _ in 0..config.threads {
-        let (local_ops, local_unreclaimed_acc) = receiver.recv().unwrap();
+        let local_ops = receiver.recv().unwrap();
         ops += local_ops;
-        // First the local avg (w.r.t ops) of unreclaimed count.
-        // Then, compute the avg (w.r.t threads) of them.
-        unreclaimed_acc += local_unreclaimed_acc / local_ops;
     }
 
     let ops_per_sec = ops / config.interval;
-    let threads: i64 = config.threads.try_into().unwrap();
-    let avg_unreclaimed = unreclaimed_acc / threads;
-    (ops_per_sec, avg_unreclaimed)
+    ops_per_sec
 }
 
-fn bench_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(config: &Config) -> (i64, i64) {
+fn bench_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(config: &Config) -> i64 {
     let map = &M::new();
 
     let collector = &crossbeam_pebr::Collector::new();
@@ -465,9 +453,6 @@ fn bench_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(config: &Con
                 let c = barrier.clone();
 
                 let mut ops: i64 = 0;
-                // Add up unreclaimed block numbers at the beginning of each op and then divide by
-                // total num of ops later.
-                let mut unreclaimd_acc: i64 = 0;
 
                 c.wait();
                 let start = Instant::now();
@@ -476,7 +461,6 @@ fn bench_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(config: &Con
                 while start.elapsed() < config.duration {
                     let key = config.key_dist.sample(&mut rng).to_string();
                     let mut guard = handle.pin();
-                    unreclaimd_acc += handle.retired_unreclaimed();
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
                         Op::Get => {
                             map.get(&mut map_handle, &key, &mut guard);
@@ -493,24 +477,18 @@ fn bench_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(config: &Con
                     M::clear(&mut map_handle);
                 }
 
-                sender.send((ops, unreclaimd_acc)).unwrap();
+                sender.send(ops).unwrap();
             });
         }
     })
     .unwrap();
 
     let mut ops = 0;
-    let mut unreclaimed_acc = 0;
     for _ in 0..config.threads {
-        let (local_ops, local_unreclaimed_acc) = receiver.recv().unwrap();
+        let local_ops = receiver.recv().unwrap();
         ops += local_ops;
-        // First the local avg (w.r.t ops) of unreclaimed count.
-        // Then, compute the avg (w.r.t threads) of them.
-        unreclaimed_acc += local_unreclaimed_acc / local_ops;
     }
 
     let ops_per_sec = ops / config.interval;
-    let threads: i64 = config.threads.try_into().unwrap();
-    let avg_unreclaimed = unreclaimed_acc / threads;
-    (ops_per_sec, avg_unreclaimed)
+    ops_per_sec
 }

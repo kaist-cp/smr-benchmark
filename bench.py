@@ -4,13 +4,13 @@ import subprocess
 
 dss = ['List', 'HashMap', 'NMTree', 'BonsaiTree']
 mms = ['EBR', 'PEBR', 'NR']
-gs = ['', '-g', '-gg']
-ns = ['', '-n', '-nn']
-ts = [1] + list(range(5, 101, 5))
+gs = ['', '-gg']
+ns = ['-n', '-nn']
+ts = [1] + list(range(5, 76, 5))
 
 subprocess.run(['git', 'submodule', 'update', '--init'])
 
-run_cmd = ['cargo', 'run', '--release', '--']
+run_cmd = ['cargo', 'run', '--release', '--', '-i5']
 
 
 def opts(ds, mm, t, g='', n=''):
@@ -28,8 +28,10 @@ for ds in dss:
 
 # non-cooperative t (don't test NR)
 for ds in dss:
-    for n in ['-n', '-nn']:
-        for mm in ['EBR', 'PEBR']:
+    for n in ns:
+        for mm in mms:
+            if mm == "NR":
+                continue
             for t in map(str, ts):
                 subprocess.run(run_cmd + opts(ds, mm, t, n=n))
                 # print(' '.join(run_cmd + opts(ds, mm, t, n=n)))
