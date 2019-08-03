@@ -102,14 +102,18 @@ where
     }
 
     /// Destroy the newly created state (self) that lost the race (reclaim_state)
-    fn destroy(mut self) {
+    fn abort(&mut self) {
+        self.retired_nodes.clear();
+
         for node in self.new_nodes.drain(..) {
             drop(unsafe { node.into_owned() });
         }
     }
 
     /// Retire the old state replaced by the new_state and the new_state.retired_nodes
-    fn retire(mut self, guard: &Guard) {
+    fn commit(&mut self, guard: &Guard) {
+        self.new_nodes.clear();
+
         for node in self.retired_nodes.drain(..) {
             let node = node.load(Ordering::Relaxed, guard);
             unsafe {
@@ -584,13 +588,13 @@ where
     }
 
     pub fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
+        let mut state = State::new();
         loop {
             let old_root = self.root.load(Ordering::Acquire, guard);
-            let mut state = State::new();
             let (new_root, inserted) = state.do_insert(old_root, &key, &value, guard);
 
             if Node::is_retired(new_root) {
-                state.destroy();
+                state.abort();
                 continue;
             }
 
@@ -599,22 +603,22 @@ where
                 .compare_and_set(old_root, new_root, Ordering::AcqRel, guard)
                 .is_ok()
             {
-                state.retire(guard);
+                state.commit(guard);
                 return inserted;
             }
 
-            state.destroy();
+            state.abort();
         }
     }
 
     pub fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
+        let mut state = State::new();
         loop {
             let old_root = self.root.load(Ordering::Acquire, guard);
-            let mut state = State::new();
             let (new_root, value) = state.do_remove(old_root, key, guard);
 
             if Node::is_retired(new_root) {
-                state.destroy();
+                state.abort();
                 continue;
             }
 
@@ -623,11 +627,11 @@ where
                 .compare_and_set(old_root, new_root, Ordering::AcqRel, guard)
                 .is_ok()
             {
-                state.retire(guard);
+                state.commit(guard);
                 return value;
             }
 
-            state.destroy();
+            state.abort();
         }
     }
 }
