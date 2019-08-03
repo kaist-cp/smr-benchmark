@@ -95,18 +95,20 @@ where
                 .prev
                 .defend_fake(Shared::from_usize(&self.head as *const _ as usize));
         }
-        cursor
-            .curr
-            .defend(self.head.load(Ordering::Acquire, guard), guard)
-            .map_err(FindError::ShieldError)?;
+        let mut curr = self.head.load(Ordering::Acquire, guard);
 
         let result = loop {
-            debug_assert_eq!(cursor.curr.tag(), 0);
+            debug_assert_eq!(curr.tag(), 0);
+            if curr.is_null() {
+                unsafe { cursor.curr.defend_fake(curr) };
+                break Ok(false);
+            }
 
-            let curr_node = match unsafe { cursor.curr.as_ref() } {
-                None => break Ok(false),
-                Some(c) => c,
-            };
+            cursor
+                .curr
+                .defend(curr, guard)
+                .map_err(FindError::ShieldError)?;
+            let curr_node = unsafe { curr.deref() };
 
             let mut next = curr_node.next.load(Ordering::Acquire, guard);
 
@@ -119,7 +121,7 @@ where
             } else {
                 next = next.with_tag(0);
                 match unsafe { cursor.prev.deref() }.next.compare_and_set(
-                    cursor.curr.shared(),
+                    curr,
                     next,
                     Ordering::AcqRel,
                     guard,
@@ -128,10 +130,7 @@ where
                     Ok(_) => unsafe { guard.defer_destroy(cursor.curr.shared()) },
                 }
             }
-            cursor
-                .curr
-                .defend(next, guard)
-                .map_err(|e| FindError::ShieldError(e))?;
+            curr = next;
         };
 
         result
