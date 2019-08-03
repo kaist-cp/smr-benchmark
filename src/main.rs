@@ -14,7 +14,7 @@ use std::convert::TryInto;
 use std::fs::{File, OpenOptions};
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
-use typenum::{Integer, P4};
+use typenum::{Integer, P1, P4};
 
 use pebr_benchmark::ebr;
 use pebr_benchmark::pebr;
@@ -38,6 +38,11 @@ arg_enum! {
     }
 }
 
+pub enum OpsPerCs {
+    One,
+    Four,
+}
+
 #[derive(PartialEq, Debug)]
 pub enum Op {
     Get,
@@ -59,6 +64,7 @@ struct Config {
     key_dist: Uniform<usize>,
     prefill: usize,
     interval: i64,
+    ops_per_cs: OpsPerCs,
     duration: Duration,
     op_dist: WeightedIndex<i32>,
 }
@@ -136,6 +142,14 @@ fn main() {
                 .default_value("10"),
         )
         .arg(
+            Arg::with_name("ops per cs")
+                .short("n")
+                .value_name("OPS_PER_CS")
+                .takes_value(true)
+                .help("Operations per each critical section")
+                .default_value("1"),
+        )
+        .arg(
             Arg::with_name("output")
                 .short("o")
                 .value_name("OUTPUT")
@@ -149,7 +163,10 @@ fn main() {
         .get_matches();
 
     let (config, mut output) = setup(matches);
-    bench(&config, &mut output);
+    match config.ops_per_cs {
+        OpsPerCs::One => bench::<P1>(&config, &mut output),
+        OpsPerCs::Four => bench::<P4>(&config, &mut output),
+    }
 }
 
 fn setup(m: ArgMatches) -> (Config, Writer<File>) {
@@ -162,6 +179,11 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
     let key_dist = Uniform::from(0..range);
     let prefill = value_t!(m, "prefill", usize).unwrap();
     let interval: i64 = value_t!(m, "interval", usize).unwrap().try_into().unwrap();
+    let ops_per_cs = match value_t!(m, "ops per cs", usize).unwrap() {
+        1 => OpsPerCs::One,
+        4 => OpsPerCs::Four,
+        _ => panic!("ops_per_cs should be one or four"),
+    };
     let duration = Duration::from_secs(interval as u64);
 
     let op_weights = match get_rate {
@@ -215,32 +237,56 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
         key_dist,
         prefill,
         interval,
+        ops_per_cs,
         duration,
         op_dist,
     };
     (config, output)
 }
 
-fn bench(config: &Config, output: &mut Writer<File>) {
+fn bench<N: Integer>(config: &Config, output: &mut Writer<File>) {
     println!("{}: {}, {} threads", config.ds, config.mm, config.threads);
     let ops_per_sec = match config.mm {
         MM::NR => match config.ds {
             DS::List => bench_nr::<ebr::List<String, String>>(config, PrefillStrategy::Decreasing),
-            DS::HashMap => bench_nr::<ebr::HashMap<String, String>>(config, PrefillStrategy::Decreasing),
-            DS::NMTree => bench_nr::<ebr::NMTreeMap<String, String>>(config, PrefillStrategy::Random),
-            DS::BonsaiTree => bench_nr::<ebr::BonsaiTreeMap<String, String>>(config, PrefillStrategy::Random),
+            DS::HashMap => {
+                bench_nr::<ebr::HashMap<String, String>>(config, PrefillStrategy::Decreasing)
+            }
+            DS::NMTree => {
+                bench_nr::<ebr::NMTreeMap<String, String>>(config, PrefillStrategy::Random)
+            }
+            DS::BonsaiTree => {
+                bench_nr::<ebr::BonsaiTreeMap<String, String>>(config, PrefillStrategy::Random)
+            }
         },
         MM::EBR => match config.ds {
-            DS::List => bench_ebr::<ebr::List<String, String>, P4>(config, PrefillStrategy::Decreasing),
-            DS::HashMap => bench_ebr::<ebr::HashMap<String, String>, P4>(config, PrefillStrategy::Decreasing),
-            DS::NMTree => bench_ebr::<ebr::NMTreeMap<String, String>, P4>(config, PrefillStrategy::Random),
-            DS::BonsaiTree => bench_ebr::<ebr::BonsaiTreeMap<String, String>, P4>(config, PrefillStrategy::Random),
+            DS::List => {
+                bench_ebr::<ebr::List<String, String>, N>(config, PrefillStrategy::Decreasing)
+            }
+            DS::HashMap => {
+                bench_ebr::<ebr::HashMap<String, String>, N>(config, PrefillStrategy::Decreasing)
+            }
+            DS::NMTree => {
+                bench_ebr::<ebr::NMTreeMap<String, String>, N>(config, PrefillStrategy::Random)
+            }
+            DS::BonsaiTree => {
+                bench_ebr::<ebr::BonsaiTreeMap<String, String>, N>(config, PrefillStrategy::Random)
+            }
         },
         MM::PEBR => match config.ds {
-            DS::List => bench_pebr::<pebr::List<String, String>, P4>(config, PrefillStrategy::Decreasing),
-            DS::HashMap => bench_pebr::<pebr::HashMap<String, String>, P4>(config, PrefillStrategy::Decreasing),
-            DS::NMTree => bench_pebr::<pebr::NMTreeMap<String, String>, P4>(config, PrefillStrategy::Random),
-            DS::BonsaiTree => bench_pebr::<pebr::BonsaiTreeMap<String, String>, P4>(config, PrefillStrategy::Random),
+            DS::List => {
+                bench_pebr::<pebr::List<String, String>, N>(config, PrefillStrategy::Decreasing)
+            }
+            DS::HashMap => {
+                bench_pebr::<pebr::HashMap<String, String>, N>(config, PrefillStrategy::Decreasing)
+            }
+            DS::NMTree => {
+                bench_pebr::<pebr::NMTreeMap<String, String>, N>(config, PrefillStrategy::Random)
+            }
+            DS::BonsaiTree => bench_pebr::<pebr::BonsaiTreeMap<String, String>, N>(
+                config,
+                PrefillStrategy::Random,
+            ),
         },
     };
     output
@@ -265,7 +311,11 @@ enum PrefillStrategy {
 }
 
 impl PrefillStrategy {
-    fn prefill_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(self, config: &Config, map: &M) {
+    fn prefill_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
+        self,
+        config: &Config,
+        map: &M,
+    ) {
         let guard = unsafe { crossbeam_ebr::unprotected() };
         let mut rng = rand::thread_rng();
         match self {
@@ -292,7 +342,11 @@ impl PrefillStrategy {
         println!("prefilled");
     }
 
-    fn prefill_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(self, config: &Config, map: &M) {
+    fn prefill_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(
+        self,
+        config: &Config,
+        map: &M,
+    ) {
         let guard = unsafe { crossbeam_pebr::unprotected() };
         let mut handle = M::handle(guard);
         let mut rng = rand::thread_rng();
@@ -322,7 +376,10 @@ impl PrefillStrategy {
 }
 
 // TODO: too much duplication
-fn bench_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(config: &Config, strategy: PrefillStrategy) -> i64 {
+fn bench_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
+    config: &Config,
+    strategy: PrefillStrategy,
+) -> i64 {
     let map = &M::new();
     strategy.prefill_ebr(config, map);
 
@@ -374,7 +431,10 @@ fn bench_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(config: &Config
     ops_per_sec
 }
 
-fn bench_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync, N: Integer>(config: &Config, strategy: PrefillStrategy) -> i64 {
+fn bench_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync, N: Integer>(
+    config: &Config,
+    strategy: PrefillStrategy,
+) -> i64 {
     let map = &M::new();
     strategy.prefill_ebr(config, map);
 
