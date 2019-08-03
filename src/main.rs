@@ -14,7 +14,7 @@ use std::convert::TryInto;
 use std::fs::{File, OpenOptions};
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
-use typenum::{Integer, P1, P4};
+use typenum::{Integer, P4};
 
 use pebr_benchmark::ebr;
 use pebr_benchmark::pebr;
@@ -225,22 +225,22 @@ fn bench(config: &Config, output: &mut Writer<File>) {
     println!("{}: {}, {} threads", config.ds, config.mm, config.threads);
     let ops_per_sec = match config.mm {
         MM::NR => match config.ds {
-            DS::List => bench_nr::<ebr::List<String, String>>(config),
-            DS::HashMap => bench_nr::<ebr::HashMap<String, String>>(config),
-            DS::NMTree => bench_nr::<ebr::NMTreeMap<String, String>>(config),
-            DS::BonsaiTree => bench_nr::<ebr::BonsaiTreeMap<String, String>>(config),
+            DS::List => bench_nr::<ebr::List<String, String>>(config, PrefillStrategy::Decreasing),
+            DS::HashMap => bench_nr::<ebr::HashMap<String, String>>(config, PrefillStrategy::Decreasing),
+            DS::NMTree => bench_nr::<ebr::NMTreeMap<String, String>>(config, PrefillStrategy::Random),
+            DS::BonsaiTree => bench_nr::<ebr::BonsaiTreeMap<String, String>>(config, PrefillStrategy::Random),
         },
         MM::EBR => match config.ds {
-            DS::List => bench_ebr::<ebr::List<String, String>>(config),
-            DS::HashMap => bench_ebr::<ebr::HashMap<String, String>>(config),
-            DS::NMTree => bench_ebr::<ebr::NMTreeMap<String, String>>(config),
-            DS::BonsaiTree => bench_ebr::<ebr::BonsaiTreeMap<String, String>>(config),
+            DS::List => bench_ebr::<ebr::List<String, String>, P4>(config, PrefillStrategy::Decreasing),
+            DS::HashMap => bench_ebr::<ebr::HashMap<String, String>, P4>(config, PrefillStrategy::Decreasing),
+            DS::NMTree => bench_ebr::<ebr::NMTreeMap<String, String>, P4>(config, PrefillStrategy::Random),
+            DS::BonsaiTree => bench_ebr::<ebr::BonsaiTreeMap<String, String>, P4>(config, PrefillStrategy::Random),
         },
         MM::PEBR => match config.ds {
-            DS::List => bench_pebr::<pebr::List<String, String>, P1>(config),
-            DS::HashMap => bench_pebr::<pebr::HashMap<String, String>, P4>(config),
-            DS::NMTree => bench_pebr::<pebr::NMTreeMap<String, String>, P1>(config),
-            DS::BonsaiTree => bench_pebr::<pebr::BonsaiTreeMap<String, String>, P1>(config),
+            DS::List => bench_pebr::<pebr::List<String, String>, P4>(config, PrefillStrategy::Decreasing),
+            DS::HashMap => bench_pebr::<pebr::HashMap<String, String>, P4>(config, PrefillStrategy::Decreasing),
+            DS::NMTree => bench_pebr::<pebr::NMTreeMap<String, String>, P4>(config, PrefillStrategy::Random),
+            DS::BonsaiTree => bench_pebr::<pebr::BonsaiTreeMap<String, String>, P4>(config, PrefillStrategy::Random),
         },
     };
     output
@@ -258,18 +258,73 @@ fn bench(config: &Config, output: &mut Writer<File>) {
     println!("ops / sec = {}", ops_per_sec);
 }
 
-// TODO: too much duplication
-fn bench_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(config: &Config) -> i64 {
-    let map = &M::new();
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrefillStrategy {
+    Random,
+    Decreasing,
+}
 
-    for _ in 0..config.prefill {
+impl PrefillStrategy {
+    fn prefill_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(self, config: &Config, map: &M) {
+        let guard = unsafe { crossbeam_ebr::unprotected() };
         let mut rng = rand::thread_rng();
-        let key = config.key_dist.sample(&mut rng).to_string();
-        let value = key.clone();
-        map.insert(key, value, unsafe { crossbeam_ebr::unprotected() });
+        match self {
+            PrefillStrategy::Random => {
+                for _ in 0..config.prefill {
+                    let key = config.key_dist.sample(&mut rng).to_string();
+                    let value = key.clone();
+                    map.insert(key, value, guard);
+                }
+            }
+            PrefillStrategy::Decreasing => {
+                let mut keys = Vec::with_capacity(config.prefill);
+                for _ in 0..config.prefill {
+                    keys.push(config.key_dist.sample(&mut rng));
+                }
+                keys.sort_by(|a, b| b.cmp(a));
+                for k in keys.drain(..) {
+                    let key = k.to_string();
+                    let value = key.clone();
+                    map.insert(key, value, guard);
+                }
+            }
+        }
+        println!("prefilled");
     }
 
-    println!("prefilled");
+    fn prefill_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(self, config: &Config, map: &M) {
+        let guard = unsafe { crossbeam_pebr::unprotected() };
+        let mut handle = M::handle(guard);
+        let mut rng = rand::thread_rng();
+        match self {
+            PrefillStrategy::Random => {
+                for _ in 0..config.prefill {
+                    let key = config.key_dist.sample(&mut rng).to_string();
+                    let value = key.clone();
+                    map.insert(&mut handle, key, value, guard);
+                }
+            }
+            PrefillStrategy::Decreasing => {
+                let mut keys = Vec::with_capacity(config.prefill);
+                for _ in 0..config.prefill {
+                    keys.push(config.key_dist.sample(&mut rng));
+                }
+                keys.sort_by(|a, b| b.cmp(a));
+                for k in keys.drain(..) {
+                    let key = k.to_string();
+                    let value = key.clone();
+                    map.insert(&mut handle, key, value, guard);
+                }
+            }
+        }
+        println!("prefilled");
+    }
+}
+
+// TODO: too much duplication
+fn bench_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(config: &Config, strategy: PrefillStrategy) -> i64 {
+    let map = &M::new();
+    strategy.prefill_ebr(config, map);
 
     let barrier = &Arc::new(Barrier::new(config.threads));
     let (sender, receiver) = mpsc::channel();
@@ -319,21 +374,11 @@ fn bench_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(config: &Config
     ops_per_sec
 }
 
-fn bench_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(config: &Config) -> i64 {
+fn bench_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync, N: Integer>(config: &Config, strategy: PrefillStrategy) -> i64 {
     let map = &M::new();
+    strategy.prefill_ebr(config, map);
 
     let collector = &crossbeam_ebr::Collector::new();
-    let main_handle = collector.register();
-
-    for _ in 0..config.prefill {
-        let mut rng = rand::thread_rng();
-        let guard = main_handle.pin();
-        let key = config.key_dist.sample(&mut rng).to_string();
-        let value = key.clone();
-        map.insert(key, value, &guard);
-    }
-
-    println!("prefilled");
 
     let barrier = &Arc::new(Barrier::new(config.threads + config.non_coop_threads));
     let (sender, receiver) = mpsc::channel();
@@ -371,9 +416,9 @@ fn bench_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(config: &Confi
                 c.wait();
                 let start = Instant::now();
 
+                let mut guard = handle.pin();
                 while start.elapsed() < config.duration {
                     let key = config.key_dist.sample(&mut rng).to_string();
-                    let guard = handle.pin();
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
                         Op::Get => {
                             map.get(&key, &guard);
@@ -387,6 +432,10 @@ fn bench_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(config: &Confi
                         }
                     }
                     ops += 1;
+                    if ops % N::to_i64() == 0 {
+                        drop(guard);
+                        guard = handle.pin();
+                    }
                 }
 
                 sender.send(ops).unwrap();
@@ -407,21 +456,12 @@ fn bench_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(config: &Confi
 
 fn bench_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync, N: Integer>(
     config: &Config,
+    strategy: PrefillStrategy,
 ) -> i64 {
     let map = &M::new();
+    strategy.prefill_pebr(config, map);
 
     let collector = &crossbeam_pebr::Collector::new();
-
-    let guard = unsafe { crossbeam_pebr::unprotected() };
-    let mut handle = M::handle(guard);
-    for _ in 0..config.prefill {
-        let mut rng = rand::thread_rng();
-        let key = config.key_dist.sample(&mut rng).to_string();
-        let value = key.clone();
-        map.insert(&mut handle, key, value, guard);
-    }
-
-    println!("prefilled");
 
     let barrier = &Arc::new(Barrier::new(config.threads + config.non_coop_threads));
     let (sender, receiver) = mpsc::channel();
