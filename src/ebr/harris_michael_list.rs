@@ -1,10 +1,10 @@
 use super::concurrent_map::ConcurrentMap;
 use crossbeam_ebr::{unprotected, Atomic, Guard, Owned, Shared};
 
+use std::cmp;
 use std::mem::ManuallyDrop;
 use std::ptr;
 use std::sync::atomic::Ordering;
-use std::cmp;
 
 #[derive(Debug)]
 struct Node<K, V> {

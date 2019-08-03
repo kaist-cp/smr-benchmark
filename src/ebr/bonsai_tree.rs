@@ -2,8 +2,8 @@ use crossbeam_ebr::{unprotected, Atomic, Guard, Owned, Shared};
 
 use super::concurrent_map::ConcurrentMap;
 
-use std::sync::atomic::Ordering;
 use std::cmp;
+use std::sync::atomic::Ordering;
 
 static WEIGHT: usize = 2;
 

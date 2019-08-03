@@ -9,8 +9,8 @@ use crossbeam_utils::thread::scope;
 use csv::Writer;
 use rand::distributions::{Uniform, WeightedIndex};
 use rand::prelude::*;
-use std::convert::TryInto;
 use std::cmp::min;
+use std::convert::TryInto;
 use std::fs::{File, OpenOptions};
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
@@ -107,7 +107,7 @@ fn main() {
                 .multiple(true)
                 .help(
                     "The proportion of `get`(read) operations. \
-                    none: 0%, -g: 50%, -gg: 90%",
+                     none: 0%, -g: 50%, -gg: 90%",
                 ),
         )
         .arg(

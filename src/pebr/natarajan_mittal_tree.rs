@@ -1,8 +1,8 @@
 use crossbeam_pebr::{unprotected, Atomic, Guard, Owned, Shared, Shield, ShieldError};
 
 use super::concurrent_map::ConcurrentMap;
-use std::mem;
 use std::cmp;
+use std::mem;
 use std::sync::atomic::Ordering;
 
 bitflags! {
@@ -442,7 +442,7 @@ where
                     drop(new_leaf.into_owned());
                     drop(new_internal.into_owned());
                     return Err((value, None));
-                }
+                },
                 cmp::Ordering::Greater => (new_leaf, leaf),
                 cmp::Ordering::Less => (leaf, new_leaf),
             };

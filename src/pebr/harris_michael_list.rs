@@ -1,10 +1,10 @@
 use super::concurrent_map::ConcurrentMap;
 use crossbeam_pebr::{unprotected, Atomic, Guard, Owned, Pointer, Shared, Shield, ShieldError};
 
+use std::cmp;
 use std::mem::{self, ManuallyDrop};
 use std::ptr;
 use std::sync::atomic::Ordering;
-use std::cmp;
 
 #[derive(Debug)]
 struct Node<K, V> {
@@ -128,7 +128,7 @@ where
                         let tmp = cursor.prev;
                         cursor.prev = cursor.curr;
                         cursor.curr = tmp;
-                    },
+                    }
                     cmp::Ordering::Equal => break Ok(true),
                     cmp::Ordering::Greater => break Ok(false),
                 }
