@@ -143,7 +143,7 @@ fn main() {
         )
         .arg(
             Arg::with_name("ops per cs")
-                .short("n")
+                .short("c")
                 .value_name("OPS_PER_CS")
                 .takes_value(true)
                 .help("Operations per each critical section")
