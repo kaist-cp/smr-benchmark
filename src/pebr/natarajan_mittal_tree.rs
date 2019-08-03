@@ -2,6 +2,7 @@ use crossbeam_pebr::{unprotected, Atomic, Guard, Owned, Shared, Shield, ShieldEr
 
 use super::concurrent_map::ConcurrentMap;
 use std::mem;
+use std::cmp;
 use std::sync::atomic::Ordering;
 
 bitflags! {
@@ -69,6 +70,18 @@ where
         match self {
             Key::Fin(k) => k.partial_cmp(rhs),
             _ => Some(std::cmp::Ordering::Greater),
+        }
+    }
+}
+
+impl<K> Key<K>
+where
+    K: Ord,
+{
+    fn cmp(&self, rhs: &K) -> std::cmp::Ordering {
+        match self {
+            Key::Fin(k) => k.cmp(rhs),
+            _ => std::cmp::Ordering::Greater,
         }
     }
 }
@@ -421,22 +434,17 @@ where
                 (value, Some(e))
             })?;
             let leaf = record.leaf.shared();
-            let leaf_node = unsafe { leaf.deref() };
 
-            if leaf_node.key == *key {
-                // Newly created nodes that failed to be inserted are free'd here.
-                unsafe {
+            let (new_left, new_right) = match unsafe { leaf.deref() }.key.cmp(key) {
+                cmp::Ordering::Equal => unsafe {
+                    // Newly created nodes that failed to be inserted are free'd here.
                     let value = new_leaf.deref_mut().value.take().unwrap();
                     drop(new_leaf.into_owned());
                     drop(new_internal.into_owned());
                     return Err((value, None));
                 }
-            }
-
-            let (new_left, new_right) = if leaf_node.key > *key {
-                (new_leaf, leaf)
-            } else {
-                (leaf, new_leaf)
+                cmp::Ordering::Greater => (new_leaf, leaf),
+                cmp::Ordering::Less => (leaf, new_leaf),
             };
 
             let new_internal_node = unsafe { new_internal.deref_mut() };

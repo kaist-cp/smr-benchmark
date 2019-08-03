@@ -4,6 +4,7 @@ use crossbeam_pebr::{unprotected, Atomic, Guard, Owned, Pointer, Shared, Shield,
 use std::mem::{self, ManuallyDrop};
 use std::ptr;
 use std::sync::atomic::Ordering;
+use std::cmp;
 
 #[derive(Debug)]
 struct Node<K, V> {
@@ -121,14 +122,16 @@ where
 
             let mut next = curr_node.next.load(Ordering::Acquire, guard);
 
-            let curr_key = &curr_node.key;
             if next.tag() == 0 {
-                if curr_key >= key {
-                    break Ok(curr_key == key);
+                match curr_node.key.cmp(key) {
+                    cmp::Ordering::Less => {
+                        let tmp = cursor.prev;
+                        cursor.prev = cursor.curr;
+                        cursor.curr = tmp;
+                    },
+                    cmp::Ordering::Equal => break Ok(true),
+                    cmp::Ordering::Greater => break Ok(false),
                 }
-                let tmp = cursor.prev;
-                cursor.prev = cursor.curr;
-                cursor.curr = tmp;
             } else {
                 next = next.with_tag(0);
                 match unsafe { cursor.prev.deref() }.next.compare_and_set(

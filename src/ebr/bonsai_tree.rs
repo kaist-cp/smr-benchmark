@@ -3,6 +3,7 @@ use crossbeam_ebr::{unprotected, Atomic, Guard, Owned, Shared};
 use super::concurrent_map::ConcurrentMap;
 
 use std::sync::atomic::Ordering;
+use std::cmp;
 
 static WEIGHT: usize = 2;
 
@@ -413,15 +414,17 @@ where
             return (Node::retired_node(), false);
         }
 
-        if *key < node_ref.key {
-            let (new_left, inserted) = self.do_insert(left, key, value, guard);
-            return (self.mk_balanced(node, new_left, right, guard), inserted);
+        match node_ref.key.cmp(key) {
+            cmp::Ordering::Equal => (node, false),
+            cmp::Ordering::Less => {
+                let (new_right, inserted) = self.do_insert(right, key, value, guard);
+                (self.mk_balanced(node, left, new_right, guard), inserted)
+            }
+            cmp::Ordering::Greater => {
+                let (new_left, inserted) = self.do_insert(left, key, value, guard);
+                (self.mk_balanced(node, new_left, right, guard), inserted)
+            }
         }
-        if *key > node_ref.key {
-            let (new_right, inserted) = self.do_insert(right, key, value, guard);
-            return (self.mk_balanced(node, left, new_right, guard), inserted);
-        }
-        (node, false)
     }
 
     #[inline]
@@ -447,27 +450,29 @@ where
             return (Node::retired_node(), None);
         }
 
-        if *key == node_ref.key {
-            let value = Some(node_ref.value.clone());
-            self.retire_node(node);
-            if node_ref.size == 1 {
-                return (Shared::null(), value);
-            }
+        match node_ref.key.cmp(key) {
+            cmp::Ordering::Equal => {
+                let value = Some(node_ref.value.clone());
+                self.retire_node(node);
+                if node_ref.size == 1 {
+                    return (Shared::null(), value);
+                }
 
-            if !left.is_null() {
-                let (new_left, succ) = self.pull_rightmost(left, guard);
-                return (self.mk_balanced(succ, new_left, right, guard), value);
+                if !left.is_null() {
+                    let (new_left, succ) = self.pull_rightmost(left, guard);
+                    return (self.mk_balanced(succ, new_left, right, guard), value);
+                }
+                let (new_right, succ) = self.pull_leftmost(right, guard);
+                (self.mk_balanced(succ, left, new_right, guard), value)
             }
-            let (new_right, succ) = self.pull_leftmost(right, guard);
-            return (self.mk_balanced(succ, left, new_right, guard), value);
-        }
-
-        if *key < node_ref.key {
-            let (new_left, value) = self.do_remove(left, key, guard);
-            return (self.mk_balanced(node, new_left, right, guard), value);
-        } else {
-            let (new_right, value) = self.do_remove(right, key, guard);
-            return (self.mk_balanced(node, left, new_right, guard), value);
+            cmp::Ordering::Less => {
+                let (new_right, value) = self.do_remove(right, key, guard);
+                (self.mk_balanced(node, left, new_right, guard), value)
+            }
+            cmp::Ordering::Greater => {
+                let (new_left, value) = self.do_remove(left, key, guard);
+                (self.mk_balanced(node, new_left, right, guard), value)
+            }
         }
     }
 
@@ -558,13 +563,10 @@ where
             let mut node = self.root.load(Ordering::Acquire, guard);
             while !node.is_null() && !Node::is_retired(node) {
                 let node_ref = unsafe { node.deref() };
-                if *key == node_ref.key {
-                    break;
-                }
-                node = if *key < node_ref.key {
-                    node_ref.left.load(Ordering::Acquire, guard)
-                } else {
-                    node_ref.right.load(Ordering::Acquire, guard)
+                match key.cmp(&node_ref.key) {
+                    cmp::Ordering::Equal => break,
+                    cmp::Ordering::Less => node = node_ref.left.load(Ordering::Acquire, guard),
+                    cmp::Ordering::Greater => node = node_ref.right.load(Ordering::Acquire, guard),
                 }
             }
 
