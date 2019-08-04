@@ -266,7 +266,7 @@ where
 
             // update other variables
             prev_tag = Marks::from_bits_truncate(curr.tag()).tag();
-            if curr_node.key > *key {
+            if curr_node.key.cmp(key) == cmp::Ordering::Greater {
                 curr_dir = Direction::L;
                 curr = curr_node.left.load(Ordering::Acquire, guard);
             } else {
@@ -340,7 +340,7 @@ where
         let record = self.seek(key, guard);
         let leaf_node = unsafe { record.leaf.deref() };
 
-        if leaf_node.key != *key {
+        if leaf_node.key.cmp(key) != cmp::Ordering::Equal {
             return None;
         }
 
@@ -413,11 +413,13 @@ where
             // candidates
             let temp_leaf = record.leaf;
             let temp_leaf_node = unsafe { record.leaf.as_ref().unwrap() };
-            // Copy the value before the physical deletion.
-            let temp_value = temp_leaf_node.value.as_ref().unwrap().clone();
-            if temp_leaf_node.key != *key {
+
+            if temp_leaf_node.key.cmp(key) != cmp::Ordering::Equal {
                 return None;
             }
+
+            // Copy the value before the physical deletion.
+            let temp_value = temp_leaf_node.value.as_ref().unwrap().clone();
 
             // Try injecting the deletion flag.
             match record.leaf_addr().compare_and_set(
