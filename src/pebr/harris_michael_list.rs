@@ -127,7 +127,7 @@ where
                     guard,
                 ) {
                     Err(_) => break Err(FindError::Retry),
-                    Ok(_) => unsafe { guard.defer_destroy(cursor.curr.shared()) },
+                    Ok(_) => unsafe { guard.defer_destroy(curr) },
                 }
             }
             curr = next;
@@ -181,6 +181,7 @@ where
             if found {
                 unsafe {
                     ManuallyDrop::drop(&mut node.deref_mut().value);
+                    drop(node.into_owned());
                 }
                 return Ok(false);
             }
@@ -241,16 +242,12 @@ where
                 continue;
             }
 
-            match unsafe { cursor.prev.deref() }.next.compare_and_set(
-                cursor.curr.shared(),
-                next,
-                Ordering::AcqRel,
-                guard,
-            ) {
-                Ok(_) => unsafe { guard.defer_destroy(cursor.curr.shared()) },
-                Err(_) => {
-                    self.find_inner(key, cursor, guard)?;
-                }
+            if unsafe { cursor.prev.deref() }
+                .next
+                .compare_and_set(cursor.curr.shared(), next, Ordering::AcqRel, guard)
+                .is_ok()
+            {
+                unsafe { guard.defer_destroy(cursor.curr.shared()) };
             }
 
             return Ok(Some(ManuallyDrop::into_inner(value)));

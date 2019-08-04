@@ -355,7 +355,10 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
         ])
         .unwrap();
     output.flush().unwrap();
-    println!("ops/s: {}, peak mem: {}, avg_mem: {}", ops_per_sec, peak_mem, avg_mem);
+    println!(
+        "ops/s: {}, peak mem: {}, avg_mem: {}",
+        ops_per_sec, peak_mem, avg_mem
+    );
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

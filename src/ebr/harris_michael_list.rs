@@ -159,14 +159,12 @@ where
                 continue;
             }
 
-            match cursor
+            if cursor
                 .prev
                 .compare_and_set(cursor.curr, next, Ordering::AcqRel, &guard)
+                .is_ok()
             {
-                Ok(_) => unsafe { guard.defer_destroy(cursor.curr) },
-                Err(_) => {
-                    self.find(key, &guard);
-                }
+                unsafe { guard.defer_destroy(cursor.curr) };
             }
 
             return Some(ManuallyDrop::into_inner(value));
