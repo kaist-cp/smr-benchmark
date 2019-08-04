@@ -8,14 +8,15 @@ edition = "2018"
 
 [dependencies]
 bitflags = "1.0"
+chrono = "0.4"
 clap = "2.33.0"
 crossbeam-utils = "0.6.5"
 csv = "1.1.1"
 jemallocator = "0.3"
+jemalloc-ctl = "0.3"
 rand = "0.7"
 typenum = "1.10"
 
-# crossbeam-epoch = "0.7.1"
 [dependencies.crossbeam-ebr]
 package = "crossbeam-epoch"
 path = "crossbeam-ebr/crossbeam-epoch"
@@ -24,8 +25,10 @@ path = "crossbeam-ebr/crossbeam-epoch"
 package = "crossbeam-pebr-epoch"
 path = "crossbeam-pebr/crossbeam-epoch"
 
+# TODO: remove this
 [profile.release]
 debug = true
 
+# TODO: maybe not needed
 [features]
 profiling = ['jemallocator/profiling']
