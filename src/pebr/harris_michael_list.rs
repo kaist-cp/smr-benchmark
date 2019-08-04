@@ -37,8 +37,10 @@ impl<K, V> Drop for List<K, V> {
 
             while !curr.is_null() {
                 let curr_ref = curr.deref_mut();
-                ManuallyDrop::drop(&mut curr_ref.value);
                 let next = curr_ref.next.load(Ordering::Relaxed, unprotected());
+                if next.tag() == 0 {
+                    ManuallyDrop::drop(&mut curr_ref.value);
+                }
                 drop(curr.into_owned());
                 curr = next;
             }
