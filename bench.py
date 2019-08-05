@@ -9,8 +9,7 @@ cs = ['1', '4']
 
 subprocess.run(['git', 'submodule', 'update', '--init'])
 
-# TODO: i1
-run_cmd = ['cargo', 'run', '--release', '--', '-i1', '-s1']
+run_cmd = ['cargo', 'run', '--release', '--', '-i8', '-s1']
 
 
 def opts(ds, mm, t, c=1, g='', n=''):
@@ -23,6 +22,8 @@ def opts(ds, mm, t, c=1, g='', n=''):
 for ds in dss:
     for n in ns:
         for mm in mms:
+            if mm == 'NR' and n != '':
+                continue
             for t in ts:
                 if ds == 'HashMap':
                     cmd = run_cmd + opts(ds, mm, t, c=4, n=n)
