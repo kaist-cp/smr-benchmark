@@ -179,24 +179,21 @@ where
         }
 
         let cur_ref = unsafe { cur.deref() };
+        let key = cur_ref.key.clone();
+        let value = cur_ref.value.clone();
+
         let l_size = Node::node_size(left);
         let r_size = Node::node_size(right);
         let res = if r_size > 0
             && ((l_size > 0 && r_size > WEIGHT * l_size) || (l_size == 0 && r_size > WEIGHT))
         {
-            self.mk_balanced_left(left, right, &cur_ref.key, &cur_ref.value, guard)
+            self.mk_balanced_left(left, right, key, value, guard)
         } else if l_size > 0
             && ((r_size > 0 && l_size > WEIGHT * r_size) || (r_size == 0 && l_size > WEIGHT))
         {
-            self.mk_balanced_right(left, right, &cur_ref.key, &cur_ref.value, guard)
+            self.mk_balanced_right(left, right, key, value, guard)
         } else {
-            self.mk_node(
-                left,
-                right,
-                cur_ref.key.clone(),
-                cur_ref.value.clone(),
-                guard,
-            )
+            self.mk_node(left, right, key, value, guard)
         };
         self.retire_node(cur);
         res
@@ -207,8 +204,8 @@ where
         &mut self,
         left: Shared<'g, Node<K, V>>,
         right: Shared<'g, Node<K, V>>,
-        key: &K,
-        value: &V,
+        key: K,
+        value: V,
         guard: &'g Guard,
     ) -> Shared<'g, Node<K, V>> {
         let right_ref = unsafe { right.deref() };
@@ -235,12 +232,12 @@ where
         right: Shared<'g, Node<K, V>>,
         right_left: Shared<'g, Node<K, V>>,
         right_right: Shared<'g, Node<K, V>>,
-        key: &K,
-        value: &V,
+        key: K,
+        value: V,
         guard: &'g Guard,
     ) -> Shared<'g, Node<K, V>> {
         let right_ref = unsafe { right.deref() };
-        let new_left = self.mk_node(left, right_left, key.clone(), value.clone(), guard);
+        let new_left = self.mk_node(left, right_left, key, value, guard);
         let res = self.mk_node(
             new_left,
             right_right,
@@ -259,8 +256,8 @@ where
         right: Shared<'g, Node<K, V>>,
         right_left: Shared<'g, Node<K, V>>,
         right_right: Shared<'g, Node<K, V>>,
-        key: &K,
-        value: &V,
+        key: K,
+        value: V,
         guard: &'g Guard,
     ) -> Shared<'g, Node<K, V>> {
         let right_ref = unsafe { right.deref() };
@@ -274,7 +271,7 @@ where
             return Node::retired_node();
         }
 
-        let new_left = self.mk_node(left, right_left_left, key.clone(), value.clone(), guard);
+        let new_left = self.mk_node(left, right_left_left, key, value, guard);
         let new_right = self.mk_node(
             right_left_right,
             right_right,
@@ -299,8 +296,8 @@ where
         &mut self,
         left: Shared<'g, Node<K, V>>,
         right: Shared<'g, Node<K, V>>,
-        key: &K,
-        value: &V,
+        key: K,
+        value: V,
         guard: &'g Guard,
     ) -> Shared<'g, Node<K, V>> {
         let left_ref = unsafe { left.deref() };
@@ -326,12 +323,12 @@ where
         right: Shared<'g, Node<K, V>>,
         left_right: Shared<'g, Node<K, V>>,
         left_left: Shared<'g, Node<K, V>>,
-        key: &K,
-        value: &V,
+        key: K,
+        value: V,
         guard: &'g Guard,
     ) -> Shared<'g, Node<K, V>> {
         let left_ref = unsafe { left.deref() };
-        let new_right = self.mk_node(left_right, right, key.clone(), value.clone(), guard);
+        let new_right = self.mk_node(left_right, right, key, value, guard);
         let res = self.mk_node(
             left_left,
             new_right,
@@ -350,8 +347,8 @@ where
         right: Shared<'g, Node<K, V>>,
         left_right: Shared<'g, Node<K, V>>,
         left_left: Shared<'g, Node<K, V>>,
-        key: &K,
-        value: &V,
+        key: K,
+        value: V,
         guard: &'g Guard,
     ) -> Shared<'g, Node<K, V>> {
         let left_ref = unsafe { left.deref() };
@@ -372,7 +369,7 @@ where
             left_ref.value.clone(),
             guard,
         );
-        let new_right = self.mk_node(left_right_right, right, key.clone(), value.clone(), guard);
+        let new_right = self.mk_node(left_right_right, right, key, value, guard);
         let res = self.mk_node(
             new_left,
             new_right,

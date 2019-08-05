@@ -192,11 +192,11 @@ where
         let res = if r_size > 0
             && ((l_size > 0 && r_size > WEIGHT * l_size) || (l_size == 0 && r_size > WEIGHT))
         {
-            self.mk_balanced_left(left, right, key, value, guard)
+            Ok(self.mk_balanced_left(left, right, key, value, guard))
         } else if l_size > 0
             && ((r_size > 0 && l_size > WEIGHT * r_size) || (r_size == 0 && l_size > WEIGHT))
         {
-            self.mk_balanced_right(left, right, key, value, guard)
+            Ok(self.mk_balanced_right(left, right, key, value, guard))
         } else {
             Ok(self.mk_node(left, right, key, value, guard))
         };
@@ -212,13 +212,13 @@ where
         key: K,
         value: V,
         guard: &'g Guard,
-    ) -> Result<Shared<'g, Node<K, V>>, ShieldError> {
+    ) -> Shared<'g, Node<K, V>> {
         let right_ref = unsafe { right.deref() };
         let right_left = right_ref.left.load(Ordering::Acquire, guard);
         let right_right = right_ref.right.load(Ordering::Acquire, guard);
 
         if Node::is_retired_spot(right_left, guard) || Node::is_retired_spot(right_right, guard) {
-            return Ok(Node::retired_node());
+            return Node::retired_node();
         }
 
         if Node::node_size(right_left) < Node::node_size(right_right) {
@@ -240,7 +240,7 @@ where
         key: K,
         value: V,
         guard: &'g Guard,
-    ) -> Result<Shared<'g, Node<K, V>>, ShieldError> {
+    ) -> Shared<'g, Node<K, V>> {
         let right_ref = unsafe { right.deref() };
         let new_left = self.mk_node(left, right_left, key, value, guard);
         let res = self.mk_node(
@@ -251,7 +251,7 @@ where
             guard,
         );
         self.retire_node(right);
-        return Ok(res);
+        return res;
     }
 
     #[inline]
@@ -264,7 +264,7 @@ where
         key: K,
         value: V,
         guard: &'g Guard,
-    ) -> Result<Shared<'g, Node<K, V>>, ShieldError> {
+    ) -> Shared<'g, Node<K, V>> {
         let right_ref = unsafe { right.deref() };
         let right_left_ref = unsafe { right_left.deref() };
         let right_left_left = right_left_ref.left.load(Ordering::Acquire, guard);
@@ -273,7 +273,7 @@ where
         if Node::is_retired_spot(right_left_left, guard)
             || Node::is_retired_spot(right_left_right, guard)
         {
-            return Ok(Node::retired_node());
+            return Node::retired_node();
         }
 
         let new_left = self.mk_node(left, right_left_left, key, value, guard);
@@ -293,7 +293,7 @@ where
         );
         self.retire_node(right_left);
         self.retire_node(right);
-        Ok(res)
+        res
     }
 
     #[inline]
@@ -304,13 +304,13 @@ where
         key: K,
         value: V,
         guard: &'g Guard,
-    ) -> Result<Shared<'g, Node<K, V>>, ShieldError> {
+    ) -> Shared<'g, Node<K, V>> {
         let left_ref = unsafe { left.deref() };
         let left_right = left_ref.right.load(Ordering::Acquire, guard);
         let left_left = left_ref.left.load(Ordering::Acquire, guard);
 
         if Node::is_retired_spot(left_right, guard) || Node::is_retired_spot(left_left, guard) {
-            return Ok(Node::retired_node());
+            return Node::retired_node();
         }
 
         if Node::node_size(left_right) < Node::node_size(left_left) {
@@ -331,7 +331,7 @@ where
         key: K,
         value: V,
         guard: &'g Guard,
-    ) -> Result<Shared<'g, Node<K, V>>, ShieldError> {
+    ) -> Shared<'g, Node<K, V>> {
         let left_ref = unsafe { left.deref() };
         let new_right = self.mk_node(left_right, right, key, value, guard);
         let res = self.mk_node(
@@ -342,7 +342,7 @@ where
             guard,
         );
         self.retire_node(left);
-        return Ok(res);
+        return res;
     }
 
     #[inline]
@@ -355,7 +355,7 @@ where
         key: K,
         value: V,
         guard: &'g Guard,
-    ) -> Result<Shared<'g, Node<K, V>>, ShieldError> {
+    ) -> Shared<'g, Node<K, V>> {
         let left_ref = unsafe { left.deref() };
         let left_right_ref = unsafe { left_right.deref() };
         let left_right_left = left_right_ref.left.load(Ordering::Acquire, guard);
@@ -364,7 +364,7 @@ where
         if Node::is_retired_spot(left_right_left, guard)
             || Node::is_retired_spot(left_right_right, guard)
         {
-            return Ok(Node::retired_node());
+            return Node::retired_node();
         }
 
         let new_left = self.mk_node(
@@ -384,7 +384,7 @@ where
         );
         self.retire_node(left_right);
         self.retire_node(left);
-        Ok(res)
+        res
     }
 
     #[inline]
