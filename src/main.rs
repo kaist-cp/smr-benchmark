@@ -1,4 +1,3 @@
-// extern crate chrono;
 extern crate clap;
 extern crate crossbeam_ebr;
 extern crate crossbeam_pebr;
@@ -445,7 +444,7 @@ fn bench_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
     let (mem_sender, mem_receiver) = mpsc::channel();
 
     scope(|s| {
-        for _ in 0..config.aux_thread {
+        if config.aux_thread > 0 {
             let mem_sender = mem_sender.clone();
             s.spawn(move |_| {
                 assert!(config.sampling);
@@ -470,6 +469,8 @@ fn bench_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
                 }
                 mem_sender.send((peak, acc / samples)).unwrap();
             });
+        } else {
+            mem_sender.send((0, 0)).unwrap();
         }
 
         for _ in 0..config.threads {
@@ -505,6 +506,7 @@ fn bench_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
         }
     })
     .unwrap();
+    println!("end");
 
     let mut ops = 0;
     for _ in 0..config.threads {
@@ -618,6 +620,7 @@ fn bench_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>(
         }
     })
     .unwrap();
+    println!("end");
 
     let mut ops = 0;
     for _ in 0..config.threads {
@@ -733,6 +736,7 @@ fn bench_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>
         }
     })
     .unwrap();
+    println!("end");
 
     let mut ops = 0;
     for _ in 0..config.threads {

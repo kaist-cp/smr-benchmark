@@ -8,7 +8,6 @@ edition = "2018"
 
 [dependencies]
 bitflags = "1.0"
-chrono = "0.4"
 clap = "2.33.0"
 crossbeam-utils = "0.6.5"
 csv = "1.1.1"
