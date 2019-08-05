@@ -632,10 +632,10 @@ where
     }
 
     pub fn insert(&self, key: K, value: V, state: &mut State<K, V>, guard: &mut Guard) -> bool {
-        let mut old_root_shield = Shield::null(guard);
         loop {
             let old_root = self.root.load(Ordering::Acquire, guard);
-            match old_root_shield
+            match state
+                .shield
                 .defend(old_root, guard)
                 .and_then(|_| state.do_insert(old_root, &key, &value, guard))
             {
@@ -669,10 +669,10 @@ where
     }
 
     pub fn remove(&self, key: &K, state: &mut State<K, V>, guard: &Guard) -> Option<V> {
-        let mut old_root_shield = Shield::null(guard);
         loop {
             let old_root = self.root.load(Ordering::Acquire, guard);
-            match old_root_shield
+            match state
+                .shield
                 .defend(old_root, guard)
                 .and_then(|_| state.do_remove(old_root, key, guard))
             {
@@ -743,6 +743,8 @@ where
 
     fn clear(handle: &mut Self::Handle) {
         handle.shield.release();
+        debug_assert!(handle.retired_nodes.is_empty());
+        debug_assert!(handle.new_nodes.is_empty());
     }
 
     #[inline]
