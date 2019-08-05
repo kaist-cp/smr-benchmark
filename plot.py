@@ -4,11 +4,13 @@ from plotnine import *
 
 pd.set_option('display.max_rows', None)
 
+# raw column names
 THREADS = "threads"
 THROUGHPUT = "throughput"
 PEAK_MEM = "peak_mem"
 AVG_MEM = "avg_mem"
 
+# legend
 SMR_ONLY = "SMR"
 SMR_I = "SMR & interference"
 SMR_OPCS = "SMR & ops / CS"
@@ -22,32 +24,30 @@ EBR = "EBR"
 PEBR = "PEBR"
 NR = "NR"
 
-N10MS = ', 10ms'
+# N10MS = ', 10ms'
 STALLED = ', stalled'
 
 OPCS_1 = ', 1 op / CS'
 OPCS_4 = ', 4 ops / CS'
 
 dss = [LIST, HASHMAP, NMTREE, BONSAITREE]
-mms = [EBR, PEBR, NR]
-# gs = [0, 2]
+smrs = [NR, EBR, PEBR]
 ns = [1, 2]
 ts = [1] + list(range(5, 76, 5))
 
-g_map = {0: 'write-dominated', 2: 'read-dominated'}
-n_map = {0: '', 1: N10MS, 2: STALLED}
+# n_map = {0: '', 1: N10MS, 2: STALLED}
+n_map = {0: '', 2: STALLED}
 c_map = {1: OPCS_1, 4: OPCS_4}
-
 
 line_shapes = {
     NR: '',
     EBR: '.',
-    EBR + N10MS: 'o',
+    # EBR + N10MS: 'o',
     EBR + STALLED: 's',
     EBR + OPCS_1: 'o',
     EBR + OPCS_4: 's',
     PEBR: '^',
-    PEBR + N10MS: 'D',
+    # PEBR + N10MS: 'D',
     PEBR + STALLED: '*',
     PEBR + OPCS_1: 'D',
     PEBR + OPCS_4: '*',
@@ -56,12 +56,12 @@ line_shapes = {
 line_colors = {
     NR: 'k',
     EBR: 'b',
-    EBR + N10MS: 'c',
+    # EBR + N10MS: 'c',
     EBR + STALLED: 'g',
     EBR + OPCS_1: 'c',
     EBR + OPCS_4: 'g',
     PEBR: 'r',
-    PEBR + N10MS: 'm',
+    # PEBR + N10MS: 'm',
     PEBR + STALLED: '#FFB86F',
     PEBR + OPCS_1: 'm',
     PEBR + OPCS_4: '#FFB86F',
@@ -70,19 +70,18 @@ line_colors = {
 line_types = {
     NR: '-',
     EBR: '--',
-    EBR + N10MS: '--',
+    # EBR + N10MS: '--',
     EBR + STALLED: '--',
     EBR + OPCS_1: '--',
     EBR + OPCS_4: '--',
     PEBR: ':',
-    PEBR + N10MS: ':',
+    # PEBR + N10MS: ':',
     PEBR + STALLED: ':',
     PEBR + OPCS_1: ':',
     PEBR + OPCS_4: ':',
 }
 
 valid_line_name = list(line_shapes.keys())
-smrs = [NR, EBR, PEBR]
 
 
 # line_name: SMR, SMR_OPCS, SMR_I
@@ -106,9 +105,10 @@ raw_data = {}
 for ds in dss:
     data = pd.read_csv(ds + '_results.csv')
 
-    data.throughput = data.throughput.map(lambda x: x / 1000000)
-    data.peak_mem = data.peak_mem.map(lambda x: x / 1000000)
-    data.avg_mem = data.avg_mem.map(lambda x: x / 1000000)
+    mega = lambda x: x / 1000_000
+    data.throughput = data.throughput.map(mega)
+    data.peak_mem = data.peak_mem.map(mega)
+    data.avg_mem = data.avg_mem.map(mega)
 
     # NOTE: need to filter out rows with -n and -c options
     data[SMR_ONLY] = data.mm.map(str)
@@ -137,18 +137,20 @@ for ds in dss:
         # colum SMR_ONLY may 
         draw(f'{ds}_throughput.pdf', data, SMR_ONLY, 'Throughput (M op/s)', THROUGHPUT)
 
-# TODO: adjust y range
-# 3. 4 (DS) peak mem graph, 7 lines (SMR & interference), c4 for HashMap, c1 otherwise
+# 3. 4 (DS) peak mem graph, 7 lines (SMR & interference), c4 for HashMap/NMTree, c1 otherwise
 for ds in dss:
     data = raw_data[ds].copy()
-    if ds == HASHMAP:
+    if ds in [HASHMAP, NMTREE]:
         # use c4 except for NR
         data = data[(data.ops_per_cs == 4) | (data.mm == NR)]
     else:
         data = data[data.ops_per_cs == 1]
-    y_max = None
-    if ds != LIST:
-        max_except_explosion = data[~data[SMR_I].isin([NR, EBR+STALLED])][data.ds == ds][data.threads == 1]
+    y_max = None if ds in [LIST, BONSAITREE] else 1000
+
+    # readable
+    if ds not in [LIST, BONSAITREE]:
+        _d = data[~data[SMR_I].isin([NR, EBR+STALLED])] # exclue NR and EBR stalled
+        y_max = _d[data.ds == ds].peak_mem.max() * 1.05
     draw(f'{ds}_peak_mem.pdf', data, SMR_I, 'Peak memory usage (MB)', PEAK_MEM, y_max)
 
 # for ds in dss:
