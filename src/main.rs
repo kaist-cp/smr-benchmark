@@ -10,7 +10,7 @@ use crossbeam_utils::thread::scope;
 use csv::Writer;
 use rand::distributions::{Uniform, WeightedIndex};
 use rand::prelude::*;
-use std::cmp::{max, min};
+use std::cmp::max;
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::mem::ManuallyDrop;
@@ -120,22 +120,24 @@ fn main() {
         .arg(
             Arg::with_name("non-coop")
                 .short("n")
-                .takes_value(false)
-                .multiple(true)
+                .takes_value(true)
                 .help(
                     "The degree of non-cooperation. \
-                     -n for 10ms, -nn for inf",
-                ),
+                     1: 10ms, 2: stall",
+                )
+                .possible_values(&["0", "1", "2"])
+                .default_value("0"),
         )
         .arg(
             Arg::with_name("get rate")
                 .short("g")
-                .takes_value(false)
-                .multiple(true)
+                .takes_value(true)
                 .help(
                     "The proportion of `get`(read) operations. \
-                     none: 0%, -g: 50%, -gg: 90%",
-                ),
+                     0: 0%, 1: 50%, 2: 90%",
+                )
+                .possible_values(&["0", "1", "2"])
+                .default_value("0"),
         )
         .arg(
             Arg::with_name("range")
@@ -167,7 +169,7 @@ fn main() {
                 .value_name("MEM_SAMPLING_PERIOD")
                 .takes_value(true)
                 .help("The period to query jemalloc stats.allocated (ms). 0 for no sampling")
-                .default_value("0"),
+                .default_value("1"),
         )
         .arg(
             Arg::with_name("ops per cs")
@@ -202,8 +204,8 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
     let ds = value_t!(m, "data structure", DS).unwrap();
     let mm = value_t!(m, "memory manager", MM).unwrap();
     let threads = value_t!(m, "threads", usize).unwrap();
-    let non_coop = min(2, m.occurrences_of("non-coop")) as usize;
-    let get_rate = min(2, m.occurrences_of("get rate")) as usize;
+    let non_coop = value_t!(m, "non-coop", usize).unwrap();
+    let get_rate = value_t!(m, "get rate", usize).unwrap();
     let range = value_t!(m, "range", usize).unwrap();
     let key_dist = Uniform::from(0..range);
     let prefill = value_t!(m, "prefill", usize).unwrap();
@@ -294,7 +296,10 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
 }
 
 fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
-    println!("{}: {}, {} threads", config.ds, config.mm, config.threads);
+    println!(
+        "{}: {}, {} threads, n{}, c{}",
+        config.ds, config.mm, config.threads, config.non_coop, config.ops_per_cs
+    );
     let (ops_per_sec, peak_mem, avg_mem) = match config.mm {
         MM::NR => match config.ds {
             DS::List => bench_nr::<ebr::List<String, String>>(config, PrefillStrategy::Decreasing),
