@@ -182,8 +182,7 @@ where
             return Ok(Node::retired_node());
         }
 
-        self.shield.defend(cur, guard)?;
-        let cur_ref = unsafe { self.shield.deref() };
+        let cur_ref = unsafe { cur.deref() };
         let key = cur_ref.key.clone();
         let value = cur_ref.value.clone();
 
@@ -192,11 +191,11 @@ where
         let res = if r_size > 0
             && ((l_size > 0 && r_size > WEIGHT * l_size) || (l_size == 0 && r_size > WEIGHT))
         {
-            Ok(self.mk_balanced_left(left, right, key, value, guard))
+            self.mk_balanced_left(left, right, key, value, guard)
         } else if l_size > 0
             && ((r_size > 0 && l_size > WEIGHT * r_size) || (r_size == 0 && l_size > WEIGHT))
         {
-            Ok(self.mk_balanced_right(left, right, key, value, guard))
+            self.mk_balanced_right(left, right, key, value, guard)
         } else {
             Ok(self.mk_node(left, right, key, value, guard))
         };
@@ -212,18 +211,20 @@ where
         key: K,
         value: V,
         guard: &'g Guard,
-    ) -> Shared<'g, Node<K, V>> {
+    ) -> Result<Shared<'g, Node<K, V>>, ShieldError> {
         let right_ref = unsafe { right.deref() };
         let right_left = right_ref.left.load(Ordering::Acquire, guard);
         let right_right = right_ref.right.load(Ordering::Acquire, guard);
+        let _right_left_shield = Shield::new(right_left, guard)?;
+        let _right_right_shield = Shield::new(right_right, guard)?;
 
         if Node::is_retired_spot(right_left, guard) || Node::is_retired_spot(right_right, guard) {
-            return Node::retired_node();
+            return Ok(Node::retired_node());
         }
 
         if Node::node_size(right_left) < Node::node_size(right_right) {
             // single left rotation
-            return self.single_left(left, right, right_left, right_right, key, value, guard);
+            return Ok(self.single_left(left, right, right_left, right_right, key, value, guard));
         }
 
         // double left rotation
@@ -264,16 +265,18 @@ where
         key: K,
         value: V,
         guard: &'g Guard,
-    ) -> Shared<'g, Node<K, V>> {
+    ) -> Result<Shared<'g, Node<K, V>>, ShieldError> {
         let right_ref = unsafe { right.deref() };
         let right_left_ref = unsafe { right_left.deref() };
         let right_left_left = right_left_ref.left.load(Ordering::Acquire, guard);
         let right_left_right = right_left_ref.right.load(Ordering::Acquire, guard);
+        let _right_left_left_shield = Shield::new(right_left_left, guard)?;
+        let _right_left_right_shield = Shield::new(right_left_right, guard)?;
 
         if Node::is_retired_spot(right_left_left, guard)
             || Node::is_retired_spot(right_left_right, guard)
         {
-            return Node::retired_node();
+            return Ok(Node::retired_node());
         }
 
         let new_left = self.mk_node(left, right_left_left, key, value, guard);
@@ -293,7 +296,7 @@ where
         );
         self.retire_node(right_left);
         self.retire_node(right);
-        res
+        Ok(res)
     }
 
     #[inline]
@@ -304,18 +307,20 @@ where
         key: K,
         value: V,
         guard: &'g Guard,
-    ) -> Shared<'g, Node<K, V>> {
+    ) -> Result<Shared<'g, Node<K, V>>, ShieldError> {
         let left_ref = unsafe { left.deref() };
         let left_right = left_ref.right.load(Ordering::Acquire, guard);
         let left_left = left_ref.left.load(Ordering::Acquire, guard);
+        let _left_left_shield = Shield::new(left_left, guard)?;
+        let _left_right_shield = Shield::new(left_right, guard)?;
 
         if Node::is_retired_spot(left_right, guard) || Node::is_retired_spot(left_left, guard) {
-            return Node::retired_node();
+            return Ok(Node::retired_node());
         }
 
         if Node::node_size(left_right) < Node::node_size(left_left) {
             // single right rotation (fig 3)
-            return self.single_right(left, right, left_right, left_left, key, value, guard);
+            return Ok(self.single_right(left, right, left_right, left_left, key, value, guard));
         }
         // double right rotation
         return self.double_right(left, right, left_right, left_left, key, value, guard);
@@ -355,16 +360,18 @@ where
         key: K,
         value: V,
         guard: &'g Guard,
-    ) -> Shared<'g, Node<K, V>> {
+    ) -> Result<Shared<'g, Node<K, V>>, ShieldError> {
         let left_ref = unsafe { left.deref() };
         let left_right_ref = unsafe { left_right.deref() };
         let left_right_left = left_right_ref.left.load(Ordering::Acquire, guard);
         let left_right_right = left_right_ref.right.load(Ordering::Acquire, guard);
+        let _left_right_left_shield = Shield::new(left_right_left, guard)?;
+        let _left_right_right_shield = Shield::new(left_right_right, guard)?;
 
         if Node::is_retired_spot(left_right_left, guard)
             || Node::is_retired_spot(left_right_right, guard)
         {
-            return Node::retired_node();
+            return Ok(Node::retired_node());
         }
 
         let new_left = self.mk_node(
@@ -384,7 +391,7 @@ where
         );
         self.retire_node(left_right);
         self.retire_node(left);
-        res
+        Ok(res)
     }
 
     #[inline]
@@ -415,6 +422,8 @@ where
         let node_ref = unsafe { node.deref() };
         let left = node_ref.left.load(Ordering::Acquire, guard);
         let right = node_ref.right.load(Ordering::Acquire, guard);
+        let _left_shield = Shield::new(left, guard)?;
+        let _right_shield = Shield::new(left, guard)?;
 
         if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
             return Ok((Node::retired_node(), false));
@@ -451,6 +460,8 @@ where
         let node_ref = unsafe { node.deref() };
         let left = node_ref.left.load(Ordering::Acquire, guard);
         let right = node_ref.right.load(Ordering::Acquire, guard);
+        let _left_shield = Shield::new(left, guard)?;
+        let _right_shield = Shield::new(left, guard)?;
 
         if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
             return Ok((Node::retired_node(), None));
@@ -494,6 +505,8 @@ where
         let node_ref = unsafe { node.deref() };
         let left = node_ref.left.load(Ordering::Acquire, guard);
         let right = node_ref.right.load(Ordering::Acquire, guard);
+        let _left_shield = Shield::new(left, guard)?;
+        let _right_shield = Shield::new(left, guard)?;
 
         if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
             return Ok((Node::retired_node(), Node::retired_node()));
@@ -527,6 +540,8 @@ where
         let node_ref = unsafe { node.deref() };
         let left = node_ref.left.load(Ordering::Acquire, guard);
         let right = node_ref.right.load(Ordering::Acquire, guard);
+        let _left_shield = Shield::new(left, guard)?;
+        let _right_shield = Shield::new(left, guard)?;
 
         if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
             return Ok((Node::retired_node(), Node::retired_node()));
@@ -617,9 +632,13 @@ where
     }
 
     pub fn insert(&self, key: K, value: V, state: &mut State<K, V>, guard: &mut Guard) -> bool {
+        let mut old_root_shield = Shield::null(guard);
         loop {
             let old_root = self.root.load(Ordering::Acquire, guard);
-            match state.do_insert(old_root, &key, &value, guard) {
+            match old_root_shield
+                .defend(old_root, guard)
+                .and_then(|_| state.do_insert(old_root, &key, &value, guard))
+            {
                 Err(ShieldError::Ejected) => {
                     unsafe {
                         // HACK(@jeehoonkang): We wanted to say `guard.repin()`, which is totally
@@ -650,9 +669,13 @@ where
     }
 
     pub fn remove(&self, key: &K, state: &mut State<K, V>, guard: &Guard) -> Option<V> {
+        let mut old_root_shield = Shield::null(guard);
         loop {
             let old_root = self.root.load(Ordering::Acquire, guard);
-            match state.do_remove(old_root, key, guard) {
+            match old_root_shield
+                .defend(old_root, guard)
+                .and_then(|_| state.do_remove(old_root, key, guard))
+            {
                 Err(ShieldError::Ejected) => {
                     unsafe {
                         // HACK(@jeehoonkang): We wanted to say `guard.repin()`, which is totally
