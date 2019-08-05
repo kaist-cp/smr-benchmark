@@ -30,4 +30,5 @@ debug = true
 
 # TODO: maybe not needed
 [features]
+sanitize = ["crossbeam-pebr/sanitize"]
 profiling = ['jemallocator/profiling']
