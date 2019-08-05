@@ -256,17 +256,21 @@ where
         guard: &'g Guard,
     ) -> Result<(), ShieldError> {
         let s = self.r.left.load(Ordering::Relaxed, guard);
-        record
-            .ancestor
-            .defend(Shared::from(&self.r as *const _), guard)?;
-        record.successor.defend(s, guard)?;
+        unsafe {
+            record
+                .ancestor
+                .defend_fake(Shared::from(&self.r as *const _));
+            record.successor.defend_fake(s);
+        }
         record.successor_dir = Direction::L;
 
-        let leaf = unsafe { record.successor.deref() }
+        let leaf = unsafe { s.deref() }
             .left
             .load(Ordering::Relaxed, guard)
             .with_tag(Marks::empty().bits());
-        record.parent.defend(s, guard)?;
+        unsafe {
+            record.parent.defend_fake(s);
+        }
         record.leaf.defend(leaf, guard)?;
         record.leaf_dir = Direction::L;
 
@@ -344,7 +348,7 @@ where
                 // destroy the subtree of successor except target_sibling
                 let mut stack = vec![record.successor.shared()];
 
-                while let Some(mut node) = stack.pop() {
+                while let Some(node) = stack.pop() {
                     if node.is_null()
                         || (node.with_tag(Marks::empty().bits())
                             == target_sibling.with_tag(Marks::empty().bits()))
@@ -352,7 +356,7 @@ where
                         continue;
                     }
 
-                    let node_ref = node.deref_mut();
+                    let node_ref = node.deref();
 
                     stack.push(node_ref.left.load(Ordering::Relaxed, guard));
                     stack.push(node_ref.right.load(Ordering::Relaxed, guard));
