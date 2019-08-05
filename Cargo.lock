@@ -222,7 +222,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "membarrier"
 version = "0.2.1"
-source = "git+https://github.com/jeehoonkang/membarrier-rs?branch=pebr-benchmark#c5d6f1b176719008bbd1b6e1b338cba852d3cb8b"
+source = "git+https://github.com/jeehoonkang/membarrier-rs?branch=pebr-benchmark#734c88617d525ec9567e88355c0720dc5b634f1c"
 dependencies = [
  "cfg-if 0.1.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "kernel32-sys 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
