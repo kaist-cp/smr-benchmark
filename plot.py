@@ -103,7 +103,7 @@ def draw(name, data, line_name, y_label, y_value, y_max=None):
 # preprocess
 raw_data = {}
 for ds in dss:
-    data = pd.read_csv(ds + '_results.csv')
+    data = pd.read_csv('results/' + ds + '.csv')
 
     mega = lambda x: x / 1000_000
     data.throughput = data.throughput.map(mega)
@@ -131,11 +131,11 @@ for ds in dss:
 for ds in dss:
     data = raw_data[ds].copy()
     data = data[data.non_coop == 0]
-    if ds == HASHMAP:
-        draw(f'{ds}_throughput.pdf', data, SMR_OPCS, 'Throughput (M op/s)', THROUGHPUT)
+    if ds in [HASHMAP, NMTREE]:
+        draw(f'results/{ds}_throughput.pdf', data, SMR_OPCS, 'Throughput (M op/s)', THROUGHPUT)
     else:
         # colum SMR_ONLY may 
-        draw(f'{ds}_throughput.pdf', data, SMR_ONLY, 'Throughput (M op/s)', THROUGHPUT)
+        draw(f'results/{ds}_throughput.pdf', data, SMR_ONLY, 'Throughput (M op/s)', THROUGHPUT)
 
 # 3. 4 (DS) peak mem graph, 7 lines (SMR & interference), c4 for HashMap/NMTree, c1 otherwise
 for ds in dss:
@@ -145,13 +145,14 @@ for ds in dss:
         data = data[(data.ops_per_cs == 4) | (data.mm == NR)]
     else:
         data = data[data.ops_per_cs == 1]
-    y_max = None if ds in [LIST, BONSAITREE] else 1000
+
 
     # readable
+    y_max = None
     if ds not in [LIST, BONSAITREE]:
         _d = data[~data[SMR_I].isin([NR, EBR+STALLED])] # exclue NR and EBR stalled
         y_max = _d[data.ds == ds].peak_mem.max() * 1.05
-    draw(f'{ds}_peak_mem.pdf', data, SMR_I, 'Peak memory usage (MB)', PEAK_MEM, y_max)
+    draw(f'results/{ds}_peak_mem.pdf', data, SMR_I, 'Peak memory usage (MB)', PEAK_MEM, y_max)
 
 # for ds in dss:
 #     data = raw_data[ds].copy()

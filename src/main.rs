@@ -12,7 +12,7 @@ use rand::distributions::{Uniform, WeightedIndex};
 use rand::prelude::*;
 use std::cmp::max;
 use std::fmt;
-use std::fs::{File, OpenOptions};
+use std::fs::{create_dir_all, File, OpenOptions};
 use std::mem::ManuallyDrop;
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
@@ -188,7 +188,7 @@ fn main() {
                 .help(
                     "Output CSV filename. \
                      Appends the data if the file already exists.\n\
-                     [default: <DS>_results.csv]",
+                     [default: results/<DS>.csv]",
                 ),
         )
         .get_matches();
@@ -228,7 +228,8 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
 
     let output_name = &m
         .value_of("output")
-        .map_or(ds.to_string() + "_results.csv", |o| o.to_string());
+        .map_or(format!("results/{}.csv", ds), |o| o.to_string());
+    create_dir_all("results").unwrap();
     let output = match OpenOptions::new()
         .read(true)
         .write(true)

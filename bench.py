@@ -1,4 +1,5 @@
 import subprocess
+import os.path
 
 dss = ['List', 'HashMap', 'NMTree', 'BonsaiTree']
 mms = ['EBR', 'PEBR', 'NR']
@@ -6,7 +7,8 @@ ns = [0, 2]
 ts = list(map(str, [1] + list(range(5, 76, 5))))
 cs = [1, 4]
 
-subprocess.run(['git', 'submodule', 'update', '--init'])
+if os.path.exists('.git'):
+    subprocess.run(['git', 'submodule', 'update', '--init'])
 subprocess.run(['cargo', 'build', '--release'])
 
 run_cmd = ['./target/release/pebr-benchmark', '-i10', '-s1']
