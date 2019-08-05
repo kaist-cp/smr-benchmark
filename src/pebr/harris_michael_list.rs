@@ -122,14 +122,14 @@ where
                 }
             } else {
                 next = next.with_tag(0);
-                match unsafe { cursor.prev.deref() }.next.compare_and_set(
-                    curr,
-                    next,
-                    Ordering::AcqRel,
-                    guard,
-                ) {
-                    Err(_) => break Err(FindError::Retry),
-                    Ok(_) => unsafe { guard.defer_destroy(curr) },
+                if unsafe { cursor.prev.deref() }
+                    .next
+                    .compare_and_set(curr, next, Ordering::AcqRel, guard)
+                    .is_ok()
+                {
+                    unsafe { guard.defer_destroy(curr) };
+                } else {
+                    break Err(FindError::Retry);
                 }
             }
             curr = next;
@@ -237,12 +237,12 @@ where
             }
 
             let curr_node = unsafe { cursor.curr.as_ref() }.unwrap();
-            let value = unsafe { ptr::read(&curr_node.value) };
-
             let next = curr_node.next.fetch_or(1, Ordering::AcqRel, guard);
             if next.tag() == 1 {
                 continue;
             }
+
+            let value = unsafe { ptr::read(&curr_node.value) };
 
             if unsafe { cursor.prev.deref() }
                 .next
