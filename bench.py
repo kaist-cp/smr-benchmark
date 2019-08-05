@@ -25,7 +25,7 @@ for ds in dss:
         for mm in mms:
             for t in ts:
                 if ds == 'HashMap':
-                    cmd = run_cmd + opts(ds, mm, t, c=4)
+                    cmd = run_cmd + opts(ds, mm, t, c=4, n=n)
                     # print(cmd)
                     subprocess.run(cmd)
                 cmd = run_cmd + opts(ds, mm, t, c=1, n=n)
