@@ -8,7 +8,7 @@ ts = list(map(str, [1] + list(range(5, 76, 5))))
 cs = [1, 4]
 
 if os.path.exists('.git'):
-    subprocess.run(['git', 'submodule', 'update', '--init'])
+    subprocess.run(['git', 'submodule', 'update', '--init', '--recursive'])
 subprocess.run(['cargo', 'build', '--release'])
 
 run_cmd = ['./target/release/pebr-benchmark', '-i10', '-s1']

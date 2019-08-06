@@ -1,11 +1,16 @@
 // TODO
 // #![warn(missing_docs)]
 // #![warn(missing_debug_implementations)]
+#[macro_use]
+extern crate cfg_if;
 
-extern crate jemallocator;
-
-#[global_allocator]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+cfg_if! {
+    if #[cfg(not(feature = "sanitize"))] {
+        extern crate jemallocator;
+        #[global_allocator]
+        static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+    }
+}
 
 extern crate crossbeam_ebr;
 extern crate crossbeam_pebr;
