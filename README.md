@@ -1,8 +1,11 @@
 # A Marriage of Pointer- and Epoch-Based Reclamation
 
+This is the supplementary material for PPoPP 2020 submission #100.
+
 ## Dependencies
 
-* [`rustup`](https://rustup.rs/) for building the implementation of PEBR and benchmarks
+* [`rustup`](https://rustup.rs/) for building the implementation of NR, EBR, PEBR and data structures
+
 * Python 3.6 and pip3 for benchmark and plotting scripts
 
     ```
