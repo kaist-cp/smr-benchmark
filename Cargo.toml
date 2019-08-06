@@ -1,13 +1,12 @@
 [package]
 name = "pebr-benchmark"
 version = "0.1.0"
-authors = ["Jaehwang Jung <jaehwang.jung@kaist.ac.kr>", "Jeehoon Kang <jeehoon.kang@kaist.ac.kr>"]
+authors = ["authors"]
 edition = "2018"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 bitflags = "1.0"
+cfg-if = "0.1"
 clap = "2.33.0"
 crossbeam-utils = "0.6.5"
 csv = "1.1.1"
@@ -24,11 +23,8 @@ path = "crossbeam-ebr/crossbeam-epoch"
 package = "crossbeam-pebr-epoch"
 path = "crossbeam-pebr/crossbeam-epoch"
 
-# TODO: remove this
 [profile.release]
 debug = true
 
-# TODO: maybe not needed
 [features]
 sanitize = ["crossbeam-pebr/sanitize"]
-profiling = ['jemallocator/profiling']
