@@ -12,7 +12,7 @@
 ## Build
 
 ```sh
-git submodule update --init  # not needed if you got the archived source code
+git submodule update --init --recursive # not needed if you got the archived source code
 cargo build --release
 ```
 
@@ -36,7 +36,7 @@ To run the entire benchmark,
 python3 bench.py
 ```
 
-This takes few hours and creates raw csv data under `./results/`.
+This takes several hours and creates raw csv data under `./results/`.
 
 
 To generate plots presented in the paper,
@@ -45,12 +45,26 @@ To generate plots presented in the paper,
 python3 plot.py
 ```
 
+
+## Debug
+
+We used `./sanitize.sh` to check that our implementation does not have bugs.
+This script runs the benchmark with [LLVM address sanitizer for Rust](https://github.com/japaric/rust-san)
+and uses parameters that impose high stress on PEBR by triggering more frequent ejection.
+
+Note that it may report memory leaks when used against `-m ebr`.
+This is because of a minor bug in original Crossbeam but it doesn't affect performance of our benchmark.
+
+Benchmark run by this script will generate inaccurate memory usage report since it uses glibc `malloc()` as the global allocator instead of jemalloc.
+The memory tracker relies on jemalloc's functionalities which doesn't keep track of allocations by glibc.
+
+
 ## Project structure
 
  * `./crossbeam-pebr` is a fork of [Crossbeam](https://github.com/crossbeam-rs/crossbeam) that implements PEBR presented in the paper. The main implementation of PEBR lies under `./crossbeam-pebr/crossbeam-epoch`.
 
  * `./crossbeam-ebr` is the original Crossbeam source code.
 
- * `./src` contains the .
+ * `./src` contains the benchmark driver (`./src/main.rs`) and the implementation of 4 data structures based on PEBR (`./src/pebr/`) and original Crossbeam (`./src/ebr/`).
 
 
