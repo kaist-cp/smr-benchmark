@@ -3,7 +3,7 @@ import os.path
 
 dss = ['List', 'HashMap', 'NMTree', 'BonsaiTree']
 mms = ['EBR', 'PEBR', 'NR']
-ns = [0, 2]
+ns = [0, 1, 2]
 ts = list(map(str, [1] + list(range(5, 76, 5))))
 cs = [1, 4]
 
@@ -23,10 +23,7 @@ for ds in dss:
         for n in ns:
             for c in cs:
                 # meaningless
-                if mm == 'NR' and (n == 2 or c == 4):
-                    continue
-                # -c4 only for hashmap and nmtree
-                if c == 4 and ds not in ['HashMap', 'NMTree']:
+                if mm == 'NR' and (n != 0 or c != 1):
                     continue
                 for t in ts:
                     cmd = run_cmd + opts(ds, mm, t, c=c, n=n)
