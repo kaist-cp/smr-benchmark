@@ -13,6 +13,7 @@ use rand::prelude::*;
 use std::cmp::max;
 use std::fmt;
 use std::fs::{create_dir_all, File, OpenOptions};
+use std::io::{stdout, Write};
 use std::mem::ManuallyDrop;
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
@@ -123,9 +124,9 @@ fn main() {
                 .takes_value(true)
                 .help(
                     "The degree of non-cooperation. \
-                     1: 10ms, 2: stall",
+                     1: 1ms, 2: 10ms, 3: stall",
                 )
-                .possible_values(&["0", "1", "2"])
+                .possible_values(&["0", "1", "2", "3"])
                 .default_value("0"),
         )
         .arg(
@@ -273,11 +274,11 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
         aux_thread: if sampling || non_coop > 0 { 1 } else { 0 },
         aux_thread_period: Duration::from_millis(1),
         non_coop,
-        non_coop_period: if non_coop == 1 {
-            Duration::from_millis(10)
-        } else {
-            // No repin if -nn or none
-            Duration::from_secs(interval)
+        non_coop_period: match non_coop {
+            1 => Duration::from_millis(1),
+            2 => Duration::from_millis(10),
+            // No repin if -n0 or -n3
+            _ => Duration::from_secs(interval),
         },
         sampling,
         sampling_period: Duration::from_millis(sampling_period),
@@ -401,7 +402,8 @@ impl PrefillStrategy {
                 }
             }
         }
-        println!("prefilled");
+        print!("prefilled... ");
+        stdout().flush().unwrap();
     }
 
     fn prefill_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(
@@ -433,7 +435,8 @@ impl PrefillStrategy {
                 }
             }
         }
-        println!("prefilled");
+        print!("prefilled... ");
+        stdout().flush().unwrap();
     }
 }
 
