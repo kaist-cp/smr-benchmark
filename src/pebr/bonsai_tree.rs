@@ -423,7 +423,7 @@ where
         let left = node_ref.left.load(Ordering::Acquire, guard);
         let right = node_ref.right.load(Ordering::Acquire, guard);
         let _left_shield = Shield::new(left, guard)?;
-        let _right_shield = Shield::new(left, guard)?;
+        let _right_shield = Shield::new(right, guard)?;
 
         if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
             return Ok((Node::retired_node(), false));
@@ -461,7 +461,7 @@ where
         let left = node_ref.left.load(Ordering::Acquire, guard);
         let right = node_ref.right.load(Ordering::Acquire, guard);
         let _left_shield = Shield::new(left, guard)?;
-        let _right_shield = Shield::new(left, guard)?;
+        let _right_shield = Shield::new(right, guard)?;
 
         if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
             return Ok((Node::retired_node(), None));
@@ -506,7 +506,7 @@ where
         let left = node_ref.left.load(Ordering::Acquire, guard);
         let right = node_ref.right.load(Ordering::Acquire, guard);
         let _left_shield = Shield::new(left, guard)?;
-        let _right_shield = Shield::new(left, guard)?;
+        let _right_shield = Shield::new(right, guard)?;
 
         if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
             return Ok((Node::retired_node(), Node::retired_node()));
@@ -541,7 +541,7 @@ where
         let left = node_ref.left.load(Ordering::Acquire, guard);
         let right = node_ref.right.load(Ordering::Acquire, guard);
         let _left_shield = Shield::new(left, guard)?;
-        let _right_shield = Shield::new(left, guard)?;
+        let _right_shield = Shield::new(right, guard)?;
 
         if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
             return Ok((Node::retired_node(), Node::retired_node()));
@@ -590,6 +590,7 @@ where
             ) {
                 Ok(r) => return r,
                 Err(ShieldError::Ejected) => {
+                    state.shield.release();
                     unsafe {
                         // HACK(@jeehoonkang): We wanted to say `guard.repin()`, which is totally
                         // fine, but the current Rust's type checker cannot verify it.
@@ -640,12 +641,12 @@ where
                 .and_then(|_| state.do_insert(old_root, &key, &value, guard))
             {
                 Err(ShieldError::Ejected) => {
+                    state.abort();
                     unsafe {
                         // HACK(@jeehoonkang): We wanted to say `guard.repin()`, which is totally
                         // fine, but the current Rust's type checker cannot verify it.
                         (&mut *(guard as &_ as *const _ as *mut Guard)).repin();
                     }
-                    state.abort();
                 }
                 Ok((new_root, inserted)) => {
                     if Node::is_retired(new_root) {
@@ -677,12 +678,12 @@ where
                 .and_then(|_| state.do_remove(old_root, key, guard))
             {
                 Err(ShieldError::Ejected) => {
+                    state.abort();
                     unsafe {
                         // HACK(@jeehoonkang): We wanted to say `guard.repin()`, which is totally
                         // fine, but the current Rust's type checker cannot verify it.
                         (&mut *(guard as &_ as *const _ as *mut Guard)).repin();
                     }
-                    state.abort();
                 }
                 Ok((new_root, value)) => {
                     if Node::is_retired(new_root) {
