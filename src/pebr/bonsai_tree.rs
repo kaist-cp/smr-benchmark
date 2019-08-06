@@ -477,9 +477,11 @@ where
 
                 if !left.is_null() {
                     let (new_left, succ) = self.pull_rightmost(left, guard)?;
+                    let _new_left_shield = Shield::new(new_left, guard)?;
                     return Ok((self.mk_balanced(succ, new_left, right, guard)?, value));
                 }
                 let (new_right, succ) = self.pull_leftmost(right, guard)?;
+                let _new_right_shield = Shield::new(new_right, guard)?;
                 Ok((self.mk_balanced(succ, left, new_right, guard)?, value))
             }
             cmp::Ordering::Less => {
@@ -514,6 +516,7 @@ where
 
         if !left.is_null() {
             let (new_left, succ) = self.pull_leftmost(left, guard)?;
+            let _new_left_shield = Shield::new(new_left, guard)?;
             return Ok((self.mk_balanced(node, new_left, right, guard)?, succ));
         }
         // node is the leftmost
@@ -549,6 +552,7 @@ where
 
         if !right.is_null() {
             let (new_right, succ) = self.pull_rightmost(right, guard)?;
+            let _new_right_shield = Shield::new(new_right, guard)?;
             return Ok((self.mk_balanced(node, left, new_right, guard)?, succ));
         }
         // node is the rightmost
