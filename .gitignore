@@ -32,4 +32,8 @@ rusty-tags.vi
 perf.data*
 *.svg
 jeprof.*
-.Rproj.user
+.idea/
+.mypy_cache/
+*.csv
+*.pdf
+tags
