@@ -1,7 +1,9 @@
 # type: ignore
 import pandas as pd
 from plotnine import *
+import warnings
 
+warnings.filterwarnings("ignore")
 pd.set_option('display.max_rows', None)
 
 # raw column names
@@ -24,7 +26,8 @@ EBR = "EBR"
 PEBR = "PEBR"
 NR = "NR"
 
-# N10MS = ', 10ms'
+N1MS = ', 1ms'
+N10MS = ', 10ms'
 STALLED = ', stalled'
 
 OPCS_1 = ', 1 op / CS'
@@ -35,19 +38,20 @@ smrs = [NR, EBR, PEBR]
 ns = [1, 2]
 ts = [1] + list(range(5, 76, 5))
 
-# n_map = {0: '', 1: N10MS, 2: STALLED}
-n_map = {0: '', 2: STALLED}
+n_map = {0: '', 1: N1MS, 2: N10MS, 3: STALLED}
 c_map = {1: OPCS_1, 4: OPCS_4}
 
 line_shapes = {
     NR: '',
     EBR: '.',
-    # EBR + N10MS: 'o',
+    EBR + N1MS: 'o',
+    EBR + N10MS: 'o',
     EBR + STALLED: 's',
     EBR + OPCS_1: 'o',
     EBR + OPCS_4: 's',
     PEBR: '^',
-    # PEBR + N10MS: 'D',
+    PEBR + N1MS: 'D',
+    PEBR + N10MS: 'D',
     PEBR + STALLED: '*',
     PEBR + OPCS_1: 'D',
     PEBR + OPCS_4: '*',
@@ -56,12 +60,14 @@ line_shapes = {
 line_colors = {
     NR: 'k',
     EBR: 'b',
-    # EBR + N10MS: 'c',
+    EBR + N1MS: 'navy',
+    EBR + N10MS: 'c',
     EBR + STALLED: 'g',
     EBR + OPCS_1: 'c',
     EBR + OPCS_4: 'g',
     PEBR: 'r',
-    # PEBR + N10MS: 'm',
+    PEBR + N1MS: 'hotpink',
+    PEBR + N10MS: 'm',
     PEBR + STALLED: '#FFB86F',
     PEBR + OPCS_1: 'm',
     PEBR + OPCS_4: '#FFB86F',
@@ -70,12 +76,14 @@ line_colors = {
 line_types = {
     NR: '-',
     EBR: '--',
-    # EBR + N10MS: '--',
+    EBR + N1MS: '--',
+    EBR + N10MS: '--',
     EBR + STALLED: '--',
     EBR + OPCS_1: '--',
     EBR + OPCS_4: '--',
     PEBR: ':',
-    # PEBR + N10MS: ':',
+    PEBR + N1MS: ':',
+    PEBR + N10MS: ':',
     PEBR + STALLED: ':',
     PEBR + OPCS_1: ':',
     PEBR + OPCS_4: ':',
@@ -149,7 +157,7 @@ for ds in dss:
 
     # readable
     y_max = None
-    if ds not in [LIST, BONSAITREE]:
+    if ds not in [LIST]:
         _d = data[~data[SMR_I].isin([NR, EBR+STALLED])] # exclue NR and EBR stalled
         y_max = _d[data.ds == ds].peak_mem.max() * 1.05
     draw(f'results/{ds}_peak_mem.pdf', data, SMR_I, 'Peak memory usage (MB)', PEAK_MEM, y_max)
