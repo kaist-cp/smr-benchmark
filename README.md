@@ -6,7 +6,9 @@ This is the supplementary material for PPoPP 2020 submission #100.
 
 * [`rustup`](https://rustup.rs/) for building the implementation of NR, EBR, PEBR and data structures
 
-* Python 3.6 and pip3 for benchmark and plotting scripts
+* Linux >= 4.14 for [`MEMBARRIER_CMD_PRIVATE_EXPEDITED` and `MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED`](http://man7.org/linux/man-pages/man2/membarrier.2.html), used in the implementation of PEBR.
+
+* Python >= 3.6 and pip3 for benchmark and plotting scripts
 
     ```
     pip3 install --user pandas plotnine
