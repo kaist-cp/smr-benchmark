@@ -73,3 +73,6 @@ The memory tracker relies on jemalloc's functionalities which doesn't keep track
  * `./src` contains the benchmark driver (`./src/main.rs`) and the implementation of 4 data structures based on PEBR (`./src/pebr/`) and original Crossbeam (`./src/ebr/`).
 
 
+## Results
+
+`./paper-results` contains the raw results and graphs used in the paper.
