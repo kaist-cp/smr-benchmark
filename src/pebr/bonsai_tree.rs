@@ -583,23 +583,24 @@ where
         }
     }
 
-    pub fn get<'g>(&self, key: &'g K, state: &mut State<K, V>, guard: &'g Guard) -> Option<&'g V> {
+    pub fn get<'g>(
+        &self,
+        key: &'g K,
+        state: &mut State<K, V>,
+        guard: &'g mut Guard,
+    ) -> Option<&'g V> {
         // TODO(@jeehoonkang): we want to use `FindError::retry`, but it requires higher-kinded
         // things...
         loop {
             match self.get_inner(
                 key,
-                unsafe { &mut *(&mut state.shield as &_ as *const _ as *mut Shield<_>) },
-                guard,
+                unsafe { &mut *(&mut state.shield as *mut Shield<_>) },
+                unsafe { &mut *(guard as *mut Guard) },
             ) {
                 Ok(r) => return r,
                 Err(ShieldError::Ejected) => {
                     state.shield.release();
-                    unsafe {
-                        // HACK(@jeehoonkang): We wanted to say `guard.repin()`, which is totally
-                        // fine, but the current Rust's type checker cannot verify it.
-                        (&mut *(guard as &_ as *const _ as *mut Guard)).repin();
-                    }
+                    guard.repin();
                 }
             }
         }
@@ -646,11 +647,7 @@ where
             {
                 Err(ShieldError::Ejected) => {
                     state.abort();
-                    unsafe {
-                        // HACK(@jeehoonkang): We wanted to say `guard.repin()`, which is totally
-                        // fine, but the current Rust's type checker cannot verify it.
-                        (&mut *(guard as &_ as *const _ as *mut Guard)).repin();
-                    }
+                    guard.repin();
                 }
                 Ok((new_root, inserted)) => {
                     if Node::is_retired(new_root) {
@@ -673,7 +670,7 @@ where
         }
     }
 
-    pub fn remove(&self, key: &K, state: &mut State<K, V>, guard: &Guard) -> Option<V> {
+    pub fn remove(&self, key: &K, state: &mut State<K, V>, guard: &mut Guard) -> Option<V> {
         loop {
             let old_root = self.root.load(Ordering::Acquire, guard);
             match state
@@ -683,11 +680,7 @@ where
             {
                 Err(ShieldError::Ejected) => {
                     state.abort();
-                    unsafe {
-                        // HACK(@jeehoonkang): We wanted to say `guard.repin()`, which is totally
-                        // fine, but the current Rust's type checker cannot verify it.
-                        (&mut *(guard as &_ as *const _ as *mut Guard)).repin();
-                    }
+                    guard.repin();
                 }
                 Ok((new_root, value)) => {
                     if Node::is_retired(new_root) {
@@ -777,7 +770,6 @@ where
 mod tests {
     extern crate rand;
     use super::{BonsaiTreeMap, State};
-    use crossbeam_pebr::Shield;
     use crossbeam_utils::thread;
     use rand::prelude::*;
 

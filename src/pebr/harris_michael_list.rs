@@ -142,16 +142,10 @@ where
         // TODO(@jeehoonkang): we want to use `FindError::retry`, but it requires higher-kinded
         // things...
         loop {
-            match self.find_inner(key, cursor, guard) {
+            match self.find_inner(key, cursor, unsafe { &mut *(guard as *mut Guard) }) {
                 Ok(r) => return r,
                 Err(FindError::Retry) => continue,
-                Err(FindError::ShieldError(ShieldError::Ejected)) => {
-                    unsafe {
-                        // HACK(@jeehoonkang): We wanted to say `guard.repin()`, which is totally
-                        // fine, but the current Rust's type checker cannot verify it.
-                        (&mut *(guard as &_ as *const _ as *mut Guard)).repin();
-                    }
-                }
+                Err(FindError::ShieldError(ShieldError::Ejected)) => guard.repin(),
             }
         }
     }
@@ -210,16 +204,10 @@ where
         .into_shared(unsafe { unprotected() });
 
         loop {
-            match self.insert_inner(node, cursor, guard) {
+            match self.insert_inner(node, cursor, unsafe { &mut *(guard as *mut Guard) }) {
                 Ok(r) => return r,
                 Err(FindError::Retry) => continue,
-                Err(FindError::ShieldError(ShieldError::Ejected)) => {
-                    unsafe {
-                        // HACK(@jeehoonkang): We wanted to say `guard.repin()`, which is totally
-                        // fine, but the current Rust's type checker cannot verify it.
-                        (&mut *(guard as &_ as *const _ as *mut Guard)).repin();
-                    }
-                }
+                Err(FindError::ShieldError(ShieldError::Ejected)) => guard.repin(),
             }
         }
     }
@@ -258,16 +246,10 @@ where
 
     pub fn remove(&self, cursor: &mut Cursor<K, V>, key: &K, guard: &mut Guard) -> Option<V> {
         loop {
-            match self.remove_inner(key, cursor, guard) {
+            match self.remove_inner(key, cursor, unsafe { &mut *(guard as *mut Guard) }) {
                 Ok(r) => return r,
                 Err(FindError::Retry) => continue,
-                Err(FindError::ShieldError(ShieldError::Ejected)) => {
-                    unsafe {
-                        // HACK(@jeehoonkang): We wanted to say `guard.repin()`, which is totally
-                        // fine, but the current Rust's type checker cannot verify it.
-                        (&mut *(guard as &_ as *const _ as *mut Guard)).repin();
-                    }
-                }
+                Err(FindError::ShieldError(ShieldError::Ejected)) => guard.repin(),
             }
         }
     }
