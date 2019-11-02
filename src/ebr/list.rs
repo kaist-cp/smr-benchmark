@@ -9,15 +9,12 @@ use std::sync::atomic::Ordering;
 #[derive(Debug)]
 struct Node<K, V> {
     key: K,
-
     value: ManuallyDrop<V>,
-
-    // Mark: tag()
-    // Tag: not needed
+    /// Mark: tag(), Tag: not needed
     next: Atomic<Node<K, V>>,
 }
 
-pub struct List<K, V> {
+struct List<K, V> {
     head: Atomic<Node<K, V>>,
 }
 
@@ -63,9 +60,77 @@ where
         }
     }
 
+    fn harris_find<'g>(&'g self, key: &K, guard: &'g Guard) -> (bool, Cursor<'g, K, V>) {
+        unimplemented!()
+    }
+
+    pub fn harris_get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        let (found, cursor) = self.harris_find(key, guard);
+
+        if found {
+            unsafe { cursor.curr.as_ref().map(|n| &*n.value) }
+        } else {
+            None
+        }
+    }
+
+    pub fn harris_insert(&self, key: K, value: V, guard: &Guard) -> bool {
+        let mut node = Owned::new(Node {
+            key,
+            value: ManuallyDrop::new(value),
+            next: Atomic::null(),
+        });
+
+        loop {
+            let (found, cursor) = self.harris_find(&node.key, &guard);
+            if found {
+                unsafe {
+                    ManuallyDrop::drop(&mut node.value);
+                }
+                return false;
+            }
+
+            node.next.store(cursor.curr, Ordering::Relaxed);
+            match cursor
+                .prev
+                .compare_and_set(cursor.curr, node, Ordering::AcqRel, &guard)
+            {
+                Ok(_) => return true,
+                Err(e) => node = e.new,
+            }
+        }
+    }
+
+    pub fn harris_remove(&self, key: &K, guard: &Guard) -> Option<V> {
+        loop {
+            let (found, cursor) = self.harris_find(key, &guard);
+            if !found {
+                return None;
+            }
+
+            let curr_node = unsafe { cursor.curr.as_ref() }.unwrap();
+            let value = unsafe { ptr::read(&curr_node.value) };
+
+            let next = curr_node.next.fetch_or(1, Ordering::AcqRel, &guard);
+            if next.tag() == 1 {
+                continue;
+            }
+
+            if cursor
+                .prev
+                .compare_and_set(cursor.curr, next, Ordering::AcqRel, &guard)
+                .is_ok()
+            {
+                unsafe { guard.defer_destroy(cursor.curr) };
+            }
+
+            return Some(ManuallyDrop::into_inner(value));
+        }
+    }
+
     /// Returns (1) whether it found an entry, and (2) a cursor.
     #[inline]
-    fn find_inner<'g>(&'g self, key: &K, guard: &'g Guard) -> Result<(bool, Cursor<'g, K, V>), ()> {
+    fn harris_michael_find_inner<'g>(&'g self, key: &K, guard: &'g Guard) -> Result<(bool, Cursor<'g, K, V>), ()> {
         let mut cursor = Cursor {
             prev: &self.head,
             curr: self.head.load(Ordering::Acquire, guard),
@@ -101,16 +166,16 @@ where
         }
     }
 
-    fn find<'g>(&'g self, key: &K, guard: &'g Guard) -> (bool, Cursor<'g, K, V>) {
+    fn harris_michael_find<'g>(&'g self, key: &K, guard: &'g Guard) -> (bool, Cursor<'g, K, V>) {
         loop {
-            if let Ok(r) = self.find_inner(key, guard) {
+            if let Ok(r) = self.harris_michael_find_inner(key, guard) {
                 return r;
             }
         }
     }
 
-    pub fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
-        let (found, cursor) = self.find(key, guard);
+    pub fn harris_michael_get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        let (found, cursor) = self.harris_michael_find(key, guard);
 
         if found {
             unsafe { cursor.curr.as_ref().map(|n| &*n.value) }
@@ -119,7 +184,7 @@ where
         }
     }
 
-    pub fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
+    pub fn harris_michael_insert(&self, key: K, value: V, guard: &Guard) -> bool {
         let mut node = Owned::new(Node {
             key,
             value: ManuallyDrop::new(value),
@@ -127,7 +192,7 @@ where
         });
 
         loop {
-            let (found, cursor) = self.find(&node.key, &guard);
+            let (found, cursor) = self.harris_michael_find(&node.key, &guard);
             if found {
                 unsafe {
                     ManuallyDrop::drop(&mut node.value);
@@ -146,9 +211,9 @@ where
         }
     }
 
-    pub fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
+    pub fn harris_michael_remove(&self, key: &K, guard: &Guard) -> Option<V> {
         loop {
-            let (found, cursor) = self.find(key, &guard);
+            let (found, cursor) = self.harris_michael_find(key, &guard);
             if !found {
                 return None;
             }
@@ -172,9 +237,17 @@ where
             return Some(ManuallyDrop::into_inner(value));
         }
     }
+
+    pub fn harris_herlihy_shavit_get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        unimplemented!()
+    }
 }
 
-impl<K, V> ConcurrentMap<K, V> for List<K, V>
+pub struct HList<K, V> {
+    inner: List<K, V>
+}
+
+impl<K, V> ConcurrentMap<K, V> for HList<K, V>
 where
     K: Ord,
 {
@@ -184,15 +257,67 @@ where
 
     #[inline]
     fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
-        self.get(key, guard)
+        self.inner.harris_get(key, guard)
     }
     #[inline]
     fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
-        self.insert(key, value, guard)
+        self.inner.harris_insert(key, value, guard)
     }
     #[inline]
     fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
-        self.remove(key, guard)
+        self.inner.harris_remove(key, guard)
+    }
+}
+
+pub struct HMList<K, V> {
+    inner: List<K, V>
+}
+
+impl<K, V> ConcurrentMap<K, V> for HMList<K, V>
+where
+    K: Ord,
+{
+    fn new() -> Self {
+        Self::new()
+    }
+
+    #[inline]
+    fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        self.inner.harris_michael_get(key, guard)
+    }
+    #[inline]
+    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
+        self.inner.harris_michael_insert(key, value, guard)
+    }
+    #[inline]
+    fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
+        self.inner.harris_michael_remove(key, guard)
+    }
+}
+
+pub struct HHSList<K, V> {
+    inner: List<K, V>
+}
+
+impl<K, V> ConcurrentMap<K, V> for HHSList<K, V>
+where
+    K: Ord,
+{
+    fn new() -> Self {
+        Self::new()
+    }
+
+    #[inline]
+    fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        self.inner.harris_herlihy_shavit_get(key, guard)
+    }
+    #[inline]
+    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
+        self.inner.harris_michael_insert(key, value, guard)
+    }
+    #[inline]
+    fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
+        self.inner.harris_michael_remove(key, guard)
     }
 }
 
