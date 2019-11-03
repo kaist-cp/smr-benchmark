@@ -1,7 +1,7 @@
 use super::concurrent_map::ConcurrentMap;
 use crossbeam_ebr::{unprotected, Atomic, Guard, Owned, Shared};
 
-use std::cmp;
+use std::cmp::Ordering::{Equal, Greater, Less};
 use std::mem::ManuallyDrop;
 use std::ptr;
 use std::sync::atomic::Ordering;
@@ -60,8 +60,93 @@ where
         }
     }
 
+    #[inline]
+    fn harris_find_inner<'g>(
+        &'g self,
+        key: &K,
+        guard: &'g Guard,
+    ) -> Result<(bool, Cursor<'g, K, V>), ()> {
+        let mut cursor = Cursor {
+            prev: &self.head,
+            curr: self.head.load(Ordering::Acquire, guard),
+        };
+
+        // Finding phase
+        // - cursor.curr: first unmarked node w/ key >= search key (4)
+        // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
+        // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
+        let found = loop {
+            let curr_node = match unsafe { cursor.curr.as_ref() } {
+                None => return Ok((false, cursor)),
+                Some(c) => c,
+            };
+
+            // cursor.curr is non-tail
+            let mut next = curr_node.next.load(Ordering::Acquire, guard);
+
+            // - finding stage is done if cursor.curr advancement stops
+            // - advance cursor.curr if (.next is marked) || (cursor.curr < key)
+            // - stop cursor.curr if (not marked) && (cursor.curr >= key)
+            // - advance cursor.prev if not marked
+            match (curr_node.key.cmp(key), next.tag()) {
+                (Less, tag) => {
+                    cursor.curr = next.with_tag(0);
+                    if tag == 0 {
+                        cursor.prev = &curr_node.next;
+                    }
+                }
+                (eq, 0) => {
+                    cursor.prev = &curr_node.next;
+                    next = curr_node.next.load(Ordering::Relaxed, guard);
+                    // TODO: why re-check? probably not needed
+                    if next.tag() == 0 {
+                        break eq == Equal;
+                    } else {
+                        return Err(());
+                    }
+                }
+                (_, _) => {
+                    cursor.curr = next.with_tag(0);
+                }
+            }
+        };
+
+        // If prev and curr are adjacent, no need to clean up
+        let prev_next = cursor.prev.load(Ordering::Relaxed, guard);
+        if prev_next == cursor.curr {
+            return Ok((found, cursor));
+        }
+
+        // cleanup marked nodes between prev and curr
+        if cursor
+            .prev
+            .compare_and_set(prev_next, cursor.curr, Ordering::AcqRel, guard)
+            .is_err()
+        {
+            return Err(());
+        }
+
+        // defer_destroy from cursor.prev.load() to cursor.curr (exclusive)
+        let mut next = cursor.prev.load(Ordering::Relaxed, guard);
+        loop {
+            let temp = next;
+            if next.with_tag(0) == cursor.curr {
+                return Ok((found, cursor));
+            }
+            let node = unsafe { temp.as_ref().unwrap() };
+            next = node.next.load(Ordering::Relaxed, guard);
+            unsafe {
+                guard.defer_destroy(temp);
+            }
+        }
+    }
+
     fn harris_find<'g>(&'g self, key: &K, guard: &'g Guard) -> (bool, Cursor<'g, K, V>) {
-        unimplemented!()
+        loop {
+            if let Ok(r) = self.harris_find_inner(key, guard) {
+                return r;
+            }
+        }
     }
 
     pub fn harris_get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
@@ -130,7 +215,11 @@ where
 
     /// Returns (1) whether it found an entry, and (2) a cursor.
     #[inline]
-    fn harris_michael_find_inner<'g>(&'g self, key: &K, guard: &'g Guard) -> Result<(bool, Cursor<'g, K, V>), ()> {
+    fn harris_michael_find_inner<'g>(
+        &'g self,
+        key: &K,
+        guard: &'g Guard,
+    ) -> Result<(bool, Cursor<'g, K, V>), ()> {
         let mut cursor = Cursor {
             prev: &self.head,
             curr: self.head.load(Ordering::Acquire, guard),
@@ -148,9 +237,9 @@ where
 
             if next.tag() == 0 {
                 match curr_node.key.cmp(key) {
-                    cmp::Ordering::Less => cursor.prev = &curr_node.next,
-                    cmp::Ordering::Equal => return Ok((true, cursor)),
-                    cmp::Ordering::Greater => return Ok((false, cursor)),
+                    Less => cursor.prev = &curr_node.next,
+                    Equal => return Ok((true, cursor)),
+                    Greater => return Ok((false, cursor)),
                 }
             } else {
                 next = next.with_tag(0);
@@ -244,7 +333,7 @@ where
 }
 
 pub struct HList<K, V> {
-    inner: List<K, V>
+    inner: List<K, V>,
 }
 
 impl<K, V> ConcurrentMap<K, V> for HList<K, V>
@@ -252,7 +341,7 @@ where
     K: Ord,
 {
     fn new() -> Self {
-        Self::new()
+        HList { inner: List::new() }
     }
 
     #[inline]
@@ -270,7 +359,7 @@ where
 }
 
 pub struct HMList<K, V> {
-    inner: List<K, V>
+    inner: List<K, V>,
 }
 
 impl<K, V> ConcurrentMap<K, V> for HMList<K, V>
@@ -278,7 +367,7 @@ where
     K: Ord,
 {
     fn new() -> Self {
-        Self::new()
+        HMList { inner: List::new() }
     }
 
     #[inline]
@@ -296,7 +385,7 @@ where
 }
 
 pub struct HHSList<K, V> {
-    inner: List<K, V>
+    inner: List<K, V>,
 }
 
 impl<K, V> ConcurrentMap<K, V> for HHSList<K, V>
@@ -304,7 +393,7 @@ where
     K: Ord,
 {
     fn new() -> Self {
-        Self::new()
+        HHSList { inner: List::new() }
     }
 
     #[inline]
