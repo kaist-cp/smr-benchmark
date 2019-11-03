@@ -412,61 +412,21 @@ where
 
 #[cfg(test)]
 mod tests {
-    extern crate rand;
-    use super::List;
-    use crossbeam_utils::thread;
-    use rand::prelude::*;
+    use super::{HHSList, HList, HMList};
+    use crate::ebr::concurrent_map;
 
     #[test]
-    fn smoke_list() {
-        let list = &List::new();
+    fn smoke_h_list() {
+        concurrent_map::tests::smoke::<HList<i32, String>>();
+    }
 
-        // insert
-        thread::scope(|s| {
-            for t in 0..10 {
-                s.spawn(move |_| {
-                    let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (0..1000).map(|k| k * 10 + t).collect();
-                    keys.shuffle(&mut rng);
-                    for i in keys {
-                        assert!(list.insert(i, i.to_string(), &crossbeam_ebr::pin()));
-                    }
-                });
-            }
-        })
-        .unwrap();
+    #[test]
+    fn smoke_hm_list() {
+        concurrent_map::tests::smoke::<HMList<i32, String>>();
+    }
 
-        // remove
-        thread::scope(|s| {
-            for t in 0..5 {
-                s.spawn(move |_| {
-                    let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (0..1000).map(|k| k * 10 + t).collect();
-                    keys.shuffle(&mut rng);
-                    for i in keys {
-                        assert_eq!(
-                            i.to_string(),
-                            list.remove(&i, &crossbeam_ebr::pin()).unwrap()
-                        );
-                    }
-                });
-            }
-        })
-        .unwrap();
-
-        // get
-        thread::scope(|s| {
-            for t in 5..10 {
-                s.spawn(move |_| {
-                    let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (0..1000).map(|k| k * 10 + t).collect();
-                    keys.shuffle(&mut rng);
-                    for i in keys {
-                        assert_eq!(i.to_string(), *list.get(&i, &crossbeam_ebr::pin()).unwrap());
-                    }
-                });
-            }
-        })
-        .unwrap();
+    #[test]
+    fn smoke_hhs_list() {
+        concurrent_map::tests::smoke::<HHSList<i32, String>>();
     }
 }

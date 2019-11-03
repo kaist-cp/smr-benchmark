@@ -8,6 +8,6 @@ pub mod natarajan_mittal_tree;
 pub use self::concurrent_map::ConcurrentMap;
 
 pub use self::bonsai_tree::BonsaiTreeMap;
-pub use self::list::{HList, HMList, HHSList};
+pub use self::list::{HHSList, HList, HMList};
 pub use self::michael_hash_map::HashMap;
 pub use self::natarajan_mittal_tree::NMTreeMap;
