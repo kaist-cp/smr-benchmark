@@ -75,13 +75,13 @@ where
         // - cursor.curr: first unmarked node w/ key >= search key (4)
         // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
         // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
+        let mut prev_next = cursor.curr;
         let found = loop {
             let curr_node = match unsafe { cursor.curr.as_ref() } {
                 None => return Ok((false, cursor)),
                 Some(c) => c,
             };
 
-            // cursor.curr is non-tail
             let mut next = curr_node.next.load(Ordering::Acquire, guard);
 
             // - finding stage is done if cursor.curr advancement stops
@@ -93,10 +93,10 @@ where
                     cursor.curr = next.with_tag(0);
                     if tag == 0 {
                         cursor.prev = &curr_node.next;
+                        prev_next = next;
                     }
                 }
                 (eq, 0) => {
-                    cursor.prev = &curr_node.next;
                     next = curr_node.next.load(Ordering::Relaxed, guard);
                     // TODO: why re-check? probably not needed
                     if next.tag() == 0 {
@@ -105,14 +105,11 @@ where
                         return Err(());
                     }
                 }
-                (_, _) => {
-                    cursor.curr = next.with_tag(0);
-                }
+                (_, _) => cursor.curr = next.with_tag(0),
             }
         };
 
-        // If prev and curr are adjacent, no need to clean up
-        let prev_next = cursor.prev.load(Ordering::Relaxed, guard);
+        // If prev and curr WERE adjacent, no need to clean up
         if prev_next == cursor.curr {
             return Ok((found, cursor));
         }
