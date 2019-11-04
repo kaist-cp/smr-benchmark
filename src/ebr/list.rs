@@ -325,7 +325,25 @@ where
     }
 
     pub fn harris_herlihy_shavit_get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
-        unimplemented!()
+        let mut curr = self.head.load(Ordering::Acquire, guard);
+        loop {
+            let curr_node = match unsafe { curr.as_ref() } {
+                None => return None,
+                Some(c) => c,
+            };
+            if curr_node.key < *key {
+                curr = curr_node.next.load(Ordering::Acquire, guard);
+                continue;
+            }
+            match (
+                curr_node.key.cmp(key),
+                curr_node.next.load(Ordering::Relaxed, guard).tag(),
+            ) {
+                (Less, _) => continue,
+                (Equal, 0) => return Some(&*curr_node.value),
+                _ => return None,
+            }
+        }
     }
 }
 
