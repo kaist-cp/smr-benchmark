@@ -20,10 +20,10 @@ pub mod tests {
 
         // insert
         thread::scope(|s| {
-            for t in 0..10 {
+            for t in 0..40 {
                 s.spawn(move |_| {
                     let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (0..1000).map(|k| k * 10 + t).collect();
+                    let mut keys: Vec<i32> = (0..1000).map(|k| k * 40 + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
                         assert!(map.insert(i, i.to_string(), &crossbeam_ebr::pin()));
@@ -35,10 +35,10 @@ pub mod tests {
 
         // remove
         thread::scope(|s| {
-            for t in 0..5 {
+            for t in 0..20 {
                 s.spawn(move |_| {
                     let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (0..1000).map(|k| k * 10 + t).collect();
+                    let mut keys: Vec<i32> = (0..1000).map(|k| k * 40 + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
                         assert_eq!(
@@ -53,10 +53,10 @@ pub mod tests {
 
         // get
         thread::scope(|s| {
-            for t in 5..10 {
+            for t in 20..40 {
                 s.spawn(move |_| {
                     let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (0..1000).map(|k| k * 10 + t).collect();
+                    let mut keys: Vec<i32> = (0..1000).map(|k| k * 40 + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
                         assert_eq!(i.to_string(), *map.get(&i, &crossbeam_ebr::pin()).unwrap());

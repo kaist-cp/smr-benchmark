@@ -124,17 +124,17 @@ where
         }
 
         // defer_destroy from cursor.prev.load() to cursor.curr (exclusive)
-        let mut next = cursor.prev.load(Ordering::Relaxed, guard);
+        let mut node = prev_next;
         loop {
-            let temp = next;
-            if next.with_tag(0) == cursor.curr {
+            let node_ref = unsafe { node.as_ref().unwrap() };
+            let next = node_ref.next.load(Ordering::Relaxed, guard);
+            if node.with_tag(0) == cursor.curr {
                 return Ok((found, cursor));
             }
-            let node = unsafe { temp.as_ref().unwrap() };
-            next = node.next.load(Ordering::Relaxed, guard);
             unsafe {
-                guard.defer_destroy(temp);
+                guard.defer_destroy(node);
             }
+            node = next;
         }
     }
 
