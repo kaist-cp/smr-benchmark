@@ -96,77 +96,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    extern crate rand;
-    use super::{Cursor, HashMap};
-    use crossbeam_pebr::pin;
-    use crossbeam_utils::thread;
-    use rand::prelude::*;
+    use super::HashMap;
+    use crate::pebr::concurrent_map;
 
     #[test]
     fn smoke_hashmap() {
-        let hash_map = &HashMap::with_capacity(10000);
-
-        // insert
-        thread::scope(|s| {
-            for t in 0..10 {
-                s.spawn(move |_| {
-                    let mut cursor = Cursor::new(&pin());
-                    let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (0..3000).map(|k| k * 10 + t).collect();
-                    keys.shuffle(&mut rng);
-                    for i in keys {
-                        assert!(hash_map.insert(
-                            &mut cursor,
-                            i,
-                            i.to_string(),
-                            &mut crossbeam_pebr::pin()
-                        ));
-                    }
-                });
-            }
-        })
-        .unwrap();
-
-        // remove
-        thread::scope(|s| {
-            for t in 0..5 {
-                s.spawn(move |_| {
-                    let mut cursor = Cursor::new(&pin());
-                    let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (0..3000).map(|k| k * 10 + t).collect();
-                    keys.shuffle(&mut rng);
-                    for i in keys {
-                        assert_eq!(
-                            i.to_string(),
-                            hash_map
-                                .remove(&mut cursor, &i, &mut crossbeam_pebr::pin())
-                                .unwrap()
-                        );
-                    }
-                });
-            }
-        })
-        .unwrap();
-
-        // get
-        thread::scope(|s| {
-            for t in 5..10 {
-                s.spawn(move |_| {
-                    let mut cursor = Cursor::new(&pin());
-                    let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (0..3000).map(|k| k * 10 + t).collect();
-                    keys.shuffle(&mut rng);
-                    for i in keys {
-                        assert_eq!(
-                            i.to_string(),
-                            *hash_map
-                                .get(&mut cursor, &i, &mut crossbeam_pebr::pin())
-                                .unwrap()
-                        );
-                    }
-                });
-            }
-        })
-        .unwrap();
+        concurrent_map::tests::smoke::<HashMap<i32, String>>();
     }
 }

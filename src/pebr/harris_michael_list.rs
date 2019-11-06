@@ -297,68 +297,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    extern crate rand;
-    use super::{Cursor, List};
-    use crossbeam_pebr::pin;
-    use crossbeam_utils::thread;
-    use rand::prelude::*;
+    use super::List;
+    use crate::pebr::concurrent_map;
 
     #[test]
     fn smoke_list() {
-        let list = &List::new();
-
-        // insert
-        thread::scope(|s| {
-            for t in 0..10 {
-                s.spawn(move |_| {
-                    let mut cursor = Cursor::new(&pin());
-                    let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (0..1000).map(|k| k * 10 + t).collect();
-                    keys.shuffle(&mut rng);
-                    for i in keys {
-                        assert!(list.insert(&mut cursor, i, i.to_string(), &mut pin()));
-                    }
-                });
-            }
-        })
-        .unwrap();
-
-        // remove
-        thread::scope(|s| {
-            for t in 0..5 {
-                s.spawn(move |_| {
-                    let mut cursor = Cursor::new(&pin());
-                    let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (0..1000).map(|k| k * 10 + t).collect();
-                    keys.shuffle(&mut rng);
-                    for i in keys {
-                        assert_eq!(
-                            i.to_string(),
-                            list.remove(&mut cursor, &i, &mut pin()).unwrap()
-                        )
-                    }
-                });
-            }
-        })
-        .unwrap();
-
-        // get
-        thread::scope(|s| {
-            for t in 5..10 {
-                s.spawn(move |_| {
-                    let mut cursor = Cursor::new(&pin());
-                    let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (0..1000).map(|k| k * 10 + t).collect();
-                    keys.shuffle(&mut rng);
-                    for i in keys {
-                        assert_eq!(
-                            i.to_string(),
-                            *list.get(&mut cursor, &i, &mut pin()).unwrap()
-                        );
-                    }
-                });
-            }
-        })
-        .unwrap();
+        concurrent_map::tests::smoke::<List<i32, String>>();
     }
 }

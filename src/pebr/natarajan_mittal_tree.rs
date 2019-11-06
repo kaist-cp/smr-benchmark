@@ -612,73 +612,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    extern crate rand;
-    use super::{NMTreeMap, SeekRecord};
-    use crossbeam_utils::thread;
-    use rand::prelude::*;
+    use super::NMTreeMap;
+    use crate::pebr::concurrent_map;
 
     #[test]
     fn smoke_nm_tree() {
-        let nm_tree_map = &NMTreeMap::new();
-
-        // insert
-        thread::scope(|s| {
-            for t in 0..10 {
-                s.spawn(move |_| {
-                    let mut record = SeekRecord::new(&crossbeam_pebr::pin());
-                    let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (0..3000).map(|k| k * 10 + t).collect();
-                    keys.shuffle(&mut rng);
-                    for i in keys {
-                        assert!(nm_tree_map
-                            .insert(i, i.to_string(), &mut record, &mut crossbeam_pebr::pin())
-                            .is_ok());
-                    }
-                });
-            }
-        })
-        .unwrap();
-
-        // remove
-        thread::scope(|s| {
-            for t in 0..5 {
-                s.spawn(move |_| {
-                    let mut record = SeekRecord::new(&crossbeam_pebr::pin());
-                    let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (0..3000).map(|k| k * 10 + t).collect();
-                    keys.shuffle(&mut rng);
-                    for i in keys {
-                        assert_eq!(
-                            i.to_string(),
-                            nm_tree_map
-                                .remove(&i, &mut record, &mut crossbeam_pebr::pin())
-                                .unwrap()
-                        );
-                    }
-                });
-            }
-        })
-        .unwrap();
-
-        // get
-        thread::scope(|s| {
-            for t in 5..10 {
-                s.spawn(move |_| {
-                    let mut record = SeekRecord::new(&crossbeam_pebr::pin());
-                    let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (0..3000).map(|k| k * 10 + t).collect();
-                    keys.shuffle(&mut rng);
-                    for i in keys {
-                        assert_eq!(
-                            i.to_string(),
-                            *nm_tree_map
-                                .get(&i, &mut record, &mut crossbeam_pebr::pin())
-                                .unwrap()
-                        );
-                    }
-                });
-            }
-        })
-        .unwrap();
+        concurrent_map::tests::smoke::<NMTreeMap<i32, String>>();
     }
 }
