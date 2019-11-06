@@ -304,7 +304,9 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
     );
     let (ops_per_sec, peak_mem, avg_mem) = match config.mm {
         MM::NR => match config.ds {
-            DS::List => bench_nr::<ebr::List<String, String>>(config, PrefillStrategy::Decreasing),
+            DS::List => {
+                bench_nr::<ebr::HMList<String, String>>(config, PrefillStrategy::Decreasing)
+            }
             DS::HashMap => {
                 bench_nr::<ebr::HashMap<String, String>>(config, PrefillStrategy::Decreasing)
             }
@@ -317,7 +319,7 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
         },
         MM::EBR => match config.ds {
             DS::List => {
-                bench_ebr::<ebr::List<String, String>, N>(config, PrefillStrategy::Decreasing)
+                bench_ebr::<ebr::HMList<String, String>, N>(config, PrefillStrategy::Decreasing)
             }
             DS::HashMap => {
                 bench_ebr::<ebr::HashMap<String, String>, N>(config, PrefillStrategy::Decreasing)
