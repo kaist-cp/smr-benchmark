@@ -333,7 +333,7 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
         },
         MM::PEBR => match config.ds {
             DS::List => {
-                bench_pebr::<pebr::List<String, String>, N>(config, PrefillStrategy::Decreasing)
+                bench_pebr::<pebr::HMList<String, String>, N>(config, PrefillStrategy::Decreasing)
             }
             DS::HashMap => {
                 bench_pebr::<pebr::HashMap<String, String>, N>(config, PrefillStrategy::Decreasing)

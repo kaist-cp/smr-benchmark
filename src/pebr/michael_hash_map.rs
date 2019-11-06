@@ -3,11 +3,11 @@ use crossbeam_pebr::Guard;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-pub use super::harris_michael_list::Cursor;
-use super::harris_michael_list::List;
+pub use super::list::Cursor;
+use super::list::HMList;
 
 pub struct HashMap<K, V> {
-    buckets: Vec<List<K, V>>,
+    buckets: Vec<HMList<K, V>>,
 }
 
 impl<K, V> HashMap<K, V>
@@ -17,14 +17,14 @@ where
     pub fn with_capacity(n: usize) -> Self {
         let mut buckets = Vec::with_capacity(n);
         for _ in 0..n {
-            buckets.push(List::new());
+            buckets.push(HMList::new());
         }
 
         HashMap { buckets }
     }
 
     #[inline]
-    pub fn get_bucket(&self, index: usize) -> &List<K, V> {
+    pub fn get_bucket(&self, index: usize) -> &HMList<K, V> {
         unsafe { self.buckets.get_unchecked(index % self.buckets.len()) }
     }
 
@@ -39,7 +39,7 @@ where
     pub fn get<'g>(
         &'g self,
         cursor: &'g mut Cursor<K, V>,
-        k: &K,
+        k: &'g K,
         guard: &'g mut Guard,
     ) -> Option<&'g V> {
         let i = Self::hash(k);

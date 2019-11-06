@@ -204,7 +204,7 @@ where
     }
 
     #[inline]
-    fn get<'c, 'g: 'c, F>(&'g self, key: &K, find: F, guard: &'g Guard) -> Option<&'g V>
+    fn get<'g, F>(&'g self, key: &K, find: F, guard: &'g Guard) -> Option<&'g V>
     where
         F: Fn(&mut Cursor<'g, K, V>, &K, &'g Guard) -> Result<bool, ()>,
     {
