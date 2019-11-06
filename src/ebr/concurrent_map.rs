@@ -1,6 +1,5 @@
 use crossbeam_ebr::Guard;
 
-// TODO: impls in this file & re-export
 pub trait ConcurrentMap<K, V> {
     fn new() -> Self;
     fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V>;
@@ -18,7 +17,6 @@ pub mod tests {
     pub fn smoke<M: ConcurrentMap<i32, String> + Send + Sync>() {
         let map = &M::new();
 
-        // insert
         thread::scope(|s| {
             for t in 0..40 {
                 s.spawn(move |_| {
@@ -33,7 +31,6 @@ pub mod tests {
         })
         .unwrap();
 
-        // remove
         thread::scope(|s| {
             for t in 0..20 {
                 s.spawn(move |_| {
@@ -51,7 +48,6 @@ pub mod tests {
         })
         .unwrap();
 
-        // get
         thread::scope(|s| {
             for t in 20..40 {
                 s.spawn(move |_| {

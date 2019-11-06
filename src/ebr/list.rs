@@ -160,25 +160,20 @@ where
     /// Gotta go fast. Doesn't fail.
     #[inline]
     fn find_harris_herlihy_shavit(&mut self, key: &K, guard: &'g Guard) -> Result<bool, ()> {
-        loop {
+        Ok(loop {
             let curr_node = match unsafe { self.curr.as_ref() } {
-                None => return Ok(false),
+                None => break false,
                 Some(c) => c,
             };
-            if curr_node.key < *key {
-                self.curr = curr_node.next.load(Ordering::Acquire, guard);
-                self.prev = &curr_node.next; // NOTE: not needed
-                continue;
+            match curr_node.key.cmp(key) {
+                Less => {
+                    self.curr = curr_node.next.load(Ordering::Acquire, guard);
+                    self.prev = &curr_node.next; // NOTE: not needed
+                    continue;
+                }
+                _ => break curr_node.next.load(Ordering::Relaxed, guard).tag() == 0,
             }
-            match (
-                curr_node.key.cmp(key),
-                curr_node.next.load(Ordering::Relaxed, guard).tag(),
-            ) {
-                (Less, _) => continue,
-                (Equal, 0) => return Ok(true),
-                _ => return Ok(false),
-            }
-        }
+        })
     }
 }
 
