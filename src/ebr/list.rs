@@ -112,11 +112,11 @@ where
         // defer_destroy from cursor.prev.load() to cursor.curr (exclusive)
         let mut node = prev_next;
         loop {
-            let node_ref = unsafe { node.as_ref().unwrap() };
-            let next = node_ref.next.load(Ordering::Relaxed, guard);
             if node.with_tag(0) == self.curr {
                 return Ok(found);
             }
+            let node_ref = unsafe { node.as_ref().unwrap() };
+            let next = node_ref.next.load(Ordering::Relaxed, guard);
             unsafe {
                 guard.defer_destroy(node);
             }
