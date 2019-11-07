@@ -64,7 +64,7 @@ where
         let mut prev_next = self.curr;
         let found = loop {
             let curr_node = match unsafe { self.curr.as_ref() } {
-                None => return Ok(false),
+                None => break false,
                 Some(c) => c,
             };
 
