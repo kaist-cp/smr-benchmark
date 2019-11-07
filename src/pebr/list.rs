@@ -67,10 +67,22 @@ impl<K, V> Cursor<K, V> {
         self.prev.release();
         self.curr.release();
     }
+
+    fn init_find(&mut self, head: &Atomic<Node<K, V>>) {
+        // HACK(@jeehoonkang): we're unsafely assuming the first 8 bytes of both `Node<K, V>`
+        // and `List<K, V>` are `Atomic<Node<K, V>>`.
+        unsafe {
+            self.prev
+                .defend_fake(Shared::from_usize(head as *const _ as usize));
+        }
+    }
 }
 
 /// Note `guard: &'g Guard`. The inner functions should fail if ejected. Repinning is the job of
 /// the wrapper function.
+///
+/// Each find function expects `self.prev` to fake-defend
+/// `Shared::from_usize(&list.head as *const Atomic<Node<K, V>> as usize)`.
 impl<K, V> Cursor<K, V>
 where
     K: Ord,
@@ -82,7 +94,45 @@ where
 
     #[inline]
     fn find_harris_michael<'g>(&mut self, key: &K, guard: &'g Guard) -> Result<bool, FindError> {
-        unimplemented!()
+        let head = unsafe { &*(self.prev.shared().into_usize() as *const Atomic<Node<K, V>>) };
+        let mut curr = head.load(Ordering::Acquire, guard);
+
+        let result = loop {
+            debug_assert_eq!(curr.tag(), 0);
+            if curr.is_null() {
+                unsafe { self.curr.defend_fake(curr) };
+                break Ok(false);
+            }
+
+            self.curr
+                .defend(curr, guard)
+                .map_err(FindError::ShieldError)?;
+            let curr_node = unsafe { curr.deref() };
+
+            let mut next = curr_node.next.load(Ordering::Acquire, guard);
+
+            if next.tag() == 0 {
+                match curr_node.key.cmp(key) {
+                    Less => mem::swap(&mut self.prev, &mut self.curr),
+                    Equal => break Ok(true),
+                    Greater => break Ok(false),
+                }
+            } else {
+                next = next.with_tag(0);
+                if unsafe { self.prev.deref() }
+                    .next
+                    .compare_and_set(curr, next, Ordering::AcqRel, guard)
+                    .is_ok()
+                {
+                    unsafe { guard.defer_destroy(curr) };
+                } else {
+                    break Err(FindError::Retry);
+                }
+            }
+            curr = next;
+        };
+
+        result
     }
 
     #[inline]
@@ -105,124 +155,6 @@ where
         }
     }
 
-    /// Returns (1) whether it found an entry, and (2) a cursor.
-    #[inline(always)]
-    fn _find_inner<'g>(
-        &'g self,
-        key: &K,
-        cursor: &mut Cursor<K, V>,
-        guard: &'g Guard,
-    ) -> Result<bool, FindError> {
-        // HACK(@jeehoonkang): we're unsafely assuming the first 8 bytes of both `Node<K, V>` and
-        // `List<K, V>` are `Atomic<Node<K, V>>`.
-        unsafe {
-            cursor
-                .prev
-                .defend_fake(Shared::from_usize(&self.head as *const _ as usize));
-        }
-        let mut curr = self.head.load(Ordering::Acquire, guard);
-
-        let result = loop {
-            debug_assert_eq!(curr.tag(), 0);
-            if curr.is_null() {
-                unsafe { cursor.curr.defend_fake(curr) };
-                break Ok(false);
-            }
-
-            cursor
-                .curr
-                .defend(curr, guard)
-                .map_err(FindError::ShieldError)?;
-            let curr_node = unsafe { curr.deref() };
-
-            let mut next = curr_node.next.load(Ordering::Acquire, guard);
-
-            if next.tag() == 0 {
-                match curr_node.key.cmp(key) {
-                    Less => mem::swap(&mut cursor.prev, &mut cursor.curr),
-                    Equal => break Ok(true),
-                    Greater => break Ok(false),
-                }
-            } else {
-                next = next.with_tag(0);
-                if unsafe { cursor.prev.deref() }
-                    .next
-                    .compare_and_set(curr, next, Ordering::AcqRel, guard)
-                    .is_ok()
-                {
-                    unsafe { guard.defer_destroy(curr) };
-                } else {
-                    break Err(FindError::Retry);
-                }
-            }
-            curr = next;
-        };
-
-        result
-    }
-
-    fn _insert_inner<'g>(
-        &'g self,
-        mut node: Shared<'g, Node<K, V>>,
-        cursor: &mut Cursor<K, V>,
-        guard: &'g Guard,
-    ) -> Result<bool, FindError> {
-        loop {
-            // TODO: create cursor in this function.
-            let found = self._find_inner(&unsafe { node.deref() }.key, cursor, guard)?;
-            if found {
-                unsafe {
-                    ManuallyDrop::drop(&mut node.deref_mut().value);
-                    drop(node.into_owned());
-                }
-                return Ok(false);
-            }
-
-            unsafe { node.deref() }
-                .next
-                .store(cursor.curr.shared(), Ordering::Relaxed);
-            if unsafe { cursor.prev.deref() }
-                .next
-                .compare_and_set(cursor.curr.shared(), node, Ordering::AcqRel, guard)
-                .is_ok()
-            {
-                return Ok(true);
-            }
-        }
-    }
-
-    fn _remove_inner<'g>(
-        &'g self,
-        key: &K,
-        cursor: &mut Cursor<K, V>,
-        guard: &'g Guard,
-    ) -> Result<Option<V>, FindError> {
-        loop {
-            let found = self._find_inner(key, cursor, guard)?;
-            if !found {
-                return Ok(None);
-            }
-
-            let curr_node = unsafe { cursor.curr.as_ref() }.unwrap();
-            let next = curr_node.next.fetch_or(1, Ordering::AcqRel, guard);
-            if next.tag() == 1 {
-                continue;
-            }
-
-            let value = unsafe { ptr::read(&curr_node.value) };
-
-            if unsafe { cursor.prev.deref() }
-                .next
-                .compare_and_set(cursor.curr.shared(), next, Ordering::AcqRel, guard)
-                .is_ok()
-            {
-                unsafe { guard.defer_destroy(cursor.curr.shared()) };
-            }
-
-            return Ok(Some(ManuallyDrop::into_inner(value)));
-        }
-    }
-
     #[inline]
     fn find<'g, F>(
         &'g self,
@@ -236,9 +168,8 @@ where
     {
         // TODO: we want to use `FindError::retry`, but it requires higher-kinded things...
         loop {
-            // HACK(@jeehoonkang): we're unsafely assuming the first 8 bytes of both `Node<K, V>`
-            // and `List<K, V>` are `Atomic<Node<K, V>>`.
-            match find(cursor, key, unsafe { &mut *(guard as *mut Guard) }) {
+            cursor.init_find(&self.head);
+            match find(cursor, key, unsafe { &*(guard as *mut Guard) }) {
                 Ok(r) => return r,
                 Err(FindError::Retry) => continue,
                 Err(FindError::ShieldError(ShieldError::Ejected)) => guard.repin(),
@@ -277,7 +208,7 @@ where
         F: Fn(&mut Cursor<K, V>, &K, &'g Guard) -> Result<bool, FindError>,
     {
         loop {
-            // TODO: create cursor in this function.
+            cursor.init_find(&self.head);
             let found = find(cursor, unsafe { &node.deref().key }, guard)?;
             if found {
                 unsafe {
@@ -339,6 +270,7 @@ where
         F: Fn(&mut Cursor<K, V>, &K, &'g Guard) -> Result<bool, FindError>,
     {
         loop {
+            cursor.init_find(&self.head);
             let found = find(cursor, key, guard)?;
             if !found {
                 return Ok(None);
