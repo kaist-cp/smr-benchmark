@@ -89,7 +89,81 @@ where
 {
     #[inline]
     fn find_harris<'g>(&mut self, key: &K, guard: &'g Guard) -> Result<bool, FindError> {
-        unimplemented!()
+        // Finding phase
+        // - cursor.curr: first unmarked node w/ key >= search key (4)
+        // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
+        // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
+
+        let head = unsafe { &*(self.prev.shared().into_usize() as *const Atomic<Node<K, V>>) };
+        let mut curr = head.load(Ordering::Acquire, guard);
+        let mut prev_next = curr;
+
+        let found = loop {
+            if curr.is_null() {
+                unsafe { self.curr.defend_fake(curr) };
+                break false;
+            }
+
+            self.curr
+                .defend(curr, guard)
+                .map_err(FindError::ShieldError)?;
+            let curr_node = unsafe { curr.deref() };
+
+
+            let mut next = curr_node.next.load(Ordering::Acquire, guard);
+
+            // - finding stage is done if cursor.curr advancement stops
+            // - advance cursor.curr if (.next is marked) || (cursor.curr < key)
+            // - stop cursor.curr if (not marked) && (cursor.curr >= key)
+            // - advance cursor.prev if not marked
+            match (curr_node.key.cmp(key), next.tag()) {
+                (Less, tag) => {
+                    curr = next.with_tag(0);
+                    if tag == 0 {
+                        mem::swap(&mut self.prev, &mut self.curr);
+                        prev_next = next;
+                    }
+                }
+                (eq, 0) => {
+                    next = curr_node.next.load(Ordering::Relaxed, guard);
+                    // TODO: why re-check? probably not needed
+                    if next.tag() == 0 {
+                        break eq == Equal;
+                    } else {
+                        return Err(FindError::Retry);
+                    }
+                }
+                (_, _) => curr = next.with_tag(0),
+            }
+        };
+
+        // If prev and curr WERE adjacent, no need to clean up
+        if prev_next == curr {
+            return Ok(found);
+        }
+
+        // cleanup marked nodes between prev and curr
+        if unsafe { self.prev.deref() }
+            .next
+            .compare_and_set(prev_next, curr, Ordering::AcqRel, guard)
+            .is_err()
+        {
+            return Err(FindError::Retry);
+        }
+
+        // defer_destroy from cursor.prev.load() to cursor.curr (exclusive)
+        let mut node = prev_next;
+        loop {
+            let node_ref = unsafe { node.as_ref().unwrap() };
+            let next = node_ref.next.load(Ordering::Relaxed, guard);
+            if node.with_tag(0) == curr {
+                return Ok(found);
+            }
+            unsafe {
+                guard.defer_destroy(node);
+            }
+            node = next;
+        }
     }
 
     #[inline]
