@@ -25,16 +25,19 @@ pub mod tests {
     use crossbeam_utils::thread;
     use rand::prelude::*;
 
+    const THREADS: i32 = 30;
+    const ELEMENTS_PER_THREADS: i32 = 1000;
+
     pub fn smoke<M: ConcurrentMap<i32, String> + Send + Sync>() {
         let map = &M::new();
 
-        // insert
         thread::scope(|s| {
-            for t in 0..10 {
+            for t in 0..THREADS {
                 s.spawn(move |_| {
                     let mut handle = M::handle(&pin());
                     let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (0..3000).map(|k| k * 10 + t).collect();
+                    let mut keys: Vec<i32> =
+                        (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
                         assert!(map.insert(&mut handle, i, i.to_string(), &mut pin()));
@@ -44,13 +47,13 @@ pub mod tests {
         })
         .unwrap();
 
-        // remove
         thread::scope(|s| {
-            for t in 0..5 {
+            for t in 0..(THREADS / 2) {
                 s.spawn(move |_| {
                     let mut handle = M::handle(&pin());
                     let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (0..3000).map(|k| k * 10 + t).collect();
+                    let mut keys: Vec<i32> =
+                        (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
                         assert_eq!(
@@ -63,13 +66,13 @@ pub mod tests {
         })
         .unwrap();
 
-        // get
         thread::scope(|s| {
-            for t in 5..10 {
+            for t in (THREADS / 2)..THREADS {
                 s.spawn(move |_| {
                     let mut handle = M::handle(&pin());
                     let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> = (0..3000).map(|k| k * 10 + t).collect();
+                    let mut keys: Vec<i32> =
+                        (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
                         assert_eq!(

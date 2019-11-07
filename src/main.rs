@@ -25,7 +25,9 @@ use pebr_benchmark::pebr;
 arg_enum! {
     #[derive(PartialEq, Debug)]
     pub enum DS {
-        List,
+        HList,
+        HMList,
+        HHSList,
         HashMap,
         NMTree,
         BonsaiTree
@@ -304,8 +306,14 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
     );
     let (ops_per_sec, peak_mem, avg_mem) = match config.mm {
         MM::NR => match config.ds {
-            DS::List => {
+            DS::HList => {
+                bench_nr::<ebr::HList<String, String>>(config, PrefillStrategy::Decreasing)
+            }
+            DS::HMList => {
                 bench_nr::<ebr::HMList<String, String>>(config, PrefillStrategy::Decreasing)
+            }
+            DS::HHSList => {
+                bench_nr::<ebr::HHSList<String, String>>(config, PrefillStrategy::Decreasing)
             }
             DS::HashMap => {
                 bench_nr::<ebr::HashMap<String, String>>(config, PrefillStrategy::Decreasing)
@@ -318,8 +326,14 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             }
         },
         MM::EBR => match config.ds {
-            DS::List => {
+            DS::HList => {
+                bench_ebr::<ebr::HList<String, String>, N>(config, PrefillStrategy::Decreasing)
+            }
+            DS::HMList => {
                 bench_ebr::<ebr::HMList<String, String>, N>(config, PrefillStrategy::Decreasing)
+            }
+            DS::HHSList => {
+                bench_ebr::<ebr::HHSList<String, String>, N>(config, PrefillStrategy::Decreasing)
             }
             DS::HashMap => {
                 bench_ebr::<ebr::HashMap<String, String>, N>(config, PrefillStrategy::Decreasing)
@@ -332,8 +346,14 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             }
         },
         MM::PEBR => match config.ds {
-            DS::List => {
+            DS::HList => {
+                bench_pebr::<pebr::HList<String, String>, N>(config, PrefillStrategy::Decreasing)
+            }
+            DS::HMList => {
                 bench_pebr::<pebr::HMList<String, String>, N>(config, PrefillStrategy::Decreasing)
+            }
+            DS::HHSList => {
+                bench_pebr::<pebr::HHSList<String, String>, N>(config, PrefillStrategy::Decreasing)
             }
             DS::HashMap => {
                 bench_pebr::<pebr::HashMap<String, String>, N>(config, PrefillStrategy::Decreasing)
