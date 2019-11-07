@@ -109,7 +109,6 @@ where
                 .map_err(FindError::ShieldError)?;
             let curr_node = unsafe { curr.deref() };
 
-
             let mut next = curr_node.next.load(Ordering::Acquire, guard);
 
             // - finding stage is done if cursor.curr advancement stops
@@ -215,7 +214,29 @@ where
         key: &K,
         guard: &'g Guard,
     ) -> Result<bool, FindError> {
-        unimplemented!()
+        let head = unsafe { &*(self.prev.shared().into_usize() as *const Atomic<Node<K, V>>) };
+        let mut curr = head.load(Ordering::Acquire, guard);
+
+        loop {
+            if curr.is_null() {
+                unsafe { self.curr.defend_fake(curr) };
+                return Ok(false);
+            }
+
+            self.curr
+                .defend(curr, guard)
+                .map_err(FindError::ShieldError)?;
+            let curr_node = unsafe { curr.deref() };
+
+            match curr_node.key.cmp(key) {
+                Less => {
+                    curr = curr_node.next.load(Ordering::Acquire, guard);
+                    mem::swap(&mut self.prev, &mut self.curr); // NOTE: not needed
+                    continue;
+                }
+                _ => return Ok(curr_node.next.load(Ordering::Relaxed, guard).tag() == 0),
+            }
+        }
     }
 }
 
