@@ -8,10 +8,10 @@ use std::sync::atomic::Ordering;
 
 #[derive(Debug)]
 struct Node<K, V> {
-    key: K,
-    value: ManuallyDrop<V>,
     /// Mark: tag(), Tag: not needed
     next: Atomic<Node<K, V>>,
+    key: K,
+    value: ManuallyDrop<V>,
 }
 
 struct List<K, V> {
@@ -84,7 +84,6 @@ where
                 }
                 (eq, 0) => {
                     next = curr_node.next.load(Ordering::Relaxed, guard);
-                    // TODO: why re-check? probably not needed
                     if next.tag() == 0 {
                         break eq == Equal;
                     } else {

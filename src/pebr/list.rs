@@ -125,7 +125,6 @@ where
                 }
                 (eq, 0) => {
                     next = curr_node.next.load(Ordering::Relaxed, guard);
-                    // TODO: why re-check? probably not needed
                     if next.tag() == 0 {
                         break eq == Equal;
                     } else {
@@ -261,7 +260,7 @@ where
     where
         F: Fn(&mut Cursor<K, V>, &K, &'g Guard) -> Result<bool, FindError>,
     {
-        // TODO: we want to use `FindError::retry`, but it requires higher-kinded things...
+        // TODO: we want to use `FindError::retry()`, but it requires higher-kinded things...
         loop {
             cursor.init_find(&self.head);
             match find(cursor, key, unsafe { &*(guard as *mut Guard) }) {
