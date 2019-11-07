@@ -8,10 +8,10 @@ use std::sync::atomic::Ordering;
 
 #[derive(Debug)]
 struct Node<K, V> {
-    key: K,
-    value: ManuallyDrop<V>,
     /// Mark: tag(), Tag: not needed
     next: Atomic<Node<K, V>>,
+    key: K,
+    value: ManuallyDrop<V>,
 }
 
 struct List<K, V> {
@@ -64,7 +64,7 @@ where
         let mut prev_next = self.curr;
         let found = loop {
             let curr_node = match unsafe { self.curr.as_ref() } {
-                None => return Ok(false),
+                None => break false,
                 Some(c) => c,
             };
 
@@ -84,7 +84,6 @@ where
                 }
                 (eq, 0) => {
                     next = curr_node.next.load(Ordering::Relaxed, guard);
-                    // TODO: why re-check? probably not needed
                     if next.tag() == 0 {
                         break eq == Equal;
                     } else {
@@ -112,11 +111,11 @@ where
         // defer_destroy from cursor.prev.load() to cursor.curr (exclusive)
         let mut node = prev_next;
         loop {
-            let node_ref = unsafe { node.as_ref().unwrap() };
-            let next = node_ref.next.load(Ordering::Relaxed, guard);
             if node.with_tag(0) == self.curr {
                 return Ok(found);
             }
+            let node_ref = unsafe { node.as_ref().unwrap() };
+            let next = node_ref.next.load(Ordering::Relaxed, guard);
             unsafe {
                 guard.defer_destroy(node);
             }
@@ -204,7 +203,7 @@ where
     }
 
     #[inline]
-    fn get<'c, 'g: 'c, F>(&'g self, key: &K, find: F, guard: &'g Guard) -> Option<&'g V>
+    fn get<'g, F>(&'g self, key: &K, find: F, guard: &'g Guard) -> Option<&'g V>
     where
         F: Fn(&mut Cursor<'g, K, V>, &K, &'g Guard) -> Result<bool, ()>,
     {
