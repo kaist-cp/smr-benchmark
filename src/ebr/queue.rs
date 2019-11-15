@@ -4,6 +4,9 @@
 //!
 //! Michael and Scott.  Simple, Fast, and Practical Non-Blocking and Blocking Concurrent Queue
 //! Algorithms.  PODC 1996.  http://dl.acm.org/citation.cfm?id=248106
+//!
+//! Simon Doherty, Lindsay Groves, Victor Luchangco, and Mark Moir. 2004b. Formal Verification of a
+//! Practical Lock-Free Queue Algorithm. https://doi.org/10.1007/978-3-540-30232-2_7
 
 use core::mem::{self, ManuallyDrop};
 use core::ptr;
@@ -11,7 +14,7 @@ use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
 use crossbeam_utils::CachePadded;
 
-use crossbeam_pebr::{unprotected, Atomic, Guard, Owned, Shared, Shield, ShieldError};
+use crossbeam_ebr::{unprotected, Atomic, Guard, Owned, Shared};
 
 // The representation here is a singly-linked list, with a sentinel node at the front. In general
 // the `tail` pointer may lag behind the actual tail. Non-sentinel nodes are either all `Data` or
@@ -33,18 +36,6 @@ struct Node<T> {
     data: ManuallyDrop<T>,
 
     next: Atomic<Node<T>>,
-}
-
-pub struct Handle<T> {
-    /// defend `head` or `tail`
-    shield1: Shield<Node<T>>,
-    /// defend `onto.next`
-    shield2: Shield<Node<T>>,
-}
-
-enum PopError {
-    Retry,
-    ShieldError(ShieldError),
 }
 
 // Any particular `T` should never be accessed concurrently, so no need for `Sync`.
@@ -72,33 +63,17 @@ impl<T> Queue<T> {
         }
     }
 
-    pub fn handle(guard: &Guard) -> Handle<T> {
-        Handle {
-            shield1: Shield::null(guard),
-            shield2: Shield::null(guard),
-        }
-    }
-
     /// Attempts to atomically place `n` into the `next` pointer of `onto`, and returns `true` on
     /// success. The queue's `tail` pointer may be updated.
     #[inline(always)]
-    fn push_internal(
-        &self,
-        onto: Shared<Node<T>>,
-        new: Shared<Node<T>>,
-        handle: &mut Handle<T>,
-        guard: &Guard,
-    ) -> Result<bool, ShieldError> {
+    fn push_internal(&self, onto: Shared<Node<T>>, new: Shared<Node<T>>, guard: &Guard) -> bool {
         // is `onto` the actual tail?
-        handle.shield1.defend(onto, guard)?;
-        let o = unsafe { handle.shield1.deref() };
+        let o = unsafe { onto.deref() };
         let next = o.next.load(Acquire, guard);
-        if !next.is_null() {
+        if unsafe { next.as_ref().is_some() } {
             // if not, try to "help" by moving the tail pointer forward
-            let _ = self
-                .tail
-                .compare_and_set(handle.shield1.shared(), next, Release, guard);
-            Ok(false)
+            let _ = self.tail.compare_and_set(onto, next, Release, guard);
+            false
         } else {
             // looks like the actual tail; attempt to link in `n`
             let result = o
@@ -107,64 +82,51 @@ impl<T> Queue<T> {
                 .is_ok();
             if result {
                 // try to move the tail pointer forward
-                let _ = self
-                    .tail
-                    .compare_and_set(handle.shield1.shared(), new, Release, guard);
+                let _ = self.tail.compare_and_set(onto, new, Release, guard);
             }
-            Ok(result)
+            result
         }
     }
 
     /// Adds `t` to the back of the queue, possibly waking up threads blocked on `pop`.
-    pub fn push(&self, t: T, handle: &mut Handle<T>, guard: &mut Guard) {
+    pub fn push(&self, t: T, guard: &Guard) {
         let new = Owned::new(Node {
             data: ManuallyDrop::new(t),
             next: Atomic::null(),
         });
-        let new = Owned::into_shared(new, unsafe { unprotected() });
+        let new = Owned::into_shared(new, guard);
 
         loop {
             // We push onto the tail, so we'll start optimistically by looking there first.
             let tail = self.tail.load(Acquire, guard);
 
             // Attempt to push onto the `tail` snapshot; fails if `tail.next` has changed.
-            match self.push_internal(tail, new, handle, guard) {
-                Ok(true) => break,
-                Ok(_) => continue,
-                Err(ShieldError::Ejected) => guard.repin(),
+            if self.push_internal(tail, new, guard) {
+                break;
             }
         }
     }
 
     /// Attempts to pop a data node. `Ok(None)` if queue is empty; `Err(())` if lost race to pop.
     #[inline(always)]
-    fn pop_internal(&self, handle: &mut Handle<T>, guard: &Guard) -> Result<Option<T>, PopError> {
+    fn pop_internal(&self, guard: &Guard) -> Result<Option<T>, ()> {
         let head = self.head.load(Acquire, guard);
-        handle
-            .shield1
-            .defend(head, guard)
-            .map_err(PopError::ShieldError)?;
-        let h = unsafe { handle.shield1.deref() };
+        let h = unsafe { head.deref() };
         let next = h.next.load(Acquire, guard);
-        handle
-            .shield2
-            .defend(next, guard)
-            .map_err(PopError::ShieldError)?;
-        match unsafe { handle.shield2.as_ref() } {
+        match unsafe { next.as_ref() } {
             Some(n) => unsafe {
                 self.head
-                    .compare_and_set(
-                        handle.shield1.shared(),
-                        handle.shield2.shared(),
-                        Release,
-                        guard,
-                    )
+                    .compare_and_set(head, next, Release, guard)
                     .map(|_| {
-                        // NOTE: No need to update the lagging tail pointer thanks to PEBR.
-                        guard.defer_destroy(handle.shield1.shared());
+                        let tail = self.tail.load(Relaxed, guard);
+                        // Advance the tail so that we don't retire a pointer to a reachable node.
+                        if head == tail {
+                            let _ = self.tail.compare_and_set(tail, next, Release, guard);
+                        }
+                        guard.defer_destroy(head);
                         Some(ManuallyDrop::into_inner(ptr::read(&n.data)))
                     })
-                    .map_err(|_| PopError::Retry)
+                    .map_err(|_| ())
             },
             None => Ok(None),
         }
@@ -173,12 +135,10 @@ impl<T> Queue<T> {
     /// Attempts to dequeue from the front.
     ///
     /// Returns `None` if the queue is observed to be empty.
-    pub fn try_pop(&self, handle: &mut Handle<T>, guard: &mut Guard) -> Option<T> {
+    pub fn try_pop(&self, guard: &Guard) -> Option<T> {
         loop {
-            match self.pop_internal(handle, guard) {
-                Ok(head) => return head,
-                Err(PopError::Retry) => continue,
-                Err(PopError::ShieldError(ShieldError::Ejected)) => guard.repin(),
+            if let Ok(head) = self.pop_internal(guard) {
+                return head;
             }
         }
     }
@@ -187,10 +147,9 @@ impl<T> Queue<T> {
 impl<T> Drop for Queue<T> {
     fn drop(&mut self) {
         unsafe {
-            let guard = &mut unprotected();
-            let handle = &mut Self::handle(guard);
+            let guard = &unprotected();
 
-            while let Some(_) = self.try_pop(handle, guard) {}
+            while let Some(_) = self.try_pop(guard) {}
 
             // Destroy the remaining sentinel node.
             let sentinel = self.head.load(Relaxed, guard);
@@ -202,7 +161,7 @@ impl<T> Drop for Queue<T> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crossbeam_pebr::pin;
+    use crossbeam_ebr::pin;
     use crossbeam_utils::thread;
 
     struct Queue<T> {
@@ -216,31 +175,23 @@ mod test {
             }
         }
 
-        pub fn handle() -> Handle<T> {
-            super::Queue::handle(&pin())
+        pub fn push(&self, t: T) {
+            let guard = &pin();
+            self.queue.push(t, guard);
         }
 
-        pub fn push(&self, t: T, handle: &mut Handle<T>) {
-            let guard = &mut pin();
-            self.queue.push(t, handle, guard);
+        pub fn is_empty(&self) -> bool {
+            let guard = &pin();
+            let head = self.queue.head.load(Acquire, guard);
+            let h = unsafe { head.deref() };
+            h.next.load(Acquire, guard).is_null()
         }
 
-        pub fn is_empty(&self, handle: &mut Handle<T>) -> bool {
-            loop {
-                let guard = &pin();
-                let head = self.queue.head.load(Acquire, guard);
-                if handle.shield1.defend(head, guard).is_err() {
-                    continue;
-                }
-                let h = unsafe { handle.shield1.deref() };
-                break h.next.load(Acquire, guard).is_null();
-            }
+        pub fn try_pop(&self) -> Option<T> {
+            let guard = &pin();
+            self.queue.try_pop(guard)
         }
 
-        pub fn try_pop(&self, handle: &mut Handle<T>) -> Option<T> {
-            let guard = &mut pin();
-            self.queue.try_pop(handle, guard)
-        }
     }
 
     const CONC_COUNT: i64 = 1000000;
@@ -255,29 +206,25 @@ mod test {
         }
 
         let q: Queue<LR> = Queue::new();
-        let handle = &mut Queue::handle();
-        assert!(q.is_empty(handle));
+        assert!(q.is_empty());
 
         thread::scope(|scope| {
             for _t in 0..THREADS / 3 {
                 scope.spawn(|_| {
-                    let handle = &mut Queue::handle();
                     for i in CONC_COUNT - 1..CONC_COUNT {
-                        q.push(LR::Left(i), handle)
+                        q.push(LR::Left(i))
                     }
                 });
                 scope.spawn(|_| {
-                    let handle = &mut Queue::handle();
                     for i in CONC_COUNT - 1..CONC_COUNT {
-                        q.push(LR::Right(i), handle)
+                        q.push(LR::Right(i))
                     }
                 });
                 scope.spawn(|_| {
                     let mut vl = vec![];
                     let mut vr = vec![];
-                    let handle = &mut Queue::handle();
                     for _i in 0..CONC_COUNT {
-                        match q.try_pop(handle) {
+                        match q.try_pop() {
                             Some(LR::Left(x)) => vl.push(x),
                             Some(LR::Right(x)) => vr.push(x),
                             _ => {}
