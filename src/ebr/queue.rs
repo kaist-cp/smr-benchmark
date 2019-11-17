@@ -191,7 +191,6 @@ mod test {
             let guard = &pin();
             self.queue.try_pop(guard)
         }
-
     }
 
     const CONC_COUNT: i64 = 1000000;

@@ -6,6 +6,7 @@ mms = ['EBR', 'PEBR', 'NR']
 ns = [0, 1, 2, 3]
 ts = list(map(str, [1] + list(range(5, 76, 5))))
 cs = [1, 4]
+# TODO i=3 and run the bench 3 times
 i = 10
 
 if os.path.exists('.git'):

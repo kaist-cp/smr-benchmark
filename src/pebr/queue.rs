@@ -42,6 +42,7 @@ pub struct Handle<T> {
     shield2: Shield<Node<T>>,
 }
 
+
 enum PopError {
     Retry,
     ShieldError(ShieldError),
@@ -77,6 +78,11 @@ impl<T> Queue<T> {
             shield1: Shield::null(guard),
             shield2: Shield::null(guard),
         }
+    }
+
+    pub fn clear(handle: &mut Handle<T>) {
+        handle.shield1.release();
+        handle.shield2.release();
     }
 
     /// Attempts to atomically place `n` into the `next` pointer of `onto`, and returns `true` on
