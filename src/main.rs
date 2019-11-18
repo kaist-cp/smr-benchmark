@@ -138,9 +138,9 @@ fn main() {
                 .takes_value(true)
                 .help(
                     "The proportion of `get`(read) operations. \
-                     0: 0%, 1: 50%, 2: 90%",
+                     0: 0%, 1: 90%",
                 )
-                .possible_values(&["0", "1", "2"])
+                .possible_values(&["0", "1"])
                 .default_value("0"),
         )
         .arg(
@@ -150,14 +150,6 @@ fn main() {
                 .takes_value(true)
                 .help("Key range: [0..RANGE]")
                 .default_value("100000"),
-        )
-        .arg(
-            Arg::with_name("prefill")
-                .short("p")
-                .value_name("PREFILL")
-                .takes_value(true)
-                .help("The number of pre-inserted elements before starting")
-                .default_value("50000"),
         )
         .arg(
             Arg::with_name("interval")
@@ -211,8 +203,8 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
     let non_coop = value_t!(m, "non-coop", usize).unwrap();
     let get_rate = value_t!(m, "get rate", usize).unwrap();
     let range = value_t!(m, "range", usize).unwrap();
+    let prefill = range / 2;
     let key_dist = Uniform::from(0..range);
-    let prefill = value_t!(m, "prefill", usize).unwrap();
     let interval = value_t!(m, "interval", u64).unwrap();
     let sampling_period = value_t!(m, "sampling period", u64).unwrap();
     let sampling = sampling_period > 0;
@@ -224,11 +216,11 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
     let duration = Duration::from_secs(interval);
 
     let op_weights = if ds == DS::MSQueue {
+        assert_eq!(get_rate, 0);
         &[0, 1, 1]
     } else {
         match get_rate {
             0 => &[0, 1, 1],
-            1 => &[2, 1, 1],
             _ => &[18, 1, 1],
         }
     };
@@ -306,8 +298,8 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
 
 fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
     println!(
-        "{}: {}, {} threads, n{}, c{}",
-        config.ds, config.mm, config.threads, config.non_coop, config.ops_per_cs
+        "{}: {}, {} threads, n{}, c{}, g{}",
+        config.ds, config.mm, config.threads, config.non_coop, config.ops_per_cs, config.get_rate
     );
     let (ops_per_sec, peak_mem, avg_mem) = match config.mm {
         MM::NR => match config.ds {
@@ -478,7 +470,6 @@ impl PrefillStrategy {
     }
 }
 
-// TODO: too much duplication
 fn bench_map_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
     config: &Config,
     strategy: PrefillStrategy,
@@ -746,7 +737,6 @@ fn bench_map_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync, N: Unsig
                 barrier.clone().wait();
                 let start = Instant::now();
 
-                // TODO: repin freq opt?
                 let mut guard = handle.pin();
                 while start.elapsed() < config.duration {
                     let key = config.key_dist.sample(&mut rng).to_string();
