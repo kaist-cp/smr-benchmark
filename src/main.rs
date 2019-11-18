@@ -1045,7 +1045,7 @@ fn bench_queue_pebr<N: Unsigned>(config: &Config) -> (u64, usize, usize) {
                     ops += 1;
                     if ops % N::to_u64() == 0 {
                         pebr::Queue::clear(&mut queue_handle);
-                        guard = handle.pin();
+                        guard.repin();
                     }
                 }
 
