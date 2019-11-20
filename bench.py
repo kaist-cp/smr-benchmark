@@ -1,14 +1,20 @@
 import subprocess
 import os.path
+import sys
 
-dss = ['HList', 'HMList', 'HHSList', 'HashMap', 'NMTree', 'BonsaiTree', 'MSQueue']
+dss = ['HList', 'HMList', 'HHSList', 'HashMap', 'NMTree', 'BonsaiTree']
 mms = ['EBR', 'PEBR', 'NR']
 ns = [0, 2, 3]
-ts = list(map(str, [1] + list(range(5, 76, 5))))
 cs = [1]
-gs = [0, 1]
 i = 3
-runs = 3
+if len(sys.argv) <= 1:
+    ts = list(map(str, [1] + list(range(5, 76, 5))))
+    gs = [0, 1]
+    runs = 3
+elif sys.argv[1] == 'simple':
+    ts = list(map(str, [1, 20, 30]))
+    gs = [0]
+    runs = 1
 
 if os.path.exists('.git'):
     subprocess.run(['git', 'submodule', 'update', '--init', '--recursive'])
@@ -25,8 +31,6 @@ def invalid(mm, ds, c, n, g):
     is_invalid = False
     if mm == 'NR':
         is_invalid |= n != 0 or c != 1  # meaningless config
-    if ds == 'MSQueue':
-        is_invalid |= g != 0  # push:pop=1:1 only
     if ds == 'HHSList':
         is_invalid |= g == 0  # HHSList is just HMList with faster get()
     return is_invalid

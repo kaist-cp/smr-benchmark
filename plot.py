@@ -22,7 +22,6 @@ HHSLIST = "HHSList"
 HASHMAP = "HashMap"
 NMTREE = "NMTree"
 BONSAITREE = "BonsaiTree"
-MSQUEUE = "MSQueue"
 
 EBR = "EBR"
 PEBR = "PEBR"
@@ -33,9 +32,9 @@ N10MS = ', 10ms'
 STALLED = ', stalled'
 
 # DS with read-dominated bench & write-only bench
-dss_all   = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, BONSAITREE, MSQUEUE]
-dss_read  = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, BONSAITREE         ]
-dss_write = [HLIST, HMLIST,          HASHMAP, NMTREE, BONSAITREE, MSQUEUE]
+dss_all   = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, BONSAITREE]
+dss_read  = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, BONSAITREE]
+dss_write = [HLIST, HMLIST,          HASHMAP, NMTREE, BONSAITREE]
 
 SMR_ONLYs = [NR, EBR, PEBR]
 SMR_Is = [NR, EBR, EBR+N10MS, EBR+STALLED, PEBR, PEBR+N10MS, PEBR+STALLED]
@@ -85,7 +84,8 @@ def draw(ds, name, data, line_name, y_value, y_label=None, y_max=None, legend=Fa
         scale_shape_manual(line_shapes, na_value='x') + \
         scale_color_manual(line_colors, na_value='y') + \
         scale_linetype_manual(line_types, na_value='-.') + \
-        theme_bw() + scale_x_continuous(breaks=ts)
+        theme_bw() + scale_x_continuous(breaks=ts) + \
+        labs(title = ds) + theme(plot_title = element_text(size=28))
         # ggtitle(title[ds]) + guides(title_position='bottom')
 
     p += theme(
@@ -100,9 +100,7 @@ def draw(ds, name, data, line_name, y_value, y_label=None, y_max=None, legend=Fa
 
     if y_max:
         p += coord_cartesian(ylim=(0, y_max))
-    width = 8
     if legend:
-        width = 9
         # HACK: `\n` at the end of legend title
         p += theme(legend_title=element_text(size=18, linespacing=1.5))
         p += theme(legend_key_size=15)
@@ -111,42 +109,34 @@ def draw(ds, name, data, line_name, y_value, y_label=None, y_max=None, legend=Fa
     else:
         p += theme(legend_position='none')
 
-    p.save(name, width=width, height=5.5, units="in")
+    p.save(name, width=8, height=5.5, units="in")
 
 def draw_throughput(data, ds, bench):
     data = data[ds].copy()
     data = data[data.non_coop == 0]
-    legend = ds == BONSAITREE
+    y_label = 'Throughput (M op/s)' if ds in [HLIST, HASHMAP] else None
+    legend = ds == (BONSAITREE if bench == "read" else HMLIST)
     y_max = data.throughput.max() * 1.05
     draw(ds, f'results/{ds}_{bench}_throughput.pdf',
-         data,
-         SMR_ONLY,
-         THROUGHPUT,
-         'Throughput (M op/s)' if ds == HLIST else None,
-         y_max,
-         legend=legend)
+         data, SMR_ONLY, THROUGHPUT, y_label, y_max, legend)
 
 
 def draw_mem(data, ds, bench):
     data = data[ds].copy()
-    # readable
+    y_label = 'Peak memory usage (MiB)' if ds in [HLIST, HASHMAP] else None
     y_max = None
+    legend = ds == (BONSAITREE if bench == "read" else HMLIST)
     if ds == BONSAITREE:
-        _d = data[~data[SMR_I].isin([NR, EBR + STALLED])]  # exclue NR and EBR stalled
+        _d = data[~data[SMR_I].isin([NR, EBR + STALLED])]  # exclude NR and EBR stalled
         max_threads = _d.threads.max()
         y_max = _d[_d.threads == max_threads].peak_mem.max() * 0.80
-    elif ds in [HASHMAP, NMTREE]:
-        _d = data[~data[SMR_I].isin([NR, EBR + STALLED])]  # exclue NR and EBR stalled
+    elif ds in [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE]:
+        _d = data[~data[SMR_I].isin([NR, EBR + STALLED])]  # exclude NR and EBR stalled
         y_max = _d[_d.ds == ds].peak_mem.max() * 1.05
     else:
         y_max = data.peak_mem.max() * 1.05
     draw(ds, f'results/{ds}_{bench}_peak_mem.pdf',
-         data,
-         SMR_I,
-         PEAK_MEM,
-         'Peak memory usage (MiB)' if ds == HLIST else None,
-         y_max,
-         legend=(ds==BONSAITREE))
+         data, SMR_I, PEAK_MEM, y_label, y_max, legend)
 
 
 
