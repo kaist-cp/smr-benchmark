@@ -9,7 +9,7 @@ cs = [1]
 i = 3
 if len(sys.argv) <= 1:
     ts = list(map(str, [1] + list(range(5, 76, 5))))
-    gs = [0, 1]
+    gs = [0, 1, 2]
     runs = 3
 elif sys.argv[1] == 'simple':
     ts = list(map(str, [1, 20, 30]))

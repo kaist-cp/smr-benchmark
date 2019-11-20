@@ -137,9 +137,9 @@ fn main() {
                 .takes_value(true)
                 .help(
                     "The proportion of `get`(read) operations. \
-                     0: 0%, 1: 90%",
+                     0: 0%, 1: 50%, 2: 90%",
                 )
-                .possible_values(&["0", "1"])
+                .possible_values(&["0", "1", "2"])
                 .default_value("0"),
         )
         .arg(
@@ -216,6 +216,7 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
 
     let op_weights = match get_rate {
         0 => &[0, 1, 1],
+        1 => &[2, 1, 1],
         _ => &[18, 1, 1],
     };
     let op_dist = WeightedIndex::new(op_weights).unwrap();

@@ -36,6 +36,8 @@ dss_all   = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, BONSAITREE]
 dss_read  = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, BONSAITREE]
 dss_write = [HLIST, HMLIST,          HASHMAP, NMTREE, BONSAITREE]
 
+WRITE, HALF, READ = "write", "half", "read"
+
 SMR_ONLYs = [NR, EBR, PEBR]
 SMR_Is = [NR, EBR, EBR+N10MS, EBR+STALLED, PEBR, PEBR+N10MS, PEBR+STALLED]
 
@@ -141,9 +143,8 @@ def draw_mem(data, ds, bench):
 
 
 raw_data = {}
-# averaged data for read-dominated bench and write-only bench
-write_data = {}
-read_data = {}
+# averaged data for write:read = 100:0, 50:50, 10:90
+avg_data = { WRITE: {}, HALF: {}, READ: {} }
 
 # preprocess
 for ds in dss_all:
@@ -167,17 +168,19 @@ for ds in dss_all:
     avg[SMR_ONLY] = pd.Categorical(avg.mm.map(str), SMR_ONLYs)
     avg[SMR_I] = pd.Categorical(avg.mm.map(str) + avg.non_coop.map(n_map), SMR_Is)
     avg.sort_values(by=SMR_I, inplace=True)
-    write_data[ds] = avg[avg.get_rate == 0]
-    read_data[ds] = avg[avg.get_rate == 1]
+    for i, bench in enumerate([WRITE, HALF, READ]):
+        avg_data[bench][ds] = avg[avg.get_rate == i]
 
 # 1. throughput graphs, 3 lines (SMR_ONLY) each.
 for ds in dss_write:
-    draw_throughput(write_data, ds, 'write')
+    draw_throughput(avg_data[WRITE], ds, WRITE)
 for ds in dss_read:
-    draw_throughput(read_data, ds, 'read')
+    draw_throughput(avg_data[HALF], ds, HALF)
+    draw_throughput(avg_data[READ], ds, READ)
 
 # 2. peak mem graph, 7 lines (SMR_I)
 for ds in dss_write:
-    draw_mem(write_data, ds, 'write')
+    draw_mem(avg_data[WRITE], ds, WRITE)
 for ds in dss_read:
-    draw_mem(read_data, ds, 'read')
+    draw_mem(avg_data[HALF], ds, HALF)
+    draw_mem(avg_data[READ], ds, READ)
