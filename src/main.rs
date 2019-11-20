@@ -31,7 +31,6 @@ arg_enum! {
         HashMap,
         NMTree,
         BonsaiTree,
-        MSQueue,
     }
 }
 
@@ -61,8 +60,8 @@ impl fmt::Display for OpsPerCs {
 #[derive(PartialEq, Debug)]
 pub enum Op {
     Get,
-    Insert, // enqueue
-    Remove, // dequeue
+    Insert,
+    Remove,
 }
 
 impl Op {
@@ -215,14 +214,9 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
     };
     let duration = Duration::from_secs(interval);
 
-    let op_weights = if ds == DS::MSQueue {
-        assert_eq!(get_rate, 0);
-        &[0, 1, 1]
-    } else {
-        match get_rate {
-            0 => &[0, 1, 1],
-            _ => &[18, 1, 1],
-        }
+    let op_weights = match get_rate {
+        0 => &[0, 1, 1],
+        _ => &[18, 1, 1],
     };
     let op_dist = WeightedIndex::new(op_weights).unwrap();
 
@@ -321,7 +315,6 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             DS::BonsaiTree => {
                 bench_map_nr::<ebr::BonsaiTreeMap<String, String>>(config, PrefillStrategy::Random)
             }
-            DS::MSQueue => bench_queue_nr(config),
         },
         MM::EBR => match config.ds {
             DS::HList => {
@@ -345,7 +338,6 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 config,
                 PrefillStrategy::Random,
             ),
-            DS::MSQueue => bench_queue_ebr::<N>(config),
         },
         MM::PEBR => match config.ds {
             DS::HList => bench_map_pebr::<pebr::HList<String, String>, N>(
@@ -372,7 +364,6 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 config,
                 PrefillStrategy::Random,
             ),
-            DS::MSQueue => bench_queue_pebr::<N>(config),
         },
     };
     output
@@ -755,286 +746,6 @@ fn bench_map_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync, N: Unsig
                     ops += 1;
                     if ops % N::to_u64() == 0 {
                         M::clear(&mut map_handle);
-                        guard.repin();
-                    }
-                }
-
-                ops_sender.send(ops).unwrap();
-            });
-        }
-    })
-    .unwrap();
-    println!("end");
-
-    let mut ops = 0;
-    for _ in 0..config.threads {
-        let local_ops = ops_receiver.recv().unwrap();
-        ops += local_ops;
-    }
-    let ops_per_sec = ops / config.interval;
-    let (peak_mem, avg_mem) = mem_receiver.recv().unwrap();
-    (ops_per_sec, peak_mem, avg_mem)
-}
-
-fn bench_queue_nr(config: &Config) -> (u64, usize, usize) {
-    let queue = &ebr::Queue::<u64>::new();
-
-    let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
-    let (ops_sender, ops_receiver) = mpsc::channel();
-    let (mem_sender, mem_receiver) = mpsc::channel();
-
-    scope(|s| {
-        if config.aux_thread > 0 {
-            let mem_sender = mem_sender.clone();
-            s.spawn(move |_| {
-                assert!(config.sampling);
-                let mut samples = 0usize;
-                let mut acc = 0usize;
-                let mut peak = 0usize;
-                barrier.clone().wait();
-
-                let start = Instant::now();
-                let mut next_sampling = start + config.sampling_period;
-                while start.elapsed() < config.duration {
-                    let now = Instant::now();
-                    if now > next_sampling {
-                        config.epoch_mib.advance().unwrap();
-                        let allocated = config.allocated_mib.read().unwrap();
-                        samples += 1;
-                        acc += allocated;
-                        peak = max(peak, allocated);
-                        next_sampling = now + config.sampling_period;
-                    }
-                    std::thread::sleep(config.aux_thread_period);
-                }
-                mem_sender.send((peak, acc / samples)).unwrap();
-            });
-        } else {
-            mem_sender.send((0, 0)).unwrap();
-        }
-
-        for _ in 0..config.threads {
-            let ops_sender = ops_sender.clone();
-            s.spawn(move |_| {
-                let mut ops: u64 = 0;
-                let mut rng = rand::thread_rng();
-                barrier.clone().wait();
-                let start = Instant::now();
-
-                while start.elapsed() < config.duration {
-                    match Op::OPS[config.op_dist.sample(&mut rng)] {
-                        Op::Insert => {
-                            queue.push(ops, unsafe { crossbeam_ebr::unprotected() });
-                        }
-                        Op::Remove => {
-                            queue.try_pop(unsafe { crossbeam_ebr::unprotected() });
-                        }
-                        _ => {}
-                    }
-                    ops += 1;
-                }
-
-                ops_sender.send(ops).unwrap();
-            });
-        }
-    })
-    .unwrap();
-    println!("end");
-
-    let mut ops = 0;
-    for _ in 0..config.threads {
-        let local_ops = ops_receiver.recv().unwrap();
-        ops += local_ops;
-    }
-    let ops_per_sec = ops / config.interval;
-    let (peak_mem, avg_mem) = mem_receiver.recv().unwrap();
-    (ops_per_sec, peak_mem, avg_mem)
-}
-
-fn bench_queue_ebr<N: Unsigned>(config: &Config) -> (u64, usize, usize) {
-    let queue = &ebr::Queue::<u64>::new();
-    let collector = &crossbeam_ebr::Collector::new();
-
-    let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
-    let (ops_sender, ops_receiver) = mpsc::channel();
-    let (mem_sender, mem_receiver) = mpsc::channel();
-
-    scope(|s| {
-        // sampling & interference thread
-        if config.aux_thread > 0 {
-            let mem_sender = mem_sender.clone();
-            s.spawn(move |_| {
-                let mut samples = 0usize;
-                let mut acc = 0usize;
-                let mut peak = 0usize;
-                let handle = collector.register();
-                barrier.clone().wait();
-
-                let start = Instant::now();
-                // Immediately drop if no non-coop else keep it and repin periodically.
-                let mut guard = ManuallyDrop::new(handle.pin());
-                if config.non_coop == 0 {
-                    unsafe { ManuallyDrop::drop(&mut guard) };
-                }
-                let mut next_sampling = start + config.sampling_period;
-                let mut next_repin = start + config.non_coop_period;
-                while start.elapsed() < config.duration {
-                    let now = Instant::now();
-                    if now > next_sampling {
-                        config.epoch_mib.advance().unwrap();
-                        let allocated = config.allocated_mib.read().unwrap();
-                        samples += 1;
-                        acc += allocated;
-                        peak = max(peak, allocated);
-                        next_sampling = now + config.sampling_period;
-                    }
-                    if now > next_repin {
-                        (*guard).repin();
-                        next_repin = now + config.non_coop_period;
-                    }
-                    std::thread::sleep(config.aux_thread_period);
-                }
-
-                if config.non_coop > 0 {
-                    unsafe { ManuallyDrop::drop(&mut guard) };
-                }
-
-                if config.sampling {
-                    mem_sender.send((peak, acc / samples)).unwrap();
-                } else {
-                    mem_sender.send((0, 0)).unwrap();
-                }
-            });
-        } else {
-            mem_sender.send((0, 0)).unwrap();
-        }
-
-        for _ in 0..config.threads {
-            let ops_sender = ops_sender.clone();
-            s.spawn(move |_| {
-                let mut ops: u64 = 0;
-                let mut rng = rand::thread_rng();
-                let handle = collector.register();
-                barrier.clone().wait();
-                let start = Instant::now();
-
-                let mut guard = handle.pin();
-                while start.elapsed() < config.duration {
-                    match Op::OPS[config.op_dist.sample(&mut rng)] {
-                        Op::Insert => {
-                            queue.push(ops, &mut guard);
-                        }
-                        Op::Remove => {
-                            queue.try_pop(&mut guard);
-                        }
-                        _ => {}
-                    }
-                    ops += 1;
-                    if ops % N::to_u64() == 0 {
-                        drop(guard);
-                        guard = handle.pin();
-                    }
-                }
-
-                ops_sender.send(ops).unwrap();
-            });
-        }
-    })
-    .unwrap();
-    println!("end");
-
-    let mut ops = 0;
-    for _ in 0..config.threads {
-        let local_ops = ops_receiver.recv().unwrap();
-        ops += local_ops;
-    }
-    let ops_per_sec = ops / config.interval;
-    let (peak_mem, avg_mem) = mem_receiver.recv().unwrap();
-    (ops_per_sec, peak_mem, avg_mem)
-}
-
-fn bench_queue_pebr<N: Unsigned>(config: &Config) -> (u64, usize, usize) {
-    let queue = &pebr::Queue::<u64>::new();
-    let collector = &crossbeam_pebr::Collector::new();
-
-    let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
-    let (ops_sender, ops_receiver) = mpsc::channel();
-    let (mem_sender, mem_receiver) = mpsc::channel();
-
-    scope(|s| {
-        // sampling & interference thread
-        if config.aux_thread > 0 {
-            let mem_sender = mem_sender.clone();
-            s.spawn(move |_| {
-                let mut samples = 0usize;
-                let mut acc = 0usize;
-                let mut peak = 0usize;
-                let handle = collector.register();
-                barrier.clone().wait();
-
-                let start = Instant::now();
-                // Immediately drop if no non-coop else keep it and repin periodically.
-                let mut guard = ManuallyDrop::new(handle.pin());
-                if config.non_coop == 0 {
-                    unsafe { ManuallyDrop::drop(&mut guard) };
-                }
-                let mut next_sampling = start + config.sampling_period;
-                let mut next_repin = start + config.non_coop_period;
-                while start.elapsed() < config.duration {
-                    let now = Instant::now();
-                    if now > next_sampling {
-                        config.epoch_mib.advance().unwrap();
-                        let allocated = config.allocated_mib.read().unwrap();
-                        samples += 1;
-                        acc += allocated;
-                        peak = max(peak, allocated);
-                        next_sampling = now + config.sampling_period;
-                    }
-                    if now > next_repin {
-                        (*guard).repin();
-                        next_repin = now + config.non_coop_period;
-                    }
-                    std::thread::sleep(config.aux_thread_period);
-                }
-
-                if config.non_coop > 0 {
-                    unsafe { ManuallyDrop::drop(&mut guard) };
-                }
-
-                if config.sampling {
-                    mem_sender.send((peak, acc / samples)).unwrap();
-                } else {
-                    mem_sender.send((0, 0)).unwrap();
-                }
-            });
-        } else {
-            mem_sender.send((0, 0)).unwrap();
-        }
-
-        for _ in 0..config.threads {
-            let ops_sender = ops_sender.clone();
-            s.spawn(move |_| {
-                let mut ops: u64 = 0;
-                let mut rng = rand::thread_rng();
-                let handle = collector.register();
-                let mut queue_handle = pebr::Queue::handle(&handle.pin());
-                barrier.clone().wait();
-                let start = Instant::now();
-
-                let mut guard = handle.pin();
-                while start.elapsed() < config.duration {
-                    match Op::OPS[config.op_dist.sample(&mut rng)] {
-                        Op::Insert => {
-                            queue.push(ops, &mut queue_handle, &mut guard);
-                        }
-                        Op::Remove => {
-                            queue.try_pop(&mut queue_handle, &mut guard);
-                        }
-                        _ => {}
-                    }
-                    ops += 1;
-                    if ops % N::to_u64() == 0 {
-                        pebr::Queue::clear(&mut queue_handle);
                         guard.repin();
                     }
                 }
