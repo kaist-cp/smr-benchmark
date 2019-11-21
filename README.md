@@ -1,12 +1,14 @@
 # A Marriage of Pointer- and Epoch-Based Reclamation
 
-This is the supplementary material for PPoPP 2020 submission #100.
+This is the supplementary material for PLDI 2020 submission #101.
 
 ## Dependencies
 
 * [`rustup`](https://rustup.rs/) for building the implementation of NR, EBR, PEBR and data structures
 
-* Linux >= 4.14 for [`MEMBARRIER_CMD_PRIVATE_EXPEDITED` and `MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED`](http://man7.org/linux/man-pages/man2/membarrier.2.html), used in the implementation of PEBR.
+* Linux >= 4.14 for [`MEMBARRIER_CMD_PRIVATE_EXPEDITED` and
+  `MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED`](http://man7.org/linux/man-pages/man2/membarrier.2.html),
+  used in the implementation of PEBR.
 
 * Python >= 3.6 and pip3 for benchmark and plotting scripts
 
@@ -54,25 +56,39 @@ python3 plot.py
 ## Debug
 
 We used `./sanitize.sh` to check that our implementation does not have bugs.
-This script runs the benchmark with [LLVM address sanitizer for Rust](https://github.com/japaric/rust-san)
-and uses parameters that impose high stress on PEBR by triggering more frequent ejection.
+This script runs the benchmark with [LLVM address sanitizer for
+Rust](https://github.com/japaric/rust-san) and uses parameters that impose high
+stress on PEBR by triggering more frequent ejection.
 
 Note that it may report memory leaks when used against `-m ebr`.
 This is because of a minor bug in original Crossbeam but it doesn't affect performance of our benchmark.
 
-Benchmark run by this script will generate inaccurate memory usage report since it uses glibc `malloc()` as the global allocator instead of jemalloc.
-The memory tracker relies on jemalloc's functionalities which doesn't keep track of allocations by glibc.
-
 
 ## Project structure
 
- * `./crossbeam-pebr` is a fork of [Crossbeam](https://github.com/crossbeam-rs/crossbeam) that implements PEBR presented in the paper. The main implementation of PEBR lies under `./crossbeam-pebr/crossbeam-epoch`.
+* `./crossbeam-pebr` is a fork of
+  [Crossbeam](https://github.com/crossbeam-rs/crossbeam) that implements PEBR.
+  The main implementation of PEBR lies under
+  `./crossbeam-pebr/crossbeam-epoch`.
 
- * `./crossbeam-ebr` is the original Crossbeam source code.
+* `./crossbeam-ebr` is the original Crossbeam source code.
 
- * `./src` contains the benchmark driver (`./src/main.rs`) and the implementation of 4 data structures based on PEBR (`./src/pebr/`) and original Crossbeam (`./src/ebr/`).
+* `./src` contains the benchmark driver (`./src/main.rs`) and the
+  implementation of 4 data structures based on PEBR (`./src/pebr/`) and
+  original Crossbeam (`./src/ebr/`).
 
 
 ## Results
 
 `./paper-results` contains the raw results and graphs used in the paper.
+
+## Note
+* On Windows, the benchmark uses the default memory allocator instead of
+  jemalloc since [the Rust library for
+  jemalloc](https://crates.io/crates/jemallocator) does not support Windows.
+
+* The benchmark run by `./sanitize.sh` will generate inaccurate memory usage
+  report since it uses the default memory allocator instead of jemalloc. The
+  memory tracker relies on jemalloc's functionalities which doesn't keep track
+  of allocations by the default allocator.
+

@@ -75,9 +75,15 @@ line_types = {
     PEBR + STALLED: ':',
 }
 
+def plot_title(ds, bench):
+    if bench == WRITE and ds == HLIST:
+        return 'HList/HHSList'
+    if ds == BONSAITREE:
+        return 'Bonsai'
+    return ds
 
 # line_name: SMR, SMR_I
-def draw(ds, name, data, line_name, y_value, y_label=None, y_max=None, legend=False):
+def draw(title, name, data, line_name, y_value, y_label=None, y_max=None, legend=False):
     p = ggplot(
             data,
             aes(x=THREADS, y=y_value,
@@ -87,8 +93,7 @@ def draw(ds, name, data, line_name, y_value, y_label=None, y_max=None, legend=Fa
         scale_color_manual(line_colors, na_value='y') + \
         scale_linetype_manual(line_types, na_value='-.') + \
         theme_bw() + scale_x_continuous(breaks=ts) + \
-        labs(title = ds) + theme(plot_title = element_text(size=28))
-        # ggtitle(title[ds]) + guides(title_position='bottom')
+        labs(title = title) + theme(plot_title = element_text(size=28))
 
     p += theme(
             axis_title_x=element_text(size=15),
@@ -117,9 +122,9 @@ def draw_throughput(data, ds, bench):
     data = data[ds].copy()
     data = data[data.non_coop == 0]
     y_label = 'Throughput (M op/s)' if ds in [HLIST, HASHMAP] else None
-    legend = ds == (BONSAITREE if bench == "read" else HMLIST)
+    legend = ds in ([BONSAITREE, HHSLIST] if bench in [READ, HALF] else HMLIST)
     y_max = data.throughput.max() * 1.05
-    draw(ds, f'results/{ds}_{bench}_throughput.pdf',
+    draw(plot_title(ds, bench), f'results/{ds}_{bench}_throughput.pdf',
          data, SMR_ONLY, THROUGHPUT, y_label, y_max, legend)
 
 
@@ -127,7 +132,7 @@ def draw_mem(data, ds, bench):
     data = data[ds].copy()
     y_label = 'Peak memory usage (MiB)' if ds in [HLIST, HASHMAP] else None
     y_max = None
-    legend = ds == (BONSAITREE if bench == "read" else HMLIST)
+    legend = ds in ([BONSAITREE, HHSLIST] if bench in [READ, HALF] else HMLIST)
     if ds == BONSAITREE:
         _d = data[~data[SMR_I].isin([NR, EBR + STALLED])]  # exclude NR and EBR stalled
         max_threads = _d.threads.max()
@@ -137,7 +142,7 @@ def draw_mem(data, ds, bench):
         y_max = _d[_d.ds == ds].peak_mem.max() * 1.05
     else:
         y_max = data.peak_mem.max() * 1.05
-    draw(ds, f'results/{ds}_{bench}_peak_mem.pdf',
+    draw(plot_title(ds, bench), f'results/{ds}_{bench}_peak_mem.pdf',
          data, SMR_I, PEAK_MEM, y_label, y_max, legend)
 
 
