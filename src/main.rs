@@ -1,8 +1,10 @@
+#[macro_use]
+extern crate cfg_if;
 extern crate clap;
+extern crate csv;
+
 extern crate crossbeam_ebr;
 extern crate crossbeam_pebr;
-extern crate csv;
-extern crate jemalloc_ctl;
 extern crate pebr_benchmark;
 
 use clap::{arg_enum, value_t, App, Arg, ArgMatches};
@@ -88,8 +90,40 @@ struct Config {
     duration: Duration,
     ops_per_cs: OpsPerCs,
 
-    epoch_mib: jemalloc_ctl::epoch_mib,
-    allocated_mib: jemalloc_ctl::stats::allocated_mib,
+    mem_sampler: MemSampler,
+}
+
+cfg_if! {
+    if #[cfg(all(not(feature = "sanitize"), target_os = "linux"))] {
+        extern crate jemalloc_ctl;
+        struct MemSampler {
+            epoch_mib: jemalloc_ctl::epoch_mib,
+            allocated_mib: jemalloc_ctl::stats::allocated_mib,
+        }
+        impl MemSampler {
+            pub fn new() -> Self {
+                MemSampler {
+                    epoch_mib: jemalloc_ctl::epoch::mib().unwrap(),
+                    allocated_mib: jemalloc_ctl::stats::allocated::mib().unwrap(),
+                }
+            }
+            pub fn sample(&self) -> usize {
+                self.epoch_mib.advance().unwrap();
+                self.allocated_mib.read().unwrap()
+            }
+        }
+    } else {
+        struct MemSampler {}
+        impl MemSampler {
+            pub fn new() -> Self {
+                println!("NOTE: Memory usage benchmark is supported only for linux.");
+                MemSampler {}
+            }
+            pub fn sample(&self) -> usize {
+                0
+            }
+        }
+    }
 }
 
 fn main() {
@@ -163,7 +197,10 @@ fn main() {
                 .short("s")
                 .value_name("MEM_SAMPLING_PERIOD")
                 .takes_value(true)
-                .help("The period to query jemalloc stats.allocated (ms). 0 for no sampling")
+                .help(
+                    "The period to query jemalloc stats.allocated (ms). 0 for no sampling. \
+                     Only supported on linux.",
+                )
                 .default_value("1"),
         )
         .arg(
@@ -206,7 +243,7 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
     let key_dist = Uniform::from(0..range);
     let interval = value_t!(m, "interval", u64).unwrap();
     let sampling_period = value_t!(m, "sampling period", u64).unwrap();
-    let sampling = sampling_period > 0;
+    let sampling = sampling_period > 0 && cfg!(all(not(feature = "sanitize"), target_os = "linux"));
     let ops_per_cs = match value_t!(m, "ops per cs", usize).unwrap() {
         1 => OpsPerCs::One,
         4 => OpsPerCs::Four,
@@ -260,6 +297,7 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
             output
         }
     };
+    let mem_sampler = MemSampler::new();
     let config = Config {
         ds,
         mm,
@@ -285,8 +323,7 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
         duration,
         ops_per_cs,
 
-        epoch_mib: jemalloc_ctl::epoch::mib().unwrap(),
-        allocated_mib: jemalloc_ctl::stats::allocated::mib().unwrap(),
+        mem_sampler,
     };
     (config, output)
 }
@@ -488,8 +525,7 @@ fn bench_map_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
                 while start.elapsed() < config.duration {
                     let now = Instant::now();
                     if now > next_sampling {
-                        config.epoch_mib.advance().unwrap();
-                        let allocated = config.allocated_mib.read().unwrap();
+                        let allocated = config.mem_sampler.sample();
                         samples += 1;
                         acc += allocated;
                         peak = max(peak, allocated);
@@ -580,8 +616,7 @@ fn bench_map_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigne
                 while start.elapsed() < config.duration {
                     let now = Instant::now();
                     if now > next_sampling {
-                        config.epoch_mib.advance().unwrap();
-                        let allocated = config.allocated_mib.read().unwrap();
+                        let allocated = config.mem_sampler.sample();
                         samples += 1;
                         acc += allocated;
                         peak = max(peak, allocated);
@@ -691,8 +726,7 @@ fn bench_map_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync, N: Unsig
                 while start.elapsed() < config.duration {
                     let now = Instant::now();
                     if now > next_sampling {
-                        config.epoch_mib.advance().unwrap();
-                        let allocated = config.allocated_mib.read().unwrap();
+                        let allocated = config.mem_sampler.sample();
                         samples += 1;
                         acc += allocated;
                         peak = max(peak, allocated);

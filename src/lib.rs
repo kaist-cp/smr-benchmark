@@ -5,7 +5,7 @@
 extern crate cfg_if;
 
 cfg_if! {
-    if #[cfg(not(feature = "sanitize"))] {
+    if #[cfg(all(not(feature = "sanitize"), target_os = "linux"))] {
         extern crate jemallocator;
         #[global_allocator]
         static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
