@@ -24,7 +24,7 @@ run_cmd = ['./target/release/pebr-benchmark', '-i', str(i), '-s1']
 
 
 def opts(ds, mm, g, n, c, t):
-    r = 1000 if ds in ['HList', 'HMList', 'HHSList'] else 100000
+    r = 10000 if ds in ['HList', 'HMList', 'HHSList'] else 100000
     return ['-d', ds, '-r', str(r), '-m', mm, '-g', str(g), '-n', str(n), '-c', str(c), '-t', t]
 
 def invalid(mm, ds, c, n, g):
