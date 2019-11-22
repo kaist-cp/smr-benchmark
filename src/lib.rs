@@ -18,6 +18,8 @@ extern crate crossbeam_utils;
 #[macro_use]
 extern crate bitflags;
 extern crate typenum;
+#[macro_use]
+extern crate scopeguard;
 
 pub mod ebr;
 pub mod pebr;

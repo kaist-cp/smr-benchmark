@@ -94,44 +94,63 @@ where
         // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
         // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
 
-        let head = unsafe { &*(self.prev.shared().into_usize() as *const Atomic<Node<K, V>>) };
+        let mut prev_s = ManuallyDrop::new(mem::replace(&mut self.prev, unsafe {
+            mem::uninitialized()
+        }));
+        let mut curr_s = ManuallyDrop::new(mem::replace(&mut self.curr, unsafe {
+            mem::uninitialized()
+        }));
+        let prev_p = &mut self.prev as *mut _;
+        let curr_p = &mut self.curr as *mut _;
+        let prev_s_p = &mut prev_s as *mut _;
+        let curr_s_p = &mut curr_s as *mut _;
+        defer! {
+            unsafe {
+                ptr::write(prev_p, ManuallyDrop::into_inner(ptr::read(prev_s_p)));
+                ptr::write(curr_p, ManuallyDrop::into_inner(ptr::read(curr_s_p)));
+            }
+        }
+
+        let head = unsafe { &*(prev_s.shared().into_usize() as *const Atomic<Node<K, V>>) };
         let mut curr = head.load(Ordering::Acquire, guard);
         let mut prev_next = curr;
 
-        let found = loop {
-            if curr.is_null() {
-                unsafe { self.curr.defend_fake(curr) };
-                break false;
-            }
-
-            self.curr
-                .defend(curr, guard)
-                .map_err(FindError::ShieldError)?;
-            let curr_node = unsafe { curr.deref() };
-
-            let mut next = curr_node.next.load(Ordering::Acquire, guard);
-
-            // - finding stage is done if cursor.curr advancement stops
-            // - advance cursor.curr if (.next is marked) || (cursor.curr < key)
-            // - stop cursor.curr if (not marked) && (cursor.curr >= key)
-            // - advance cursor.prev if not marked
-            match (curr_node.key.cmp(key), next.tag()) {
-                (Less, tag) => {
-                    curr = next.with_tag(0);
-                    if tag == 0 {
-                        mem::swap(&mut self.prev, &mut self.curr);
-                        prev_next = next;
-                    }
+        let found = 'found: loop {
+            for _ in 0..2 {
+                if curr.is_null() {
+                    unsafe { curr_s.defend_fake(curr) };
+                    break 'found false;
                 }
-                (eq, 0) => {
-                    next = curr_node.next.load(Ordering::Relaxed, guard);
-                    if next.tag() == 0 {
-                        break eq == Equal;
-                    } else {
-                        return Err(FindError::Retry);
+
+                curr_s.defend(curr, guard).map_err(FindError::ShieldError)?;
+                let curr_node = unsafe { curr.deref() };
+
+                let mut next = curr_node.next.load(Ordering::Acquire, guard);
+
+                // - finding stage is done if cursor.curr advancement stops
+                // - advance cursor.curr if (.next is marked) || (cursor.curr < key)
+                // - stop cursor.curr if (not marked) && (cursor.curr >= key)
+                // - advance cursor.prev if not marked
+                match (curr_node.key.cmp(key), next.tag()) {
+                    (Less, tag) => {
+                        curr = next.with_tag(0);
+                        if tag == 0 {
+                            let t = prev_s;
+                            prev_s = curr_s;
+                            curr_s = t;
+                            prev_next = next;
+                        }
                     }
+                    (eq, 0) => {
+                        next = curr_node.next.load(Ordering::Relaxed, guard);
+                        if next.tag() == 0 {
+                            break 'found eq == Equal;
+                        } else {
+                            return Err(FindError::Retry);
+                        }
+                    }
+                    (_, _) => curr = next.with_tag(0),
                 }
-                (_, _) => curr = next.with_tag(0),
             }
         };
 
@@ -141,7 +160,7 @@ where
         }
 
         // cleanup marked nodes between prev and curr
-        if unsafe { self.prev.deref() }
+        if unsafe { prev_s.deref() }
             .next
             .compare_and_set(prev_next, curr, Ordering::AcqRel, guard)
             .is_err()
@@ -166,42 +185,63 @@ where
 
     #[inline]
     fn find_harris_michael<'g>(&mut self, key: &K, guard: &'g Guard) -> Result<bool, FindError> {
-        let head = unsafe { &*(self.prev.shared().into_usize() as *const Atomic<Node<K, V>>) };
+        let mut prev_s = ManuallyDrop::new(mem::replace(&mut self.prev, unsafe {
+            mem::uninitialized()
+        }));
+        let mut curr_s = ManuallyDrop::new(mem::replace(&mut self.curr, unsafe {
+            mem::uninitialized()
+        }));
+        let prev_p = &mut self.prev as *mut _;
+        let curr_p = &mut self.curr as *mut _;
+        let prev_s_p = &mut prev_s as *mut _;
+        let curr_s_p = &mut curr_s as *mut _;
+        defer! {
+            unsafe {
+                ptr::write(prev_p, ManuallyDrop::into_inner(ptr::read(prev_s_p)));
+                ptr::write(curr_p, ManuallyDrop::into_inner(ptr::read(curr_s_p)));
+            }
+        }
+
+        let head = unsafe { &*(prev_s.shared().into_usize() as *const Atomic<Node<K, V>>) };
         let mut curr = head.load(Ordering::Acquire, guard);
 
-        let result = loop {
-            debug_assert_eq!(curr.tag(), 0);
-            if curr.is_null() {
-                unsafe { self.curr.defend_fake(curr) };
-                break Ok(false);
-            }
-
-            self.curr
-                .defend(curr, guard)
-                .map_err(FindError::ShieldError)?;
-            let curr_node = unsafe { curr.deref() };
-
-            let mut next = curr_node.next.load(Ordering::Acquire, guard);
-
-            if next.tag() == 0 {
-                match curr_node.key.cmp(key) {
-                    Less => mem::swap(&mut self.prev, &mut self.curr),
-                    Equal => break Ok(true),
-                    Greater => break Ok(false),
+        let result = 'result: loop {
+            for _ in 0..2 {
+                debug_assert_eq!(curr.tag(), 0);
+                if curr.is_null() {
+                    unsafe { curr_s.defend_fake(curr) };
+                    break 'result Ok(false);
                 }
-            } else {
-                next = next.with_tag(0);
-                if unsafe { self.prev.deref() }
-                    .next
-                    .compare_and_set(curr, next, Ordering::AcqRel, guard)
-                    .is_ok()
-                {
-                    unsafe { guard.defer_destroy(curr) };
+
+                curr_s.defend(curr, guard).map_err(FindError::ShieldError)?;
+                let curr_node = unsafe { curr.deref() };
+
+                let mut next = curr_node.next.load(Ordering::Acquire, guard);
+
+                if next.tag() == 0 {
+                    match curr_node.key.cmp(key) {
+                        Less => {
+                            let t = prev_s;
+                            prev_s = curr_s;
+                            curr_s = t;
+                        }
+                        Equal => break 'result Ok(true),
+                        Greater => break 'result Ok(false),
+                    }
                 } else {
-                    break Err(FindError::Retry);
+                    next = next.with_tag(0);
+                    if unsafe { prev_s.deref() }
+                        .next
+                        .compare_and_set(curr, next, Ordering::AcqRel, guard)
+                        .is_ok()
+                    {
+                        unsafe { guard.defer_destroy(curr) };
+                    } else {
+                        break 'result Err(FindError::Retry);
+                    }
                 }
+                curr = next;
             }
-            curr = next;
         };
 
         result
@@ -213,27 +253,46 @@ where
         key: &K,
         guard: &'g Guard,
     ) -> Result<bool, FindError> {
-        let head = unsafe { &*(self.prev.shared().into_usize() as *const Atomic<Node<K, V>>) };
+        let mut prev_s = ManuallyDrop::new(mem::replace(&mut self.prev, unsafe {
+            mem::uninitialized()
+        }));
+        let mut curr_s = ManuallyDrop::new(mem::replace(&mut self.curr, unsafe {
+            mem::uninitialized()
+        }));
+        let prev_p = &mut self.prev as *mut _;
+        let curr_p = &mut self.curr as *mut _;
+        let prev_s_p = &mut prev_s as *mut _;
+        let curr_s_p = &mut curr_s as *mut _;
+        defer! {
+            unsafe {
+                ptr::write(prev_p, ManuallyDrop::into_inner(ptr::read(prev_s_p)));
+                ptr::write(curr_p, ManuallyDrop::into_inner(ptr::read(curr_s_p)));
+            }
+        }
+
+        let head = unsafe { &*(prev_s.shared().into_usize() as *const Atomic<Node<K, V>>) };
         let mut curr = head.load(Ordering::Acquire, guard);
 
         loop {
-            if curr.is_null() {
-                unsafe { self.curr.defend_fake(curr) };
-                return Ok(false);
-            }
-
-            self.curr
-                .defend(curr, guard)
-                .map_err(FindError::ShieldError)?;
-            let curr_node = unsafe { curr.deref() };
-
-            match curr_node.key.cmp(key) {
-                Less => {
-                    curr = curr_node.next.load(Ordering::Acquire, guard);
-                    mem::swap(&mut self.prev, &mut self.curr); // NOTE: not needed
-                    continue;
+            for _ in 0..2 {
+                if curr.is_null() {
+                    unsafe { curr_s.defend_fake(curr) };
+                    return Ok(false);
                 }
-                _ => return Ok(curr_node.next.load(Ordering::Relaxed, guard).tag() == 0),
+
+                curr_s.defend(curr, guard).map_err(FindError::ShieldError)?;
+                let curr_node = unsafe { curr.deref() };
+
+                match curr_node.key.cmp(key) {
+                    Less => {
+                        curr = curr_node.next.load(Ordering::Acquire, guard);
+                        let t = prev_s;
+                        prev_s = curr_s;
+                        curr_s = t;
+                        continue;
+                    }
+                    _ => return Ok(curr_node.next.load(Ordering::Relaxed, guard).tag() == 0),
+                }
             }
         }
     }
