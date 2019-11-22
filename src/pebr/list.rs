@@ -107,7 +107,7 @@ where
             self.curr
                 .defend(curr, guard)
                 .map_err(FindError::ShieldError)?;
-            let curr_node = unsafe { self.curr.deref() };
+            let curr_node = unsafe { curr.deref() };
 
             let mut next = curr_node.next.load(Ordering::Acquire, guard);
 
@@ -179,7 +179,7 @@ where
             self.curr
                 .defend(curr, guard)
                 .map_err(FindError::ShieldError)?;
-            let curr_node = unsafe { self.curr.deref() };
+            let curr_node = unsafe { curr.deref() };
 
             let mut next = curr_node.next.load(Ordering::Acquire, guard);
 
@@ -225,7 +225,7 @@ where
             self.curr
                 .defend(curr, guard)
                 .map_err(FindError::ShieldError)?;
-            let curr_node = unsafe { self.curr.deref() };
+            let curr_node = unsafe { curr.deref() };
 
             match curr_node.key.cmp(key) {
                 Less => {
