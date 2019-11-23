@@ -185,53 +185,34 @@ where
 
     #[inline]
     fn find_harris_michael<'g>(&mut self, key: &K, guard: &'g Guard) -> Result<bool, FindError> {
-        let mut prev_s = ManuallyDrop::new(mem::replace(&mut self.prev, unsafe {
-            mem::uninitialized()
-        }));
-        let mut curr_s = ManuallyDrop::new(mem::replace(&mut self.curr, unsafe {
-            mem::uninitialized()
-        }));
-        let prev_p = &mut self.prev as *mut _;
-        let curr_p = &mut self.curr as *mut _;
-        let prev_s_p = &mut prev_s as *mut _;
-        let curr_s_p = &mut curr_s as *mut _;
-        defer! {
-            unsafe {
-                ptr::write(prev_p, ManuallyDrop::into_inner(ptr::read(prev_s_p)));
-                ptr::write(curr_p, ManuallyDrop::into_inner(ptr::read(curr_s_p)));
-            }
-        }
-
-        let head = unsafe { &*(prev_s.shared().into_usize() as *const Atomic<Node<K, V>>) };
+        let head = unsafe { &*(self.prev.shared().into_usize() as *const Atomic<Node<K, V>>) };
         let mut curr = head.load(Ordering::Acquire, guard);
 
         let result = 'result: loop {
             for _ in 0..2 {
                 debug_assert_eq!(curr.tag(), 0);
                 if curr.is_null() {
-                    unsafe { curr_s.defend_fake(curr) };
+                    unsafe { self.curr.defend_fake(curr) };
                     break 'result Ok(false);
                 }
 
-                curr_s.defend(curr, guard).map_err(FindError::ShieldError)?;
+                self.curr
+                    .defend(curr, guard)
+                    .map_err(FindError::ShieldError)?;
                 let curr_node = unsafe { curr.deref() };
 
                 let mut next = curr_node.next.load(Ordering::Acquire, guard);
 
                 if next.tag() == 0 {
                     match curr_node.key.cmp(key) {
-                        Less => {
-                            let t = prev_s;
-                            prev_s = curr_s;
-                            curr_s = t;
-                        }
+                        Less => mem::swap(&mut self.prev, &mut self.curr),
                         Equal => break 'result Ok(true),
                         Greater => break 'result Ok(false),
                     }
                 } else {
                     next = next.with_tag(0);
-                    if unsafe { prev_s.deref() }
-                        .next
+                    if unsafe { self.prev.deref() }
+                    .next
                         .compare_and_set(curr, next, Ordering::AcqRel, guard)
                         .is_ok()
                     {
