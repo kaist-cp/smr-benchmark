@@ -188,39 +188,41 @@ where
         let head = unsafe { &*(self.prev.shared().into_usize() as *const Atomic<Node<K, V>>) };
         let mut curr = head.load(Ordering::Acquire, guard);
 
-        let result = loop {
-            debug_assert_eq!(curr.tag(), 0);
-            if curr.is_null() {
-                unsafe { self.curr.defend_fake(curr) };
-                break Ok(false);
-            }
-
-            self.curr
-                .defend(curr, guard)
-                .map_err(FindError::ShieldError)?;
-            let curr_node = unsafe { curr.deref() };
-
-            let mut next = curr_node.next.load(Ordering::Acquire, guard);
-
-            if next.tag() == 0 {
-                match curr_node.key.cmp(key) {
-                    Less => mem::swap(&mut self.prev, &mut self.curr),
-                    Equal => break Ok(true),
-                    Greater => break Ok(false),
+        let result = 'result: loop {
+            for _ in 0..2 {
+                debug_assert_eq!(curr.tag(), 0);
+                if curr.is_null() {
+                    unsafe { self.curr.defend_fake(curr) };
+                    break 'result Ok(false);
                 }
-            } else {
-                next = next.with_tag(0);
-                if unsafe { self.prev.deref() }
-                .next
-                    .compare_and_set(curr, next, Ordering::AcqRel, guard)
-                    .is_ok()
-                {
-                    unsafe { guard.defer_destroy(curr) };
+
+                self.curr
+                    .defend(curr, guard)
+                    .map_err(FindError::ShieldError)?;
+                let curr_node = unsafe { curr.deref() };
+
+                let mut next = curr_node.next.load(Ordering::Acquire, guard);
+
+                if next.tag() == 0 {
+                    match curr_node.key.cmp(key) {
+                        Less => mem::swap(&mut self.prev, &mut self.curr),
+                        Equal => break 'result Ok(true),
+                        Greater => break 'result Ok(false),
+                    }
                 } else {
-                    break Err(FindError::Retry);
+                    next = next.with_tag(0);
+                    if unsafe { self.prev.deref() }
+                    .next
+                        .compare_and_set(curr, next, Ordering::AcqRel, guard)
+                        .is_ok()
+                    {
+                        unsafe { guard.defer_destroy(curr) };
+                    } else {
+                        break 'result Err(FindError::Retry);
+                    }
                 }
+                curr = next;
             }
-            curr = next;
         };
 
         result
