@@ -21,5 +21,8 @@ extern crate typenum;
 #[macro_use]
 extern crate scopeguard;
 
+#[macro_use]
+mod utils;
+
 pub mod ebr;
 pub mod pebr;

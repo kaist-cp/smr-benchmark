@@ -141,15 +141,8 @@ where
                             prev_next = next;
                         }
                     }
-                    (eq, 0) => {
-                        next = curr_node.next.load(Ordering::Relaxed, guard);
-                        if next.tag() == 0 {
-                            break 'found eq == Equal;
-                        } else {
-                            return Err(FindError::Retry);
-                        }
-                    }
-                    (_, _) => curr = next.with_tag(0),
+                    (cmp, 0) => break 'found cmp == Equal,
+                    _ => curr = next.with_tag(0),
                 }
             }
         };
@@ -162,7 +155,7 @@ where
         // cleanup marked nodes between prev and curr
         if unsafe { prev_s.deref() }
             .next
-            .compare_and_set(prev_next, curr, Ordering::AcqRel, guard)
+            .compare_and_set(prev_next, curr, Ordering::Release, guard)
             .is_err()
         {
             return Err(FindError::Retry);
@@ -175,7 +168,7 @@ where
                 return Ok(found);
             }
             let node_ref = unsafe { node.as_ref().unwrap() };
-            let next = node_ref.next.load(Ordering::Relaxed, guard);
+            let next = node_ref.next.load(Ordering::Acquire, guard);
             unsafe {
                 guard.defer_destroy(node);
             }
@@ -212,8 +205,8 @@ where
                 } else {
                     next = next.with_tag(0);
                     if unsafe { self.prev.deref() }
-                    .next
-                        .compare_and_set(curr, next, Ordering::AcqRel, guard)
+                        .next
+                        .compare_and_set(curr, next, Ordering::Release, guard)
                         .is_ok()
                     {
                         unsafe { guard.defer_destroy(curr) };
@@ -272,7 +265,8 @@ where
                         curr_s = t;
                         continue;
                     }
-                    _ => return Ok(curr_node.next.load(Ordering::Relaxed, guard).tag() == 0),
+                    Equal => return Ok(curr_node.next.load(Ordering::Relaxed, guard).tag() == 0),
+                    Greater => return Ok(false),
                 }
             }
         }
@@ -357,7 +351,7 @@ where
                 .store(cursor.curr.shared(), Ordering::Relaxed);
             if unsafe { cursor.prev.deref() }
                 .next
-                .compare_and_set(cursor.curr.shared(), node, Ordering::AcqRel, guard)
+                .compare_and_set(cursor.curr.shared(), node, Ordering::Release, guard)
                 .is_ok()
             {
                 return Ok(true);
@@ -411,7 +405,7 @@ where
             }
 
             let curr_node = unsafe { cursor.curr.as_ref() }.unwrap();
-            let next = curr_node.next.fetch_or(1, Ordering::AcqRel, guard);
+            let next = curr_node.next.fetch_or(1, Ordering::Relaxed, guard);
             if next.tag() == 1 {
                 continue;
             }
@@ -420,7 +414,7 @@ where
 
             if unsafe { cursor.prev.deref() }
                 .next
-                .compare_and_set(cursor.curr.shared(), next, Ordering::AcqRel, guard)
+                .compare_and_set(cursor.curr.shared(), next, Ordering::Release, guard)
                 .is_ok()
             {
                 unsafe { guard.defer_destroy(cursor.curr.shared()) };
