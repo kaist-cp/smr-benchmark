@@ -1,6 +1,7 @@
 use crossbeam_pebr::{unprotected, Atomic, Guard, Owned, Shared, Shield, ShieldError};
 
 use super::concurrent_map::ConcurrentMap;
+use super::shield_pool::ShieldPool;
 
 use std::cmp;
 use std::sync::atomic::Ordering;
@@ -82,7 +83,8 @@ where
 /// Since BonsaiTreeMap.curr_state is Atomic<State<_>>, *const Node<_> can't be used here.
 #[derive(Debug)]
 pub struct State<K, V> {
-    shield: Shield<Node<K, V>>,
+    root_shield: Shield<Node<K, V>>,
+    shields: ShieldPool<Node<K, V>>,
     /// Nodes that current op wants to remove from the tree. Should be retired if CAS succeeds.
     /// (`retire`). If not, ignore.
     retired_nodes: Vec<Atomic<Node<K, V>>>,
@@ -97,7 +99,8 @@ where
 {
     fn new<'g>(guard: &'g Guard) -> Self {
         Self {
-            shield: Shield::null(guard),
+            root_shield: Shield::null(guard),
+            shields: ShieldPool::new(),
             retired_nodes: Vec::new(),
             new_nodes: Vec::new(),
         }
@@ -105,7 +108,7 @@ where
 
     /// Destroy the newly created state (self) that lost the race (reclaim_state)
     fn abort(&mut self) {
-        self.shield.release();
+        self.root_shield.release();
         self.retired_nodes.clear();
 
         for node in self.new_nodes.drain(..) {
@@ -115,7 +118,7 @@ where
 
     /// Retire the old state replaced by the new_state and the new_state.retired_nodes
     fn commit(&mut self, guard: &Guard) {
-        self.shield.release();
+        self.root_shield.release();
         self.new_nodes.clear();
 
         for node in self.retired_nodes.drain(..) {
@@ -215,8 +218,8 @@ where
         let right_ref = unsafe { right.deref() };
         let right_left = right_ref.left.load(Ordering::Acquire, guard);
         let right_right = right_ref.right.load(Ordering::Acquire, guard);
-        let _right_left_shield = Shield::new(right_left, guard)?;
-        let _right_right_shield = Shield::new(right_right, guard)?;
+        let _right_left_shield = self.shields.defend(right_left, guard)?;
+        let _right_right_shield = self.shields.defend(right_right, guard)?;
 
         if Node::is_retired_spot(right_left, guard) || Node::is_retired_spot(right_right, guard) {
             return Ok(Node::retired_node());
@@ -270,8 +273,8 @@ where
         let right_left_ref = unsafe { right_left.deref() };
         let right_left_left = right_left_ref.left.load(Ordering::Acquire, guard);
         let right_left_right = right_left_ref.right.load(Ordering::Acquire, guard);
-        let _right_left_left_shield = Shield::new(right_left_left, guard)?;
-        let _right_left_right_shield = Shield::new(right_left_right, guard)?;
+        let _right_left_left_shield = self.shields.defend(right_left_left, guard)?;
+        let _right_left_right_shield = self.shields.defend(right_left_right, guard)?;
 
         if Node::is_retired_spot(right_left_left, guard)
             || Node::is_retired_spot(right_left_right, guard)
@@ -311,8 +314,8 @@ where
         let left_ref = unsafe { left.deref() };
         let left_right = left_ref.right.load(Ordering::Acquire, guard);
         let left_left = left_ref.left.load(Ordering::Acquire, guard);
-        let _left_left_shield = Shield::new(left_left, guard)?;
-        let _left_right_shield = Shield::new(left_right, guard)?;
+        let _left_left_shield = self.shields.defend(left_left, guard)?;
+        let _left_right_shield = self.shields.defend(left_right, guard)?;
 
         if Node::is_retired_spot(left_right, guard) || Node::is_retired_spot(left_left, guard) {
             return Ok(Node::retired_node());
@@ -365,8 +368,8 @@ where
         let left_right_ref = unsafe { left_right.deref() };
         let left_right_left = left_right_ref.left.load(Ordering::Acquire, guard);
         let left_right_right = left_right_ref.right.load(Ordering::Acquire, guard);
-        let _left_right_left_shield = Shield::new(left_right_left, guard)?;
-        let _left_right_right_shield = Shield::new(left_right_right, guard)?;
+        let _left_right_left_shield = self.shields.defend(left_right_left, guard)?;
+        let _left_right_right_shield = self.shields.defend(left_right_right, guard)?;
 
         if Node::is_retired_spot(left_right_left, guard)
             || Node::is_retired_spot(left_right_right, guard)
@@ -422,8 +425,8 @@ where
         let node_ref = unsafe { node.deref() };
         let left = node_ref.left.load(Ordering::Acquire, guard);
         let right = node_ref.right.load(Ordering::Acquire, guard);
-        let _left_shield = Shield::new(left, guard)?;
-        let _right_shield = Shield::new(right, guard)?;
+        let _left_shield = self.shields.defend(left, guard)?;
+        let _right_shield = self.shields.defend(right, guard)?;
 
         if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
             return Ok((Node::retired_node(), false));
@@ -460,8 +463,8 @@ where
         let node_ref = unsafe { node.deref() };
         let left = node_ref.left.load(Ordering::Acquire, guard);
         let right = node_ref.right.load(Ordering::Acquire, guard);
-        let _left_shield = Shield::new(left, guard)?;
-        let _right_shield = Shield::new(right, guard)?;
+        let _left_shield = self.shields.defend(left, guard)?;
+        let _right_shield = self.shields.defend(right, guard)?;
 
         if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
             return Ok((Node::retired_node(), None));
@@ -477,11 +480,11 @@ where
 
                 if !left.is_null() {
                     let (new_left, succ) = self.pull_rightmost(left, guard)?;
-                    let _new_left_shield = Shield::new(new_left, guard)?;
+                    let _new_left_shield = self.shields.defend(new_left, guard)?;
                     return Ok((self.mk_balanced(succ, new_left, right, guard)?, value));
                 }
                 let (new_right, succ) = self.pull_leftmost(right, guard)?;
-                let _new_right_shield = Shield::new(new_right, guard)?;
+                let _new_right_shield = self.shields.defend(new_right, guard)?;
                 Ok((self.mk_balanced(succ, left, new_right, guard)?, value))
             }
             cmp::Ordering::Less => {
@@ -507,8 +510,8 @@ where
         let node_ref = unsafe { node.deref() };
         let left = node_ref.left.load(Ordering::Acquire, guard);
         let right = node_ref.right.load(Ordering::Acquire, guard);
-        let _left_shield = Shield::new(left, guard)?;
-        let _right_shield = Shield::new(right, guard)?;
+        let _left_shield = self.shields.defend(left, guard)?;
+        let _right_shield = self.shields.defend(right, guard)?;
 
         if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
             return Ok((Node::retired_node(), Node::retired_node()));
@@ -516,7 +519,7 @@ where
 
         if !left.is_null() {
             let (new_left, succ) = self.pull_leftmost(left, guard)?;
-            let _new_left_shield = Shield::new(new_left, guard)?;
+            let _new_left_shield = self.shields.defend(new_left, guard)?;
             return Ok((self.mk_balanced(node, new_left, right, guard)?, succ));
         }
         // node is the leftmost
@@ -543,8 +546,8 @@ where
         let node_ref = unsafe { node.deref() };
         let left = node_ref.left.load(Ordering::Acquire, guard);
         let right = node_ref.right.load(Ordering::Acquire, guard);
-        let _left_shield = Shield::new(left, guard)?;
-        let _right_shield = Shield::new(right, guard)?;
+        let _left_shield = self.shields.defend(left, guard)?;
+        let _right_shield = self.shields.defend(right, guard)?;
 
         if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
             return Ok((Node::retired_node(), Node::retired_node()));
@@ -552,7 +555,7 @@ where
 
         if !right.is_null() {
             let (new_right, succ) = self.pull_rightmost(right, guard)?;
-            let _new_right_shield = Shield::new(new_right, guard)?;
+            let _new_right_shield = self.shields.defend(new_right, guard)?;
             return Ok((self.mk_balanced(node, left, new_right, guard)?, succ));
         }
         // node is the rightmost
@@ -594,12 +597,12 @@ where
         loop {
             match self.get_inner(
                 key,
-                unsafe { &mut *(&mut state.shield as *mut Shield<_>) },
+                unsafe { &mut *(&mut state.root_shield as *mut Shield<_>) },
                 unsafe { &mut *(guard as *mut Guard) },
             ) {
                 Ok(r) => return r,
                 Err(ShieldError::Ejected) => {
-                    state.shield.release();
+                    state.root_shield.release();
                     guard.repin();
                 }
             }
@@ -641,7 +644,7 @@ where
         loop {
             let old_root = self.root.load(Ordering::Acquire, guard);
             match state
-                .shield
+                .root_shield
                 .defend(old_root, guard)
                 .and_then(|_| state.do_insert(old_root, &key, &value, guard))
             {
@@ -674,7 +677,7 @@ where
         loop {
             let old_root = self.root.load(Ordering::Acquire, guard);
             match state
-                .shield
+                .root_shield
                 .defend(old_root, guard)
                 .and_then(|_| state.do_remove(old_root, key, guard))
             {
@@ -740,7 +743,7 @@ where
     }
 
     fn clear(handle: &mut Self::Handle) {
-        handle.shield.release();
+        handle.root_shield.release();
         debug_assert!(handle.retired_nodes.is_empty());
         debug_assert!(handle.new_nodes.is_empty());
     }
