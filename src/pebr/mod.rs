@@ -1,3 +1,5 @@
+pub mod shield_pool;
+
 pub mod concurrent_map;
 
 pub mod bonsai_tree;
