@@ -1,3 +1,4 @@
+use core::ops::Deref;
 use crossbeam_pebr::{Guard, Shared, Shield, ShieldError};
 use std::cell::UnsafeCell;
 
@@ -51,8 +52,9 @@ impl<T> Drop for ShieldHandle<T> {
     }
 }
 
-impl<T> ShieldHandle<T> {
-    pub unsafe fn deref(&self) -> &T {
-        (&*(**(*self.pool).shields.get_unchecked(self.index)).get()).deref()
+impl<T> Deref for ShieldHandle<T> {
+    type Target = Shield<T>;
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*(**(*self.pool).shields.get_unchecked(self.index)).get() }
     }
 }
