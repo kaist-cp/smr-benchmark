@@ -1,19 +1,19 @@
 use crossbeam_pebr::{Guard, Shared, Shield, ShieldError};
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::cell::UnsafeCell;
 
 /// Thread-local pool of shields
 #[derive(Debug)]
 pub struct ShieldPool<T> {
-    shields: Vec<Rc<RefCell<Shield<T>>>>,
-    available: Rc<RefCell<Vec<usize>>>,
+    shields: Vec<*mut UnsafeCell<Shield<T>>>,
+    /// Indices of available shields in `shields`.
+    available: Vec<usize>,
 }
 
 impl<T> ShieldPool<T> {
     pub fn new() -> ShieldPool<T> {
         ShieldPool {
             shields: Vec::new(),
-            available: Rc::new(RefCell::new(Vec::new())),
+            available: Vec::new(),
         }
     }
 
@@ -22,36 +22,37 @@ impl<T> ShieldPool<T> {
         ptr: Shared<'g, T>,
         guard: &Guard,
     ) -> Result<ShieldHandle<T>, ShieldError> {
-        if let Some(index) = self.available.borrow_mut().pop() {
-            let shield_ref = unsafe { self.shields.get_unchecked(index).clone() };
-            shield_ref.borrow_mut().defend(ptr, guard)?;
-            return Ok(ShieldHandle {
-                shield: shield_ref,
-                available: self.available.clone(),
-                index,
-            });
+        if let Some(index) = self.available.pop() {
+            let shield_ref = unsafe { &mut *(**self.shields.get_unchecked(index)).get() };
+            shield_ref.defend(ptr, guard)?;
+            return Ok(ShieldHandle { pool: self, index });
         }
-        let new_shield = Shield::new(ptr, guard)?;
+        let new_shield = Box::into_raw(Box::new(UnsafeCell::new(Shield::new(ptr, guard)?)));
         let index = self.shields.len();
-        self.shields.push(Rc::new(RefCell::new(new_shield)));
-        Ok(ShieldHandle {
-            shield: self.shields.last().unwrap().clone(),
-            available: self.available.clone(),
-            index,
-        })
+        self.shields.push(new_shield);
+        Ok(ShieldHandle { pool: self, index })
     }
 }
 
 #[derive(Debug)]
 pub struct ShieldHandle<T> {
-    shield: Rc<RefCell<Shield<T>>>,
-    available: Rc<RefCell<Vec<usize>>>,
+    /// The shield pool this handle belongs to.
+    pool: *mut ShieldPool<T>,
+    /// The index of the underlying shield.
     index: usize,
 }
 
 impl<T> Drop for ShieldHandle<T> {
     fn drop(&mut self) {
-        self.shield.borrow_mut().release();
-        self.available.borrow_mut().push(self.index);
+        let pool = unsafe { &mut *self.pool };
+        // release only
+        unsafe { (*(**pool.shields.get_unchecked(self.index)).get()).release() };
+        pool.available.push(self.index);
+    }
+}
+
+impl<T> ShieldHandle<T> {
+    pub unsafe fn deref(&self) -> &T {
+        (&*(**(*self.pool).shields.get_unchecked(self.index)).get()).deref()
     }
 }
