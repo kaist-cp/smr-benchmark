@@ -94,9 +94,11 @@ where
         // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
         // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
 
+        #[allow(deprecated)]
         let mut prev_s = ManuallyDrop::new(mem::replace(&mut self.prev, unsafe {
             mem::uninitialized()
         }));
+        #[allow(deprecated)]
         let mut curr_s = ManuallyDrop::new(mem::replace(&mut self.curr, unsafe {
             mem::uninitialized()
         }));
@@ -125,7 +127,7 @@ where
                 curr_s.defend(curr, guard).map_err(FindError::ShieldError)?;
                 let curr_node = unsafe { curr.deref() };
 
-                let mut next = curr_node.next.load(Ordering::Acquire, guard);
+                let next = curr_node.next.load(Ordering::Acquire, guard);
 
                 // - finding stage is done if cursor.curr advancement stops
                 // - advance cursor.curr if (.next is marked) || (cursor.curr < key)
@@ -227,9 +229,11 @@ where
         key: &K,
         guard: &'g Guard,
     ) -> Result<bool, FindError> {
+        #[allow(deprecated)]
         let mut prev_s = ManuallyDrop::new(mem::replace(&mut self.prev, unsafe {
             mem::uninitialized()
         }));
+        #[allow(deprecated)]
         let mut curr_s = ManuallyDrop::new(mem::replace(&mut self.curr, unsafe {
             mem::uninitialized()
         }));

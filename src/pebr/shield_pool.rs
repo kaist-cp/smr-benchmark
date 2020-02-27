@@ -34,6 +34,14 @@ impl<T> ShieldPool<T> {
     }
 }
 
+impl<T> Drop for ShieldPool<T> {
+    fn drop(&mut self) {
+        for s in self.shields.drain(..) {
+            unsafe { drop(Box::from_raw(s)) }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ShieldHandle<T> {
     /// The shield pool this handle belongs to.
