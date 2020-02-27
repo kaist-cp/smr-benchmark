@@ -1,72 +1,93 @@
 # A Marriage of Pointer- and Epoch-Based Reclamation
 
-This is the supplementary material for PLDI 2020 submission #101.
+This is the artifact for
+
+Jeehoon Kang and Jaehwang Jung, A Marriage of Pointer- and Epoch-Based Reclamation, PLDI 2020.
+
+## Summary
+On Ubuntu 18.04,
+
+```
+sudo apt install build-essential python3-pip
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+pip3 install --user pandas plotnine
+python3 bench.py
+python3 plot.py
+```
 
 ## Dependencies
 
 * [`rustup`](https://rustup.rs/) for building the implementation of NR, EBR, PEBR and data structures
+    * Rust requires GCC for linking.
 
 * Linux >= 4.14 for [`MEMBARRIER_CMD_PRIVATE_EXPEDITED` and
   `MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED`](http://man7.org/linux/man-pages/man2/membarrier.2.html),
   used in the implementation of PEBR.
+    * **IMPORTANT**: Docker blocks this feature by default. To enable, please use
+      ```
+      --security-opt seccomp:unconfined
+      ```
+      option when lauching Docker.
 
-* Python >= 3.6 and pip3 for benchmark and plotting scripts
+* Python >= 3.6, pandas and plotnine for benchmark runner and plotting scripts
 
-    ```
-    pip3 install --user pandas plotnine
-    ```
+## Usage
 
-## Build
+To build the benchmark,
 
-```sh
-git submodule update --init --recursive # not needed if you got the archived source code
-cargo build --release
 ```
-
-## Run
+git submodule update --init --recursive # not needed if you got the archived source code
+cargo build --release                   # remove --release for debug build
+```
 
 To run a single test,
 
-```sh
+```
 ./target/release/pebr-benchmark -d <data structure> -m <reclamation scheme> -t <threads>
 ```
 
+where
+
+* data structure: HList, HMList, HHSList, HashMap, NMTree, BonsaiTree
+* reclamation scheme: NR, EBR, PEBR
+
 For detailed usage information,
 
-```sh
+```
 ./target/release/pebr-benchmark -h
 ```
 
-To run the entire benchmark, 
+To run the entire benchmark,
 
-```sh
+```
 python3 bench.py
 ```
 
 This takes several hours and creates raw csv data under `./results/`.
 
+To generate plots,
 
-To generate plots presented in the paper,
-
-```sh
+```
 python3 plot.py
 ```
+
+This creates plots presented in the paper under `./results/`.
 
 
 ## Debug
 
-We used `./sanitize.sh` to check that our implementation does not have bugs.
-This script runs the benchmark with [LLVM address sanitizer for
+We used `./sanitize.sh` to debug our implementation. This script runs the
+benchmark with [LLVM address sanitizer for
 Rust](https://github.com/japaric/rust-san) and uses parameters that impose high
 stress on PEBR by triggering more frequent ejection.
 
-Note that it may report memory leaks when used against `-m ebr`.
+Note that sanitizer may report memory leaks when used against `-m EBR`.
 This is because of a minor bug in original Crossbeam but it doesn't affect performance of our benchmark.
 
 
 ## Project structure
 
-* `./crossbeam-pebr` is a fork of
+* `./crossbeam-pebr` is the fork of
   [Crossbeam](https://github.com/crossbeam-rs/crossbeam) that implements PEBR.
   The main implementation of PEBR lies under
   `./crossbeam-pebr/crossbeam-epoch`.
@@ -74,7 +95,7 @@ This is because of a minor bug in original Crossbeam but it doesn't affect perfo
 * `./crossbeam-ebr` is the original Crossbeam source code.
 
 * `./src` contains the benchmark driver (`./src/main.rs`) and the
-  implementation of 4 data structures based on PEBR (`./src/pebr/`) and
+  implementation of data structures based on PEBR (`./src/pebr/`) and
   original Crossbeam (`./src/ebr/`).
 
 
