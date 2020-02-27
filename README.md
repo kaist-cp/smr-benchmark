@@ -4,6 +4,8 @@ This is the artifact for
 
 Jeehoon Kang and Jaehwang Jung, A Marriage of Pointer- and Epoch-Based Reclamation, PLDI 2020.
 
+The latest developments are on <https://github.com/kaist-cp/pebr-benchmark>.
+
 ## Summary
 On Ubuntu 18.04,
 
@@ -17,17 +19,17 @@ python3 plot.py
 
 ## Dependencies
 
-* [`rustup`](https://rustup.rs/) for building the implementation of NR, EBR, PEBR and data structures
-    * Rust requires GCC for linking.
-
 * Linux >= 4.14 for [`MEMBARRIER_CMD_PRIVATE_EXPEDITED` and
   `MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED`](http://man7.org/linux/man-pages/man2/membarrier.2.html),
   used in the implementation of PEBR.
-    * **IMPORTANT**: Docker blocks this feature by default. To enable, please use
+    * **IMPORTANT**: Docker disables this feature by default. To enable, please use
       ```
       --security-opt seccomp:unconfined
       ```
-      option when lauching Docker.
+      option when launching Docker.
+
+* [`rustup`](https://rustup.rs/) for building the implementation of NR, EBR, PEBR and data structures
+    * Rust requires GCC for linking in Linux.
 
 * Python >= 3.6, pandas and plotnine for benchmark runner and plotting scripts
 
@@ -63,7 +65,7 @@ To run the entire benchmark,
 python3 bench.py
 ```
 
-This takes several hours and creates raw csv data under `./results/`.
+This takes several hours and creates raw CSV data under `./results/`.
 
 To generate plots,
 
