@@ -1,5 +1,5 @@
 import subprocess
-import os.path
+import os
 import sys
 
 dss = ['HList', 'HMList', 'HHSList', 'HashMap', 'NMTree', 'BonsaiTree']
@@ -7,11 +7,18 @@ mms = ['EBR', 'PEBR', 'NR']
 ns = [0, 2, 3]
 cs = [1]
 i = 3
-if len(sys.argv) <= 1:
+cpu_count = os.cpu_count()
+if not cpu_count or cpu_count <= 24:
+    ts = list(map(str, [1] + list(range(4, 33, 4))))
+elif cpu_count <= 56:
     ts = list(map(str, [1] + list(range(5, 76, 5))))
-    gs = [0, 1, 2]
-    runs = 3
-elif sys.argv[1] == 'simple':
+elif cpu_count <= 96:
+    ts = list(map(str, [1] + list(range(8, 121, 8))))
+else:
+    ts = list(map(str, [1] + list(range(10, 151, 10))))
+gs = [0, 1, 2]
+runs = 3
+if len(sys.argv) >= 2 and sys.argv[1] == 'simple':
     ts = list(map(str, [1, 20, 30]))
     gs = [0]
     runs = 1

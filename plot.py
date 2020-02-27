@@ -2,6 +2,7 @@
 import pandas as pd
 from plotnine import *
 import warnings
+import os
 
 warnings.filterwarnings("ignore")
 pd.set_option('display.max_rows', None)
@@ -41,7 +42,15 @@ WRITE, HALF, READ = "write", "half", "read"
 SMR_ONLYs = [NR, EBR, PEBR]
 SMR_Is = [NR, EBR, EBR+N10MS, EBR+STALLED, PEBR, PEBR+N10MS, PEBR+STALLED]
 
-ts = [1] + list(range(5, 76, 5))
+cpu_count = os.cpu_count()
+if not cpu_count or cpu_count <= 24:
+    ts = [1] + list(range(4, 33, 4))
+elif cpu_count <= 56:
+    ts = [1] + list(range(5, 76, 5))
+elif cpu_count <= 96:
+    ts = [1] + list(range(8, 121, 8))
+else:
+    ts = [1] + list(range(10, 151, 10))
 
 n_map = {0: '', 1: N1MS, 2: N10MS, 3: STALLED}
 
