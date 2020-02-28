@@ -657,14 +657,14 @@ fn bench_map_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigne
                     let key = config.key_dist.sample(&mut rng).to_string();
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
                         Op::Get => {
-                            map.get(&key, &mut guard);
+                            map.get(&key, &guard);
                         }
                         Op::Insert => {
                             let value = key.clone();
-                            map.insert(key, value, &mut guard);
+                            map.insert(key, value, &guard);
                         }
                         Op::Remove => {
-                            map.remove(&key, &mut guard);
+                            map.remove(&key, &guard);
                         }
                     }
                     ops += 1;

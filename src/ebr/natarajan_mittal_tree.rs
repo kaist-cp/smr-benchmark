@@ -476,15 +476,15 @@ where
     }
 
     #[inline]
-    fn get<'g>(&'g self, key: &'g K, guard: &'g mut Guard) -> Option<&'g V> {
+    fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
         self.get(key, guard)
     }
     #[inline]
-    fn insert(&self, key: K, value: V, guard: &mut Guard) -> bool {
+    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
         self.insert(key, value, guard).is_ok()
     }
     #[inline]
-    fn remove(&self, key: &K, guard: &mut Guard) -> Option<V> {
+    fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
         self.remove(key, guard)
     }
 }

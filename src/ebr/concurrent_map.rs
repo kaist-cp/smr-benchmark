@@ -2,9 +2,9 @@ use crossbeam_ebr::Guard;
 
 pub trait ConcurrentMap<K, V> {
     fn new() -> Self;
-    fn get<'g>(&'g self, key: &'g K, guard: &'g mut Guard) -> Option<&'g V>;
-    fn insert(&self, key: K, value: V, guard: &mut Guard) -> bool;
-    fn remove(&self, key: &K, guard: &mut Guard) -> Option<V>;
+    fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V>;
+    fn insert(&self, key: K, value: V, guard: &Guard) -> bool;
+    fn remove(&self, key: &K, guard: &Guard) -> Option<V>;
 }
 
 #[cfg(test)]
@@ -29,7 +29,7 @@ pub mod tests {
                         (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        assert!(map.insert(i, i.to_string(), &mut pin()));
+                        assert!(map.insert(i, i.to_string(), &pin()));
                     }
                 });
             }
@@ -44,7 +44,7 @@ pub mod tests {
                         (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        assert_eq!(i.to_string(), map.remove(&i, &mut pin()).unwrap());
+                        assert_eq!(i.to_string(), map.remove(&i, &pin()).unwrap());
                     }
                 });
             }
@@ -59,7 +59,7 @@ pub mod tests {
                         (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        assert_eq!(i.to_string(), *map.get(&i, &mut pin()).unwrap());
+                        assert_eq!(i.to_string(), *map.get(&i, &pin()).unwrap());
                     }
                 });
             }

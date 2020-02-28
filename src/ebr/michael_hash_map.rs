@@ -35,17 +35,17 @@ where
         s.finish() as usize
     }
 
-    pub fn get<'g>(&'g self, k: &'g K, guard: &'g mut Guard) -> Option<&'g V> {
+    pub fn get<'g>(&'g self, k: &'g K, guard: &'g Guard) -> Option<&'g V> {
         let i = Self::hash(k);
         self.get_bucket(i).get(k, guard)
     }
 
-    pub fn insert(&self, k: K, v: V, guard: &mut Guard) -> bool {
+    pub fn insert(&self, k: K, v: V, guard: &Guard) -> bool {
         let i = Self::hash(&k);
         self.get_bucket(i).insert(k, v, guard)
     }
 
-    pub fn remove(&self, k: &K, guard: &mut Guard) -> Option<V> {
+    pub fn remove(&self, k: &K, guard: &Guard) -> Option<V> {
         let i = Self::hash(&k);
         self.get_bucket(i).remove(k, guard)
     }
@@ -60,15 +60,15 @@ where
     }
 
     #[inline]
-    fn get<'g>(&'g self, key: &'g K, guard: &'g mut Guard) -> Option<&'g V> {
+    fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
         self.get(key, guard)
     }
     #[inline]
-    fn insert(&self, key: K, value: V, guard: &mut Guard) -> bool {
+    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
         self.insert(key, value, guard)
     }
     #[inline]
-    fn remove(&self, key: &K, guard: &mut Guard) -> Option<V> {
+    fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
         self.remove(key, guard)
     }
 }
