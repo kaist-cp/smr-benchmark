@@ -584,7 +584,7 @@ where
         }
     }
 
-    pub fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
+    pub fn insert(&self, key: K, value: V, guard: &mut Guard) -> bool {
         let mut state = State::new();
         loop {
             let old_root = self.root.load(Ordering::Acquire, guard);
@@ -592,6 +592,7 @@ where
 
             if Node::is_retired(new_root) {
                 state.abort();
+                guard.repin();
                 continue;
             }
 
@@ -605,10 +606,11 @@ where
             }
 
             state.abort();
+            guard.repin();
         }
     }
 
-    pub fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
+    pub fn remove(&self, key: &K, guard: &mut Guard) -> Option<V> {
         let mut state = State::new();
         loop {
             let old_root = self.root.load(Ordering::Acquire, guard);
@@ -616,6 +618,7 @@ where
 
             if Node::is_retired(new_root) {
                 state.abort();
+                guard.repin();
                 continue;
             }
 
@@ -629,6 +632,7 @@ where
             }
 
             state.abort();
+            guard.repin();
         }
     }
 }
@@ -664,15 +668,15 @@ where
     }
 
     #[inline]
-    fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
+    fn get<'g>(&'g self, key: &'g K, guard: &'g mut Guard) -> Option<&'g V> {
         self.get(key, guard)
     }
     #[inline]
-    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
+    fn insert(&self, key: K, value: V, guard: &mut Guard) -> bool {
         self.insert(key, value, guard)
     }
     #[inline]
-    fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
+    fn remove(&self, key: &K, guard: &mut Guard) -> Option<V> {
         self.remove(key, guard)
     }
 }

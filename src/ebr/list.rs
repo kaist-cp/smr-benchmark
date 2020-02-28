@@ -311,15 +311,15 @@ where
     }
 
     #[inline]
-    fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+    fn get<'g>(&'g self, key: &K, guard: &'g mut Guard) -> Option<&'g V> {
         self.inner.harris_get(key, guard)
     }
     #[inline]
-    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
+    fn insert(&self, key: K, value: V, guard: &mut Guard) -> bool {
         self.inner.harris_insert(key, value, guard)
     }
     #[inline]
-    fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
+    fn remove(&self, key: &K, guard: &mut Guard) -> Option<V> {
         self.inner.harris_remove(key, guard)
     }
 }
@@ -337,15 +337,15 @@ where
     }
 
     #[inline]
-    fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+    fn get<'g>(&'g self, key: &K, guard: &'g mut Guard) -> Option<&'g V> {
         self.inner.harris_michael_get(key, guard)
     }
     #[inline]
-    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
+    fn insert(&self, key: K, value: V, guard: &mut Guard) -> bool {
         self.inner.harris_michael_insert(key, value, guard)
     }
     #[inline]
-    fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
+    fn remove(&self, key: &K, guard: &mut Guard) -> Option<V> {
         self.inner.harris_michael_remove(key, guard)
     }
 }
@@ -363,15 +363,15 @@ where
     }
 
     #[inline]
-    fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+    fn get<'g>(&'g self, key: &K, guard: &'g mut Guard) -> Option<&'g V> {
         self.inner.harris_herlihy_shavit_get(key, guard)
     }
     #[inline]
-    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
+    fn insert(&self, key: K, value: V, guard: &mut Guard) -> bool {
         self.inner.harris_herlihy_shavit_insert(key, value, guard)
     }
     #[inline]
-    fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
+    fn remove(&self, key: &K, guard: &mut Guard) -> Option<V> {
         self.inner.harris_herlihy_shavit_remove(key, guard)
     }
 }

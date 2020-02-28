@@ -655,6 +655,7 @@ where
                 Ok((new_root, inserted)) => {
                     if Node::is_retired(new_root) {
                         state.abort();
+                        guard.repin();
                         continue;
                     }
 
@@ -668,6 +669,7 @@ where
                     }
 
                     state.abort();
+                    guard.repin();
                 }
             }
         }
@@ -688,6 +690,7 @@ where
                 Ok((new_root, value)) => {
                     if Node::is_retired(new_root) {
                         state.abort();
+                        guard.repin();
                         continue;
                     }
 
@@ -701,6 +704,7 @@ where
                     }
 
                     state.abort();
+                    guard.repin();
                 }
             }
         }
