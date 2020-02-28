@@ -551,14 +551,14 @@ fn bench_map_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
                     let key = config.key_dist.sample(&mut rng).to_string();
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
                         Op::Get => {
-                            map.get(&key, unsafe { crossbeam_ebr::unprotected() });
+                            map.get(&key, unsafe { crossbeam_ebr::leaking() });
                         }
                         Op::Insert => {
                             let value = key.clone();
-                            map.insert(key, value, unsafe { crossbeam_ebr::unprotected() });
+                            map.insert(key, value, unsafe { crossbeam_ebr::leaking() });
                         }
                         Op::Remove => {
-                            map.remove(&key, unsafe { crossbeam_ebr::unprotected() });
+                            map.remove(&key, unsafe { crossbeam_ebr::leaking() });
                         }
                     }
                     ops += 1;
