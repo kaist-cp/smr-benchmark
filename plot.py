@@ -3,9 +3,14 @@ import pandas as pd
 from plotnine import *
 import warnings
 import os
+import matplotlib
 
 warnings.filterwarnings("ignore")
 pd.set_option('display.max_rows', None)
+
+# avoid Type 3 fonts
+matplotlib.rcParams['pdf.fonttype'] = 42
+matplotlib.rcParams['ps.fonttype'] = 42
 
 # raw column names
 THREADS = "threads"
