@@ -94,8 +94,8 @@ where
         // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
         // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
 
-        let mut prev_s = ManuallyDrop::new(mem::replace(&mut self.prev, Shield::null(guard)));
-        let mut curr_s = ManuallyDrop::new(mem::replace(&mut self.curr, Shield::null(guard)));
+        let mut prev_s = ManuallyDrop::new(mem::replace(&mut self.prev, unsafe { mem::zeroed() }));
+        let mut curr_s = ManuallyDrop::new(mem::replace(&mut self.curr, unsafe { mem::zeroed() }));
         let prev_p = &mut self.prev as *mut _;
         let curr_p = &mut self.curr as *mut _;
         let prev_s_p = &mut prev_s as *mut _;
@@ -223,8 +223,8 @@ where
         key: &K,
         guard: &'g Guard,
     ) -> Result<bool, FindError> {
-        let mut prev_s = ManuallyDrop::new(mem::replace(&mut self.prev, Shield::null(guard)));
-        let mut curr_s = ManuallyDrop::new(mem::replace(&mut self.curr, Shield::null(guard)));
+        let mut prev_s = ManuallyDrop::new(mem::replace(&mut self.prev, unsafe { mem::zeroed() }));
+        let mut curr_s = ManuallyDrop::new(mem::replace(&mut self.curr, unsafe { mem::zeroed() }));
         let prev_p = &mut self.prev as *mut _;
         let curr_p = &mut self.curr as *mut _;
         let prev_s_p = &mut prev_s as *mut _;
