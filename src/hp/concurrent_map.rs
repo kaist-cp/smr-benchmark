@@ -15,14 +15,10 @@ pub trait ConcurrentMap<K, V> {
         &'g self,
         handle: &'g mut Self::Handle<'domain>,
         key: K,
-        value: V
+        value: V,
     ) -> bool;
 
-    fn remove<'g, 'domain>(
-        &'g self,
-        handle: &'g mut Self::Handle<'domain>,
-        key: &K
-    ) -> Option<V>;
+    fn remove<'g, 'domain>(&'g self, handle: &'g mut Self::Handle<'domain>, key: &K) -> Option<V>;
 }
 
 #[cfg(test)]
@@ -63,10 +59,7 @@ pub mod tests {
                         (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        assert_eq!(
-                            i.to_string(),
-                            map.remove(&mut handle, &i).unwrap()
-                        );
+                        assert_eq!(i.to_string(), map.remove(&mut handle, &i).unwrap());
                     }
                 });
             }
@@ -82,10 +75,7 @@ pub mod tests {
                         (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        assert_eq!(
-                            i.to_string(),
-                            *map.get(&mut handle, &i).unwrap()
-                        );
+                        assert_eq!(i.to_string(), *map.get(&mut handle, &i).unwrap());
                     }
                 });
             }

@@ -7,14 +7,16 @@ use super::list::HMList;
 
 pub struct HashMap<K, V>
 where
-    K: Send, V: Send
+    K: Send,
+    V: Send,
 {
     buckets: Vec<HMList<K, V>>,
 }
 
 impl<K, V> HashMap<K, V>
 where
-    K: Ord + Hash + Send, V: Send
+    K: Ord + Hash + Send,
+    V: Send,
 {
     pub fn with_capacity(n: usize) -> Self {
         let mut buckets = Vec::with_capacity(n);
@@ -51,7 +53,7 @@ where
         &'g self,
         cursor: &'g mut Cursor<'domain, K, V>,
         k: K,
-        v: V
+        v: V,
     ) -> bool {
         let i = Self::hash(&k);
         self.get_bucket(i).insert(cursor, k, v)
@@ -60,7 +62,7 @@ where
     pub fn remove<'g, 'domain>(
         &'g self,
         cursor: &'g mut Cursor<'domain, K, V>,
-        k: &K
+        k: &K,
     ) -> Option<V> {
         let i = Self::hash(&k);
         self.get_bucket(i).remove(cursor, k)
@@ -69,7 +71,8 @@ where
 
 impl<K, V> ConcurrentMap<K, V> for HashMap<K, V>
 where
-    K: Ord + Hash + Send, V: Send
+    K: Ord + Hash + Send,
+    V: Send,
 {
     type Handle<'domain> = Cursor<'domain, K, V>;
 
@@ -98,16 +101,12 @@ where
         &'g self,
         handle: &'g mut Self::Handle<'domain>,
         key: K,
-        value: V
+        value: V,
     ) -> bool {
         self.insert(handle, key, value)
     }
     #[inline]
-    fn remove<'g, 'domain>(
-        &'g self,
-        handle: &'g mut Self::Handle<'domain>,
-        key: &K
-    ) -> Option<V> {
+    fn remove<'g, 'domain>(&'g self, handle: &'g mut Self::Handle<'domain>, key: &K) -> Option<V> {
         self.remove(handle, key)
     }
 }

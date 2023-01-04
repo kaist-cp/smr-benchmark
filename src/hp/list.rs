@@ -6,14 +6,15 @@ use super::tag::{decompose_ptr, remove_tag};
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::mem::{self, ManuallyDrop};
 use std::ptr;
-use std::sync::atomic::{Ordering, AtomicPtr};
+use std::sync::atomic::{AtomicPtr, Ordering};
 
-use haphazard::{HazardPointer, Domain};
+use haphazard::{Domain, HazardPointer};
 
 #[derive(Debug)]
 struct Node<K, V>
 where
-    K: Send, V: Send
+    K: Send,
+    V: Send,
 {
     next: AtomicPtr<Node<K, V>>,
     key: K,
@@ -22,14 +23,16 @@ where
 
 pub struct List<K, V>
 where
-    K: Send, V: Send
+    K: Send,
+    V: Send,
 {
     head: AtomicPtr<Node<K, V>>,
 }
 
 impl<K, V> Default for List<K, V>
 where
-    K: Ord + Send, V: Send
+    K: Ord + Send,
+    V: Send,
 {
     fn default() -> Self {
         Self::new()
@@ -38,7 +41,8 @@ where
 
 impl<K, V> Drop for List<K, V>
 where
-    K: Send, V: Send
+    K: Send,
+    V: Send,
 {
     fn drop(&mut self) {
         unsafe {
@@ -58,7 +62,8 @@ where
 
 pub struct Cursor<'g, K, V>
 where
-    K: Send, V: Send
+    K: Send,
+    V: Send,
 {
     prev: *mut Node<K, V>, // not &AtomicPtr because we can't construct the cursor out of thin air
     prev_h: HazardPointer<'g>,
@@ -68,7 +73,8 @@ where
 
 impl<'g, 'h, K, V> Cursor<'g, K, V>
 where
-    K: Send, V: Send
+    K: Send,
+    V: Send,
 {
     pub fn new() -> Self {
         Self {
@@ -92,7 +98,8 @@ where
 
 impl<'g, K, V> Cursor<'g, K, V>
 where
-    K: Ord + Send, V: Send
+    K: Ord + Send,
+    V: Send,
 {
     #[inline]
     fn find_harris_michael(&mut self, key: &K) -> Result<bool, ()> {
@@ -108,7 +115,7 @@ where
             self.curr_h.protect_raw(self.curr);
             membarrier::light();
             if prev.load(Ordering::Acquire) != self.curr {
-                return Err(())
+                return Err(());
             }
 
             let curr_node = unsafe { &*self.curr };
@@ -136,13 +143,14 @@ where
                 }
             }
             self.curr = next_base;
-        };
+        }
     }
 }
 
 impl<K, V> List<K, V>
 where
-    K: Ord + Send, V: Send
+    K: Ord + Send,
+    V: Send,
 {
     pub fn new() -> Self {
         List {
@@ -151,12 +159,7 @@ where
     }
 
     #[inline]
-    fn find<'g, 'domain, F>(
-        &'g self,
-        key: &K,
-        find: &F,
-        cursor: &mut Cursor<'domain, K, V>,
-    ) -> bool
+    fn find<'g, 'domain, F>(&'g self, key: &K, find: &F, cursor: &mut Cursor<'domain, K, V>) -> bool
     where
         F: Fn(&mut Cursor<'domain, K, V>, &K) -> Result<bool, ()>,
     {
@@ -209,9 +212,7 @@ where
                 return Ok(false);
             }
 
-            unsafe { &*node }
-                .next
-                .store(cursor.curr, Ordering::Relaxed);
+            unsafe { &*node }.next.store(cursor.curr, Ordering::Relaxed);
             if unsafe { &*remove_tag(cursor.prev) }
                 .next
                 .compare_exchange(cursor.curr, node, Ordering::Release, Ordering::Relaxed)
@@ -278,7 +279,9 @@ where
                 .compare_exchange(cursor.curr, next, Ordering::Release, Ordering::Relaxed)
                 .is_ok()
             {
-                unsafe { Domain::global().retire_ptr::<_, Box<_>>(curr_base); };
+                unsafe {
+                    Domain::global().retire_ptr::<_, Box<_>>(curr_base);
+                };
             }
 
             return Ok(Some(ManuallyDrop::into_inner(value)));
@@ -311,34 +314,27 @@ where
         self.get(key, Cursor::find_harris_michael, cursor)
     }
 
-    pub fn harris_michael_insert(
-        &self,
-        key: K,
-        value: V,
-        cursor: &mut Cursor<K, V>,
-    ) -> bool {
+    pub fn harris_michael_insert(&self, key: K, value: V, cursor: &mut Cursor<K, V>) -> bool {
         self.insert(key, value, Cursor::find_harris_michael, cursor)
     }
 
-    pub fn harris_michael_remove(
-        &self,
-        key: &K,
-        cursor: &mut Cursor<K, V>,
-    ) -> Option<V> {
+    pub fn harris_michael_remove(&self, key: &K, cursor: &mut Cursor<K, V>) -> Option<V> {
         self.remove(key, Cursor::find_harris_michael, cursor)
     }
 }
 
 pub struct HMList<K, V>
 where
-    K: Send, V: Send
+    K: Send,
+    V: Send,
 {
     inner: List<K, V>,
 }
 
 impl<K, V> ConcurrentMap<K, V> for HMList<K, V>
 where
-    K: Ord + Send, V: Send
+    K: Ord + Send,
+    V: Send,
 {
     type Handle<'domain> = Cursor<'domain, K, V>;
 
@@ -355,11 +351,7 @@ where
     }
 
     #[inline]
-    fn get<'g, 'domain>(
-        &'g self,
-        handle: &'g mut Self::Handle<'domain>,
-        key: &K,
-    ) -> Option<&'g V> {
+    fn get<'g, 'domain>(&'g self, handle: &'g mut Self::Handle<'domain>, key: &K) -> Option<&'g V> {
         self.inner.harris_michael_get(key, handle)
     }
     #[inline]
@@ -367,23 +359,19 @@ where
         &'g self,
         handle: &'g mut Self::Handle<'domain>,
         key: K,
-        value: V
+        value: V,
     ) -> bool {
         self.inner.harris_michael_insert(key, value, handle)
     }
     #[inline]
-    fn remove<'g, 'domain>(
-        &'g self,
-        handle: &'g mut Self::Handle<'domain>,
-        key: &K
-    ) -> Option<V> {
+    fn remove<'g, 'domain>(&'g self, handle: &'g mut Self::Handle<'domain>, key: &K) -> Option<V> {
         self.inner.harris_michael_remove(key, handle)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{HMList};
+    use super::HMList;
     use crate::hp::concurrent_map;
 
     #[test]
