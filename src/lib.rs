@@ -1,6 +1,11 @@
 // TODO
 // #![warn(missing_docs)]
 // #![warn(missing_debug_implementations)]
+
+// Enabled unsable feature to use
+// unstable functions of AtomicPtr (AtomicPtr::fetch_or)
+#![feature(strict_provenance_atomic_ptr, strict_provenance)]
+
 #[macro_use]
 extern crate cfg_if;
 
@@ -26,3 +31,4 @@ mod utils;
 
 pub mod ebr;
 pub mod pebr;
+pub mod hp;
