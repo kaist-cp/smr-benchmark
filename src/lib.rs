@@ -30,5 +30,5 @@ extern crate scopeguard;
 mod utils;
 
 pub mod ebr;
-pub mod pebr;
 pub mod hp;
+pub mod pebr;

@@ -22,8 +22,8 @@ use std::time::{Duration, Instant};
 use typenum::{Unsigned, U1, U4};
 
 use pebr_benchmark::ebr;
-use pebr_benchmark::pebr;
 use pebr_benchmark::hp;
+use pebr_benchmark::pebr;
 
 arg_enum! {
     #[derive(PartialEq, Debug)]
@@ -406,19 +406,16 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             ),
         },
         MM::HP => match config.ds {
-            DS::HMList => bench_map_hp::<hp::HMList<String, String>, N>(
-                config,
-                PrefillStrategy::Decreasing,
-            ),
-            DS::HashMap => bench_map_hp::<hp::HashMap<String, String>, N>(
-                config,
-                PrefillStrategy::Decreasing,
-            ),
-            DS::NMTree => bench_map_hp::<hp::NMTreeMap<String, String>, N>(
-                config,
-                PrefillStrategy::Random,
-            ),
-            _ => panic!("Unsupported data structure for HP")
+            DS::HMList => {
+                bench_map_hp::<hp::HMList<String, String>, N>(config, PrefillStrategy::Decreasing)
+            }
+            DS::HashMap => {
+                bench_map_hp::<hp::HashMap<String, String>, N>(config, PrefillStrategy::Decreasing)
+            }
+            DS::NMTree => {
+                bench_map_hp::<hp::NMTreeMap<String, String>, N>(config, PrefillStrategy::Random)
+            }
+            _ => panic!("Unsupported data structure for HP"),
         },
     };
     output

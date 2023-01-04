@@ -1,11 +1,11 @@
-use haphazard::{HazardPointer, Domain};
-use super::tag::{ptr_with_tag, remove_tag, get_tag};
+use super::tag::{get_tag, ptr_with_tag, remove_tag};
+use haphazard::{Domain, HazardPointer};
 
 use super::concurrent_map::ConcurrentMap;
 use std::cmp;
 use std::mem;
 use std::ptr;
-use std::sync::atomic::{Ordering, AtomicPtr};
+use std::sync::atomic::{AtomicPtr, Ordering};
 
 bitflags! {
     /// TODO
@@ -43,7 +43,7 @@ where
 
 impl<K> PartialOrd for Key<K>
 where
-    K: PartialOrd + Send
+    K: PartialOrd + Send,
 {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         match (self, other) {
@@ -246,7 +246,7 @@ where
         unsafe {
             let mut stack = vec![
                 self.r.left.load(Ordering::Relaxed),
-                self.r.right.load(Ordering::Relaxed)
+                self.r.right.load(Ordering::Relaxed),
             ];
             assert!(self.r.value.is_none());
 
@@ -298,23 +298,13 @@ where
 
         record.successor_dir = Direction::L;
 
-        let leaf = ptr_with_tag(
-            s_node
-                .left
-                .load(Ordering::Relaxed),
-            Marks::empty().bits()
-        );
-        
+        let leaf = ptr_with_tag(s_node.left.load(Ordering::Relaxed), Marks::empty().bits());
+
         // We doesn't have to defend with hazard pointers here
         record.parent = s;
-        
+
         record.leaf_h.protect_raw(leaf);
-        if leaf != ptr_with_tag(
-            s_node
-                .left
-                .load(Ordering::Relaxed),
-            Marks::empty().bits()
-        ) {
+        if leaf != ptr_with_tag(s_node.left.load(Ordering::Relaxed), Marks::empty().bits()) {
             return Err(());
         }
         record.leaf = leaf;
@@ -322,9 +312,7 @@ where
 
         let mut prev_tag = Marks::from_bits_truncate(get_tag(leaf)).tag();
         let mut curr_dir = Direction::L;
-        let mut curr = unsafe { &*record.leaf }
-            .left
-            .load(Ordering::Relaxed);
+        let mut curr = unsafe { &*record.leaf }.left.load(Ordering::Relaxed);
 
         while !remove_tag(curr).is_null() {
             if !prev_tag {
@@ -343,15 +331,15 @@ where
             loop {
                 record.leaf_h.protect_raw(curr_base);
                 let curr_base_new = remove_tag(match curr_dir {
-                    Direction::L => unsafe{ &*record.parent }.left.load(Ordering::Acquire),
-                    Direction::R => unsafe{ &*record.parent }.right.load(Ordering::Acquire),
+                    Direction::L => unsafe { &*record.parent }.left.load(Ordering::Acquire),
+                    Direction::R => unsafe { &*record.parent }.right.load(Ordering::Acquire),
                 });
                 if curr_base_new == curr_base {
                     break;
                 }
                 curr_base = curr_base_new;
             }
-            
+
             record.leaf = curr_base;
             record.leaf_dir = curr_dir;
 
@@ -409,9 +397,7 @@ where
 
                 while let Some(node) = stack.pop() {
                     let node_addr = remove_tag(node);
-                    if node_addr.is_null()
-                        || (node_addr == remove_tag(target_sibling))
-                    {
+                    if node_addr.is_null() || (node_addr == remove_tag(target_sibling)) {
                         continue;
                     }
 
@@ -427,11 +413,7 @@ where
         is_unlinked
     }
 
-    fn get_inner(
-        &self,
-        key: &K,
-        record: &mut SeekRecord<K, V>,
-    ) -> Result<Option<&V>, ()> {
+    fn get_inner(&self, key: &K, record: &mut SeekRecord<K, V>) -> Result<Option<&V>, ()> {
         self.seek(key, record)?;
         let leaf_node = unsafe { &*remove_tag(record.leaf) };
 
@@ -442,19 +424,12 @@ where
         Ok(Some(leaf_node.value.as_ref().unwrap()))
     }
 
-    pub fn get(
-        &self,
-        key: &K,
-        record: &mut SeekRecord<K, V>,
-    ) -> Option<&V> {
+    pub fn get(&self, key: &K, record: &mut SeekRecord<K, V>) -> Option<&V> {
         // TODO(@jeehoonkang): we want to use `FindError::retry`, but it requires higher-kinded
         // things...
         loop {
-            if let Ok(r) = self.get_inner(
-                key,
-                record,
-            ) {
-                return r
+            if let Ok(r) = self.get_inner(key, record) {
+                return r;
             }
         }
     }
@@ -463,12 +438,9 @@ where
         &self,
         key: &K,
         value: V,
-        record: &mut SeekRecord<K, V>
+        record: &mut SeekRecord<K, V>,
     ) -> Result<(), Result<V, V>> {
-        let new_leaf = Box::into_raw(Box::new(Node::new_leaf(
-            Key::Fin(key.clone()),
-            Some(value)
-        )));
+        let new_leaf = Box::into_raw(Box::new(Node::new_leaf(Key::Fin(key.clone()), Some(value))));
 
         let new_internal = Box::into_raw(Box::new(Node::<K, V> {
             key: Key::Inf, // temporary placeholder
@@ -495,7 +467,7 @@ where
                         drop(Box::from_raw(new_internal));
                     }
                     return Err(Ok(value));
-                },
+                }
                 cmp::Ordering::Greater => (new_leaf, leaf),
                 cmp::Ordering::Less => (leaf, new_leaf),
             };
@@ -506,10 +478,12 @@ where
             new_internal_node.right.store(new_right, Ordering::Relaxed);
 
             // NOTE: record.leaf_addr is called childAddr in the paper.
-            match record
-                .leaf_addr()
-                .compare_exchange(leaf, new_internal, Ordering::AcqRel, Ordering::Acquire)
-            {
+            match record.leaf_addr().compare_exchange(
+                leaf,
+                new_internal,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
                 Ok(_) => return Ok(()),
                 Err(current) => {
                     // Insertion failed. Help the conflicting remove operation if needed.
@@ -563,7 +537,7 @@ where
                 leaf,
                 ptr_with_tag(leaf, Marks::new(true, false).bits()),
                 Ordering::AcqRel,
-                Ordering::Acquire
+                Ordering::Acquire,
             ) {
                 Ok(_) => {
                     // Finalize the node to be removed
@@ -634,11 +608,7 @@ where
     }
 
     #[inline]
-    fn get<'domain, 'g>(
-        &self,
-        handle: &mut Self::Handle<'domain>,
-        key: &K,
-    ) -> Option<&V> {
+    fn get<'domain, 'g>(&self, handle: &mut Self::Handle<'domain>, key: &K) -> Option<&V> {
         self.get(key, handle)
     }
 
