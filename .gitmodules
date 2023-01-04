@@ -4,3 +4,6 @@
 [submodule "crossbeam-pebr"]
 	path = crossbeam-pebr
 	url = https://github.com/kaist-cp/crossbeam
+[submodule "haphazard"]
+	path = haphazard
+	url = https://github.com/powergee/haphazard.git

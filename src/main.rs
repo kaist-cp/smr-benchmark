@@ -23,6 +23,7 @@ use typenum::{Unsigned, U1, U4};
 
 use pebr_benchmark::ebr;
 use pebr_benchmark::pebr;
+use pebr_benchmark::hp;
 
 arg_enum! {
     #[derive(PartialEq, Debug)]
@@ -42,6 +43,7 @@ arg_enum! {
         NR,
         EBR,
         PEBR,
+        HP,
     }
 }
 
@@ -403,6 +405,21 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 PrefillStrategy::Random,
             ),
         },
+        MM::HP => match config.ds {
+            DS::HMList => bench_map_hp::<hp::HMList<String, String>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::HashMap => bench_map_hp::<hp::HashMap<String, String>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::NMTree => bench_map_hp::<hp::NMTreeMap<String, String>, N>(
+                config,
+                PrefillStrategy::Random,
+            ),
+            _ => panic!("Unsupported data structure for HP")
+        },
     };
     output
         .write_record(&[
@@ -491,6 +508,38 @@ impl PrefillStrategy {
                     let key = k.to_string();
                     let value = key.clone();
                     map.insert(&mut handle, key, value, guard);
+                }
+            }
+        }
+        print!("prefilled... ");
+        stdout().flush().unwrap();
+    }
+
+    fn prefill_hp<M: hp::ConcurrentMap<String, String> + Send + Sync>(
+        self,
+        config: &Config,
+        map: &M,
+    ) {
+        let mut handle = M::handle();
+        let mut rng = rand::thread_rng();
+        match self {
+            PrefillStrategy::Random => {
+                for _ in 0..config.prefill {
+                    let key = config.key_dist.sample(&mut rng).to_string();
+                    let value = key.clone();
+                    map.insert(&mut handle, key, value);
+                }
+            }
+            PrefillStrategy::Decreasing => {
+                let mut keys = Vec::with_capacity(config.prefill);
+                for _ in 0..config.prefill {
+                    keys.push(config.key_dist.sample(&mut rng));
+                }
+                keys.sort_by(|a, b| b.cmp(a));
+                for k in keys.drain(..) {
+                    let key = k.to_string();
+                    let value = key.clone();
+                    map.insert(&mut handle, key, value);
                 }
             }
         }
@@ -782,6 +831,115 @@ fn bench_map_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync, N: Unsig
                     if ops % N::to_u64() == 0 {
                         M::clear(&mut map_handle);
                         guard.repin();
+                    }
+                }
+
+                ops_sender.send(ops).unwrap();
+            });
+        }
+    })
+    .unwrap();
+    println!("end");
+
+    let mut ops = 0;
+    for _ in 0..config.threads {
+        let local_ops = ops_receiver.recv().unwrap();
+        ops += local_ops;
+    }
+    let ops_per_sec = ops / config.interval;
+    let (peak_mem, avg_mem) = mem_receiver.recv().unwrap();
+    (ops_per_sec, peak_mem, avg_mem)
+}
+
+fn bench_map_hp<M: hp::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>(
+    config: &Config,
+    strategy: PrefillStrategy,
+) -> (u64, usize, usize) {
+    let map = &M::new();
+    strategy.prefill_hp(config, map);
+
+    let collector = &crossbeam_pebr::Collector::new();
+
+    let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
+    let (ops_sender, ops_receiver) = mpsc::channel();
+    let (mem_sender, mem_receiver) = mpsc::channel();
+
+    scope(|s| {
+        // sampling & interference thread
+        if config.aux_thread > 0 {
+            let mem_sender = mem_sender.clone();
+            s.spawn(move |_| {
+                let mut samples = 0usize;
+                let mut acc = 0usize;
+                let mut peak = 0usize;
+                let handle = collector.register();
+                barrier.clone().wait();
+
+                let start = Instant::now();
+                // Immediately drop if no non-coop else keep it and repin periodically.
+                let mut guard = ManuallyDrop::new(handle.pin());
+                if config.non_coop == 0 {
+                    unsafe { ManuallyDrop::drop(&mut guard) };
+                }
+                let mut next_sampling = start + config.sampling_period;
+                let mut next_repin = start + config.non_coop_period;
+                while start.elapsed() < config.duration {
+                    let now = Instant::now();
+                    if now > next_sampling {
+                        let allocated = config.mem_sampler.sample();
+                        samples += 1;
+                        acc += allocated;
+                        peak = max(peak, allocated);
+                        next_sampling = now + config.sampling_period;
+                    }
+                    if now > next_repin {
+                        (*guard).repin();
+                        next_repin = now + config.non_coop_period;
+                    }
+                    std::thread::sleep(config.aux_thread_period);
+                }
+
+                if config.non_coop > 0 {
+                    unsafe { ManuallyDrop::drop(&mut guard) };
+                }
+
+                if config.sampling {
+                    mem_sender.send((peak, acc / samples)).unwrap();
+                } else {
+                    mem_sender.send((0, 0)).unwrap();
+                }
+            });
+        } else {
+            mem_sender.send((0, 0)).unwrap();
+        }
+
+        for _ in 0..config.threads {
+            let ops_sender = ops_sender.clone();
+            s.spawn(move |_| {
+                let mut ops: u64 = 0;
+                let mut rng = rand::thread_rng();
+                let mut map_handle = M::handle();
+                barrier.clone().wait();
+                let start = Instant::now();
+
+                while start.elapsed() < config.duration {
+                    let key = config.key_dist.sample(&mut rng).to_string();
+                    match Op::OPS[config.op_dist.sample(&mut rng)] {
+                        Op::Get => {
+                            map.get(&mut map_handle, &key);
+                        }
+                        Op::Insert => {
+                            let value = key.clone();
+                            map.insert(&mut map_handle, key, value);
+                        }
+                        Op::Remove => {
+                            map.remove(&mut map_handle, &key);
+                        }
+                    }
+                    ops += 1;
+                    if ops % N::to_u64() == 0 {
+                        M::clear(&mut map_handle);
+                        haphazard::Domain::global().eager_reclaim();
                     }
                 }
 
