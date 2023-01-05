@@ -936,7 +936,6 @@ fn bench_map_hp<M: hp::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>
                     ops += 1;
                     if ops % N::to_u64() == 0 {
                         M::clear(&mut map_handle);
-                        haphazard::Domain::global().eager_reclaim();
                     }
                 }
 
