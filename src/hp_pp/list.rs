@@ -5,10 +5,10 @@ use super::tag::{decompose_ptr, remove_tag};
 
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::mem::{self, ManuallyDrop};
-use std::ptr;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::{ptr, slice};
 
-use haphazard::{retire_locally, HazardPointer};
+use haphazard::{retire_locally, try_unlink, HazardPointer};
 
 #[derive(Debug)]
 struct Node<K, V>
@@ -19,6 +19,7 @@ where
     next: AtomicPtr<Node<K, V>>,
     key: K,
     value: ManuallyDrop<V>,
+    stopped: AtomicBool,
 }
 
 pub struct List<K, V>
@@ -106,18 +107,15 @@ where
     fn find_harris_michael(&mut self, key: &K) -> Result<bool, ()> {
         loop {
             debug_assert_eq!(get_tag(self.curr), 0);
-
-            let prev = unsafe { &(*self.prev).next };
-
             if self.curr.is_null() {
                 return Ok(false);
             }
 
-            self.curr_h.protect_raw(self.curr);
-            membarrier::light();
-            if prev.load(Ordering::Acquire) != self.curr {
-                return Err(());
-            }
+            let prev = unsafe { &(*self.prev).next };
+            self.curr_h
+                .protect_pp(&self.prev, &|&prev| unsafe { &(*prev).next }, &|&prev| {
+                    unsafe { &(*prev).stopped }.load(Ordering::Acquire)
+                })?;
 
             let curr_node = unsafe { &*self.curr };
 
@@ -134,13 +132,22 @@ where
                     Greater => return Ok(false),
                 }
             } else {
-                if prev
-                    .compare_exchange(self.curr, next_base, Ordering::Release, Ordering::Relaxed)
-                    .is_ok()
-                {
-                    // unsafe { Domain::global().retire_ptr::<_, Box<_>>(self.curr) };
-                    retire_locally(self.curr);
-                } else {
+                let links = slice::from_ref(&next_base);
+                let to_be_unlinked = slice::from_ref(&self.curr);
+                if !try_unlink(
+                    links,
+                    to_be_unlinked,
+                    || {
+                        prev.compare_exchange(
+                            self.curr,
+                            next_base,
+                            Ordering::Release,
+                            Ordering::Relaxed,
+                        )
+                        .is_ok()
+                    },
+                    |node| unsafe { &*node }.stopped.store(true, Ordering::Release),
+                ) {
                     return Err(());
                 }
             }
@@ -240,6 +247,7 @@ where
             key,
             value: ManuallyDrop::new(value),
             next: AtomicPtr::new(ptr::null_mut()),
+            stopped: AtomicBool::new(false),
         }));
 
         loop {
@@ -275,15 +283,19 @@ where
             }
 
             let value = unsafe { ptr::read(&curr_node.value) };
+            let prev = unsafe { &(*cursor.prev).next };
 
-            if unsafe { &*remove_tag(cursor.prev) }
-                .next
-                .compare_exchange(cursor.curr, next, Ordering::Release, Ordering::Relaxed)
-                .is_ok()
-            {
-                // unsafe { Domain::global().retire_ptr::<_, Box<_>>(curr_base) };
-                retire_locally(curr_base);
-            }
+            let links = slice::from_ref(&next);
+            let to_be_unlinked = slice::from_ref(&cursor.curr);
+            try_unlink(
+                links,
+                to_be_unlinked,
+                || {
+                    prev.compare_exchange(cursor.curr, next, Ordering::Release, Ordering::Relaxed)
+                        .is_ok()
+                },
+                |node| unsafe { &*node }.stopped.store(true, Ordering::Release),
+            );
 
             return Ok(Some(ManuallyDrop::into_inner(value)));
         }
@@ -373,7 +385,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::HMList;
-    use crate::hp::concurrent_map;
+    use crate::hp_pp::concurrent_map;
 
     #[test]
     fn smoke_hm_list() {
