@@ -1,5 +1,4 @@
-use super::tag::{get_tag, ptr_with_tag, remove_tag};
-use haphazard::{retire_locally, Domain, HazardPointer};
+use haphazard::{retire_locally, HazardPointer, tag, tagged, untagged};
 
 use super::concurrent_map::ConcurrentMap;
 use std::cmp;
@@ -198,22 +197,22 @@ where
 
     fn successor_addr(&self) -> &AtomicPtr<Node<K, V>> {
         match self.successor_dir {
-            Direction::L => unsafe { &(*remove_tag(self.ancestor)).left },
-            Direction::R => unsafe { &(*remove_tag(self.ancestor)).right },
+            Direction::L => unsafe { &(*untagged(self.ancestor)).left },
+            Direction::R => unsafe { &(*untagged(self.ancestor)).right },
         }
     }
 
     fn leaf_addr(&self) -> &AtomicPtr<Node<K, V>> {
         match self.leaf_dir {
-            Direction::L => unsafe { &(*remove_tag(self.parent)).left },
-            Direction::R => unsafe { &(*remove_tag(self.parent)).right },
+            Direction::L => unsafe { &(*untagged(self.parent)).left },
+            Direction::R => unsafe { &(*untagged(self.parent)).right },
         }
     }
 
     fn leaf_sibling_addr(&self) -> &AtomicPtr<Node<K, V>> {
         match self.leaf_dir {
-            Direction::L => unsafe { &(*remove_tag(self.parent)).right },
-            Direction::R => unsafe { &(*remove_tag(self.parent)).left },
+            Direction::L => unsafe { &(*untagged(self.parent)).right },
+            Direction::R => unsafe { &(*untagged(self.parent)).left },
         }
     }
 }
@@ -251,11 +250,11 @@ where
             assert!(self.r.value.is_none());
 
             while let Some(node) = stack.pop() {
-                if remove_tag(node).is_null() {
+                if untagged(node).is_null() {
                     continue;
                 }
 
-                let node_addr = remove_tag(node);
+                let node_addr = untagged(node);
                 let node_ref = &*node_addr;
 
                 stack.push(node_ref.left.load(Ordering::Relaxed));
@@ -289,7 +288,7 @@ where
 
     // All `Shared<_>` fields are unmarked.
     fn seek(&self, key: &K, record: &mut SeekRecord<K, V>) -> Result<(), ()> {
-        let s = remove_tag(self.r.left.load(Ordering::Relaxed));
+        let s = untagged(self.r.left.load(Ordering::Relaxed));
         let s_node = unsafe { &*s };
 
         // We doesn't have to defend with hazard pointers here
@@ -298,28 +297,28 @@ where
 
         record.successor_dir = Direction::L;
 
-        let leaf = ptr_with_tag(s_node.left.load(Ordering::Relaxed), Marks::empty().bits());
+        let leaf = tagged(s_node.left.load(Ordering::Relaxed), Marks::empty().bits());
 
         // We doesn't have to defend with hazard pointers here
         record.parent = s;
 
         record.leaf_h.protect_raw(leaf);
-        if leaf != ptr_with_tag(s_node.left.load(Ordering::Relaxed), Marks::empty().bits()) {
+        if leaf != tagged(s_node.left.load(Ordering::Relaxed), Marks::empty().bits()) {
             return Err(());
         }
         record.leaf = leaf;
         record.leaf_dir = Direction::L;
 
-        let mut prev_tag = Marks::from_bits_truncate(get_tag(leaf)).tag();
+        let mut prev_tag = Marks::from_bits_truncate(tag(leaf)).tag();
         let mut curr_dir = Direction::L;
         let mut curr = unsafe { &*record.leaf }.left.load(Ordering::Relaxed);
 
-        while !remove_tag(curr).is_null() {
+        while !untagged(curr).is_null() {
             if !prev_tag {
                 // untagged edge: advance ancestor and successor pointers
-                record.ancestor_h.protect_raw(remove_tag(record.parent));
+                record.ancestor_h.protect_raw(untagged(record.parent));
                 record.ancestor = record.parent;
-                record.successor_h.protect_raw(remove_tag(record.leaf));
+                record.successor_h.protect_raw(untagged(record.leaf));
                 record.successor = record.leaf;
                 record.successor_dir = record.leaf_dir;
             }
@@ -327,10 +326,10 @@ where
             // advance parent and leaf pointers
             mem::swap(&mut record.parent, &mut record.leaf);
             mem::swap(&mut record.parent_h, &mut record.leaf_h);
-            let mut curr_base = remove_tag(curr);
+            let mut curr_base = untagged(curr);
             loop {
                 record.leaf_h.protect_raw(curr_base);
-                let curr_base_new = remove_tag(match curr_dir {
+                let curr_base_new = untagged(match curr_dir {
                     Direction::L => unsafe { &*record.parent }.left.load(Ordering::Acquire),
                     Direction::R => unsafe { &*record.parent }.right.load(Ordering::Acquire),
                 });
@@ -344,7 +343,7 @@ where
             record.leaf_dir = curr_dir;
 
             // update other variables
-            prev_tag = Marks::from_bits_truncate(get_tag(curr)).tag();
+            prev_tag = Marks::from_bits_truncate(tag(curr)).tag();
             let curr_node = unsafe { &*curr_base };
             if curr_node.key.cmp(key) == cmp::Ordering::Greater {
                 curr_dir = Direction::L;
@@ -363,7 +362,7 @@ where
     fn cleanup(&self, record: &SeekRecord<K, V>) -> bool {
         // Identify the node(subtree) that will replace `successor`.
         let leaf_marked = record.leaf_addr().load(Ordering::Acquire);
-        let leaf_flag = Marks::from_bits_truncate(get_tag(leaf_marked)).flag();
+        let leaf_flag = Marks::from_bits_truncate(tag(leaf_marked)).flag();
         let target_sibling_addr = if leaf_flag {
             record.leaf_sibling_addr()
         } else {
@@ -379,12 +378,12 @@ where
         // Since (parent, sibling) might have been concurrently flagged, copy
         // the flag to the new edge (ancestor, sibling).
         let target_sibling = target_sibling_addr.load(Ordering::Acquire);
-        let flag = Marks::from_bits_truncate(get_tag(target_sibling)).flag();
+        let flag = Marks::from_bits_truncate(tag(target_sibling)).flag();
         let is_unlinked = record
             .successor_addr()
             .compare_exchange(
                 record.successor,
-                ptr_with_tag(target_sibling, Marks::new(flag, false).bits()),
+                tagged(target_sibling, Marks::new(flag, false).bits()),
                 Ordering::AcqRel,
                 Ordering::Acquire,
             )
@@ -396,8 +395,8 @@ where
                 let mut stack = vec![record.successor];
 
                 while let Some(node) = stack.pop() {
-                    let node_addr = remove_tag(node);
-                    if node_addr.is_null() || (node_addr == remove_tag(target_sibling)) {
+                    let node_addr = untagged(node);
+                    if node_addr.is_null() || (node_addr == untagged(target_sibling)) {
                         continue;
                     }
 
@@ -416,7 +415,7 @@ where
 
     fn get_inner(&self, key: &K, record: &mut SeekRecord<K, V>) -> Result<Option<&V>, ()> {
         self.seek(key, record)?;
-        let leaf_node = unsafe { &*remove_tag(record.leaf) };
+        let leaf_node = unsafe { &*untagged(record.leaf) };
 
         if leaf_node.key.cmp(key) != cmp::Ordering::Equal {
             return Ok(None);
@@ -459,7 +458,7 @@ where
             })?;
             let leaf = record.leaf;
 
-            let (new_left, new_right) = match unsafe { &*remove_tag(leaf) }.key.cmp(&key) {
+            let (new_left, new_right) = match unsafe { &*untagged(leaf) }.key.cmp(&key) {
                 cmp::Ordering::Equal => {
                     // Newly created nodes that failed to be inserted are free'd here.
                     let value = unsafe { &mut *new_leaf }.value.take().unwrap();
@@ -474,7 +473,7 @@ where
             };
 
             let new_internal_node = unsafe { &mut *new_internal };
-            new_internal_node.key = unsafe { (*remove_tag(new_right)).key.clone() };
+            new_internal_node.key = unsafe { (*untagged(new_right)).key.clone() };
             new_internal_node.left.store(new_left, Ordering::Relaxed);
             new_internal_node.right.store(new_right, Ordering::Relaxed);
 
@@ -489,7 +488,7 @@ where
                 Err(current) => {
                     // Insertion failed. Help the conflicting remove operation if needed.
                     // NOTE: The paper version checks if any of the mark is set, which is redundant.
-                    if remove_tag(current) == leaf {
+                    if untagged(current) == leaf {
                         self.cleanup(&record);
                     }
                 }
@@ -503,8 +502,6 @@ where
         mut value: V,
         record: &mut SeekRecord<K, V>,
     ) -> Result<(), (K, V)> {
-        // TODO(@jeehoonkang): we want to use `FindError::retry`, but it requires higher-kinded
-        // things...
         loop {
             match self.insert_inner(&key, value, record) {
                 Ok(()) => return Ok(()),
@@ -524,7 +521,7 @@ where
 
             // candidates
             let leaf = record.leaf;
-            let leaf_node = unsafe { remove_tag(record.leaf).as_ref().unwrap() };
+            let leaf_node = unsafe { untagged(record.leaf).as_ref().unwrap() };
 
             if leaf_node.key.cmp(key) != cmp::Ordering::Equal {
                 return Ok(None);
@@ -536,7 +533,7 @@ where
             // Try injecting the deletion flag.
             match record.leaf_addr().compare_exchange(
                 leaf,
-                ptr_with_tag(leaf, Marks::new(true, false).bits()),
+                tagged(leaf, Marks::new(true, false).bits()),
                 Ordering::AcqRel,
                 Ordering::Acquire,
             ) {
@@ -554,14 +551,14 @@ where
                     // case 1. record.leaf_addr(e.current) points to another node: restart.
                     // case 2. Another thread flagged/tagged the edge to leaf: help and restart
                     // NOTE: The paper version checks if any of the mark is set, which is redundant.
-                    if leaf == ptr_with_tag(current, Marks::empty().bits()) {
+                    if leaf == tagged(current, Marks::empty().bits()) {
                         self.cleanup(&record);
                     }
                 }
             }
         };
 
-        let leaf = remove_tag(leaf);
+        let leaf = untagged(leaf);
 
         // cleanup phase
         loop {
@@ -579,8 +576,6 @@ where
     }
 
     pub fn remove(&self, key: &K, record: &mut SeekRecord<K, V>) -> Option<V> {
-        // TODO(@jeehoonkang): we want to use `FindError::retry`, but it requires higher-kinded
-        // things...
         loop {
             if let Ok(r) = self.remove_inner(key, record) {
                 return r;
