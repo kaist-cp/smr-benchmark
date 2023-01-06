@@ -6,4 +6,4 @@
 	url = https://github.com/kaist-cp/crossbeam
 [submodule "haphazard"]
 	path = haphazard
-	url = https://github.com/powergee/haphazard.git
+	url = ssh://git@cp-git.kaist.ac.kr:9001/verification/haphazard.git

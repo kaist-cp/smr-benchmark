@@ -1,14 +1,11 @@
-use crate::hp::tag::get_tag;
-
 use super::concurrent_map::ConcurrentMap;
-use super::tag::{decompose_ptr, remove_tag};
 
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::mem::{self, ManuallyDrop};
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
-use haphazard::{retire_locally, HazardPointer};
+use haphazard::{decompose_ptr, retire_locally, tag, untagged, HazardPointer};
 
 #[derive(Debug)]
 struct Node<K, V>
@@ -46,7 +43,7 @@ where
 {
     fn drop(&mut self) {
         unsafe {
-            let mut curr = remove_tag(self.head.load(Ordering::Relaxed));
+            let mut curr = untagged(self.head.load(Ordering::Relaxed));
 
             while !curr.is_null() {
                 let (next, next_tag) = decompose_ptr((*curr).next.load(Ordering::Relaxed));
@@ -105,7 +102,7 @@ where
     #[inline]
     fn find_harris_michael(&mut self, key: &K) -> Result<bool, ()> {
         loop {
-            debug_assert_eq!(get_tag(self.curr), 0);
+            debug_assert_eq!(tag(self.curr), 0);
 
             let prev = unsafe { &(*self.prev).next };
 
@@ -165,7 +162,6 @@ where
     where
         F: Fn(&mut Cursor<'domain, K, V>, &K) -> Result<bool, ()>,
     {
-        // TODO: we want to use `FindError::retry()`, but it requires higher-kinded things...
         loop {
             cursor.init_find(&self.head);
             match find(cursor, key) {
@@ -188,7 +184,7 @@ where
         let found = self.find(key, &find, cursor);
 
         if found {
-            Some(unsafe { &((*remove_tag(cursor.curr)).value) })
+            Some(unsafe { &((*untagged(cursor.curr)).value) })
         } else {
             None
         }
@@ -215,7 +211,7 @@ where
             }
 
             unsafe { &*node }.next.store(cursor.curr, Ordering::Relaxed);
-            if unsafe { &*remove_tag(cursor.prev) }
+            if unsafe { &*untagged(cursor.prev) }
                 .next
                 .compare_exchange(cursor.curr, node, Ordering::Release, Ordering::Relaxed)
                 .is_ok()
@@ -266,7 +262,7 @@ where
                 return Ok(None);
             }
 
-            let curr_base = remove_tag(cursor.curr);
+            let curr_base = untagged(cursor.curr);
             let curr_node = unsafe { &*curr_base };
             let next = curr_node.next.fetch_or(1, Ordering::Relaxed);
             let (_, next_tag) = decompose_ptr(next);
@@ -276,7 +272,7 @@ where
 
             let value = unsafe { ptr::read(&curr_node.value) };
 
-            if unsafe { &*remove_tag(cursor.prev) }
+            if unsafe { &*cursor.prev }
                 .next
                 .compare_exchange(cursor.curr, next, Ordering::Release, Ordering::Relaxed)
                 .is_ok()

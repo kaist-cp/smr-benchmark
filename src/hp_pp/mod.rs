@@ -1,5 +1,3 @@
-pub mod tag;
-
 pub mod concurrent_map;
 
 pub mod list;

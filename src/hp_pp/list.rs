@@ -1,14 +1,11 @@
-use crate::hp::tag::get_tag;
-
 use super::concurrent_map::ConcurrentMap;
-use super::tag::{decompose_ptr, remove_tag};
 
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::mem::{self, ManuallyDrop};
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicPtr, Ordering};
 use std::{ptr, slice};
 
-use haphazard::{retire_locally, try_unlink, HazardPointer};
+use haphazard::{decompose_ptr, retire_locally, tag, tagged, try_unlink, untagged, HazardPointer};
 
 #[derive(Debug)]
 struct Node<K, V>
@@ -16,10 +13,10 @@ where
     K: Send,
     V: Send,
 {
+    /// tag 1: logically deleted, tag 2: stopped
     next: AtomicPtr<Node<K, V>>,
     key: K,
     value: ManuallyDrop<V>,
-    stopped: AtomicBool,
 }
 
 pub struct List<K, V>
@@ -47,7 +44,7 @@ where
 {
     fn drop(&mut self) {
         unsafe {
-            let mut curr = remove_tag(self.head.load(Ordering::Relaxed));
+            let mut curr = self.head.load(Ordering::Relaxed);
 
             while !curr.is_null() {
                 let (next, next_tag) = decompose_ptr((*curr).next.load(Ordering::Relaxed));
@@ -106,16 +103,18 @@ where
     #[inline]
     fn find_harris_michael(&mut self, key: &K) -> Result<bool, ()> {
         loop {
-            debug_assert_eq!(get_tag(self.curr), 0);
+            debug_assert_eq!(tag(self.curr), 0);
             if self.curr.is_null() {
                 return Ok(false);
             }
 
             let prev = unsafe { &(*self.prev).next };
-            self.curr_h
-                .protect_pp(&self.prev, &|&prev| unsafe { &(*prev).next }, &|&prev| {
-                    unsafe { &(*prev).stopped }.load(Ordering::Acquire)
-                })?;
+            self.curr_h.try_protect_pp(
+                self.curr,
+                unsafe { &*self.prev },
+                &|prev| &prev.next,
+                &|prev| tag(prev.next.load(Ordering::Acquire)) & 2 == 2,
+            ).map_err(|_| ())?;
 
             let curr_node = unsafe { &*self.curr };
 
@@ -146,7 +145,11 @@ where
                         )
                         .is_ok()
                     },
-                    |node| unsafe { &*node }.stopped.store(true, Ordering::Release),
+                    |node| {
+                        let node = unsafe { &*node };
+                        let next = node.next.load(Ordering::Acquire);
+                        node.next.store(tagged(next, 1 | 2), Ordering::Release);
+                    },
                 ) {
                     return Err(());
                 }
@@ -195,7 +198,7 @@ where
         let found = self.find(key, &find, cursor);
 
         if found {
-            Some(unsafe { &((*remove_tag(cursor.curr)).value) })
+            Some(unsafe { &((*untagged(cursor.curr)).value) })
         } else {
             None
         }
@@ -222,7 +225,7 @@ where
             }
 
             unsafe { &*node }.next.store(cursor.curr, Ordering::Relaxed);
-            if unsafe { &*remove_tag(cursor.prev) }
+            if unsafe { &*untagged(cursor.prev) }
                 .next
                 .compare_exchange(cursor.curr, node, Ordering::Release, Ordering::Relaxed)
                 .is_ok()
@@ -247,7 +250,6 @@ where
             key,
             value: ManuallyDrop::new(value),
             next: AtomicPtr::new(ptr::null_mut()),
-            stopped: AtomicBool::new(false),
         }));
 
         loop {
@@ -274,7 +276,7 @@ where
                 return Ok(None);
             }
 
-            let curr_base = remove_tag(cursor.curr);
+            let curr_base = untagged(cursor.curr);
             let curr_node = unsafe { &*curr_base };
             let next = curr_node.next.fetch_or(1, Ordering::Relaxed);
             let (_, next_tag) = decompose_ptr(next);
@@ -294,7 +296,11 @@ where
                     prev.compare_exchange(cursor.curr, next, Ordering::Release, Ordering::Relaxed)
                         .is_ok()
                 },
-                |node| unsafe { &*node }.stopped.store(true, Ordering::Release),
+                |node| {
+                    let node = unsafe { &*node };
+                    let next = node.next.load(Ordering::Acquire);
+                    node.next.store(tagged(next, 1 | 2), Ordering::Release);
+                },
             );
 
             return Ok(Some(ManuallyDrop::into_inner(value)));
