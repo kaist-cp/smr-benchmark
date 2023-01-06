@@ -1,5 +1,5 @@
 use super::tag::{get_tag, ptr_with_tag, remove_tag};
-use haphazard::{Domain, HazardPointer};
+use haphazard::{retire_locally, Domain, HazardPointer};
 
 use super::concurrent_map::ConcurrentMap;
 use std::cmp;
@@ -405,7 +405,8 @@ where
 
                     stack.push(node_ref.left.load(Ordering::Relaxed));
                     stack.push(node_ref.right.load(Ordering::Relaxed));
-                    Domain::global().retire_ptr::<_, Box<_>>(node_addr);
+                    retire_locally(node_addr);
+                    // Domain::global().retire_ptr::<_, Box<_>>(node_addr);
                 }
             }
         }
