@@ -399,27 +399,23 @@ where
         }
     }
 
-    pub fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
+    pub fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         let mut record;
         // `leaf` and `value` are the snapshot of the node to be deleted.
-        let leaf;
-        let value;
-
         // NOTE: The paper version uses one big loop for both phases.
         // injection phase
-        loop {
+        let (leaf, value) = loop {
             record = self.seek(key, guard);
 
             // candidates
-            let temp_leaf = record.leaf;
-            let temp_leaf_node = unsafe { record.leaf.as_ref().unwrap() };
+            let leaf = record.leaf;
+            let leaf_node = unsafe { record.leaf.as_ref().unwrap() };
 
-            if temp_leaf_node.key.cmp(key) != cmp::Ordering::Equal {
+            if leaf_node.key.cmp(key) != cmp::Ordering::Equal {
                 return None;
             }
 
-            // Copy the value before the physical deletion.
-            let temp_value = temp_leaf_node.value.as_ref().unwrap().clone();
+            let value = leaf_node.value.as_ref().unwrap();
 
             // Try injecting the deletion flag.
             match record.leaf_addr().compare_and_set(
@@ -430,13 +426,11 @@ where
             ) {
                 Ok(_) => {
                     // Finalize the node to be removed
-                    leaf = temp_leaf;
-                    value = temp_value;
                     if self.cleanup(&record, guard) {
                         return Some(value);
                     }
                     // In-place cleanup failed. Enter the cleanup phase.
-                    break;
+                    break (leaf, value);
                 }
                 Err(e) => {
                     // Flagging failed.
@@ -448,7 +442,7 @@ where
                     }
                 }
             }
-        }
+        };
 
         // cleanup phase
         loop {
@@ -484,7 +478,7 @@ where
         self.insert(key, value, guard).is_ok()
     }
     #[inline]
-    fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
+    fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         self.remove(key, guard)
     }
 }

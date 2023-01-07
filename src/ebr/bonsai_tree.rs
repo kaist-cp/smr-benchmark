@@ -434,7 +434,7 @@ where
         node: Shared<'g, Node<K, V>>,
         key: &K,
         guard: &'g Guard,
-    ) -> (Shared<'g, Node<K, V>>, Option<V>) {
+    ) -> (Shared<'g, Node<K, V>>, Option<&'g V>) {
         if Node::is_retired_spot(node, guard) {
             return (Node::retired_node(), None);
         }
@@ -453,7 +453,7 @@ where
 
         match node_ref.key.cmp(key) {
             cmp::Ordering::Equal => {
-                let value = Some(node_ref.value.clone());
+                let value = Some(&node_ref.value);
                 self.retire_node(node);
                 if node_ref.size == 1 {
                     return (Shared::null(), value);
@@ -608,7 +608,7 @@ where
         }
     }
 
-    pub fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
+    pub fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         let mut state = State::new();
         loop {
             let old_root = self.root.load(Ordering::Acquire, guard);
@@ -672,7 +672,7 @@ where
         self.insert(key, value, guard)
     }
     #[inline]
-    fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
+    fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         self.remove(key, guard)
     }
 }

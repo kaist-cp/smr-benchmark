@@ -4,7 +4,7 @@ pub trait ConcurrentMap<K, V> {
     fn new() -> Self;
     fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V>;
     fn insert(&self, key: K, value: V, guard: &Guard) -> bool;
-    fn remove(&self, key: &K, guard: &Guard) -> Option<V>;
+    fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V>;
 }
 
 #[cfg(test)]
@@ -44,7 +44,7 @@ pub mod tests {
                         (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        assert_eq!(i.to_string(), map.remove(&i, &pin()).unwrap());
+                        assert_eq!(i.to_string(), *map.remove(&i, &pin()).unwrap());
                     }
                 });
             }

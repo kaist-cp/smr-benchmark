@@ -2,8 +2,6 @@ use super::concurrent_map::ConcurrentMap;
 use crossbeam_ebr::{unprotected, Atomic, Guard, Owned, Shared};
 
 use std::cmp::Ordering::{Equal, Greater, Less};
-use std::mem::ManuallyDrop;
-use std::ptr;
 use std::sync::atomic::Ordering;
 
 #[derive(Debug)]
@@ -11,7 +9,7 @@ struct Node<K, V> {
     /// Mark: tag(), Tag: not needed
     next: Atomic<Node<K, V>>,
     key: K,
-    value: ManuallyDrop<V>,
+    value: V,
 }
 
 struct List<K, V> {
@@ -35,9 +33,6 @@ impl<K, V> Drop for List<K, V> {
             while !curr.is_null() {
                 let curr_ref = curr.deref_mut();
                 let next = curr_ref.next.load(Ordering::Relaxed, unprotected());
-                if next.tag() == 0 {
-                    ManuallyDrop::drop(&mut curr_ref.value);
-                }
                 drop(curr.into_owned());
                 curr = next;
             }
@@ -45,8 +40,21 @@ impl<K, V> Drop for List<K, V> {
     }
 }
 
+impl<K, V> Node<K, V> {
+    /// Creates a new node.
+    fn new(key: K, value: V) -> Self {
+        Self {
+            next: Atomic::null(),
+            key,
+            value,
+        }
+    }
+}
+
 struct Cursor<'g, K, V> {
     prev: &'g Atomic<Node<K, V>>,
+    // Tag of `curr` should always be zero so when `curr` is stored in a `prev`, we don't store a
+    // marked pointer and cause cleanup to fail.
     curr: Shared<'g, Node<K, V>>,
 }
 
@@ -54,6 +62,14 @@ impl<'g, K, V> Cursor<'g, K, V>
 where
     K: Ord,
 {
+    /// Creates a cursor.
+    fn new(prev: &'g Atomic<Node<K, V>>, curr: Shared<'g, Node<K, V>>) -> Self {
+        Self {
+            prev,
+            curr: curr.with_tag(0),
+        }
+    }
+
     /// Clean up a chain of logically removed nodes in each traversal.
     #[inline]
     fn find_harris(&mut self, key: &K, guard: &'g Guard) -> Result<bool, ()> {
@@ -70,16 +86,21 @@ where
             // - advance cursor.curr if (.next is marked) || (cursor.curr < key)
             // - stop cursor.curr if (not marked) && (cursor.curr >= key)
             // - advance cursor.prev if not marked
-            match (curr_node.key.cmp(key), next.tag()) {
-                (Less, tag) => {
-                    self.curr = next.with_tag(0);
-                    if tag == 0 {
-                        self.prev = &curr_node.next;
-                        prev_next = next;
-                    }
+
+            if next.tag() != 0 {
+                // We add a 0 tag here so that `self.curr`s tag is always 0.
+                self.curr = next.with_tag(0);
+                continue;
+            }
+
+            match curr_node.key.cmp(key) {
+                Less => {
+                    self.curr = next;
+                    self.prev = &curr_node.next;
+                    prev_next = next;
                 }
-                (cmp, 0) => break cmp == Equal,
-                _ => self.curr = next.with_tag(0),
+                Equal => break true,
+                Greater => break false,
             }
         };
 
@@ -89,27 +110,19 @@ where
         }
 
         // cleanup marked nodes between prev and curr
-        if self
-            .prev
+        self.prev
             .compare_and_set(prev_next, self.curr, Ordering::Release, guard)
-            .is_err()
-        {
-            return Err(());
-        }
+            .map_err(|_| ())?;
 
         // defer_destroy from cursor.prev.load() to cursor.curr (exclusive)
         let mut node = prev_next;
-        loop {
-            if node.with_tag(0) == self.curr {
-                return Ok(found);
-            }
-            let node_ref = unsafe { node.as_ref().unwrap() };
-            let next = node_ref.next.load(Ordering::Relaxed, guard);
-            unsafe {
-                guard.defer_destroy(node);
-            }
+        while node.with_tag(0) != self.curr {
+            let next = unsafe { node.deref() }.next.load(Ordering::Acquire, guard);
+            unsafe { guard.defer_destroy(node) };
             node = next;
         }
+
+        Ok(found)
     }
 
     /// Clean up a single logically removed node in each traversal.
@@ -121,23 +134,26 @@ where
             let curr_node = some_or!(unsafe { self.curr.as_ref() }, return Ok(false));
             let mut next = curr_node.next.load(Ordering::Acquire, guard);
 
-            if next.tag() == 0 {
-                match curr_node.key.cmp(key) {
-                    Less => self.prev = &curr_node.next,
-                    Equal => return Ok(true),
-                    Greater => return Ok(false),
-                }
-            } else {
+            // NOTE: original version aborts here if self.prev is tagged
+
+            if next.tag() != 0 {
                 next = next.with_tag(0);
-                match self
-                    .prev
+                self.prev
                     .compare_and_set(self.curr, next, Ordering::Release, guard)
-                {
-                    Err(_) => return Err(()),
-                    Ok(_) => unsafe { guard.defer_destroy(self.curr) },
-                }
+                    .map_err(|_| ())?;
+                unsafe { guard.defer_destroy(self.curr) };
+                self.curr = next;
+                continue;
             }
-            self.curr = next;
+
+            match curr_node.key.cmp(key) {
+                Less => {
+                    self.prev = &curr_node.next;
+                    self.curr = next;
+                }
+                Equal => return Ok(true),
+                Greater => return Ok(false),
+            }
         }
     }
 
@@ -158,28 +174,80 @@ where
             }
         })
     }
+
+    /// gets the value.
+    #[inline]
+    pub fn get(&self) -> Option<&'g V> {
+        unsafe { self.curr.as_ref() }.map(|n| &n.value)
+    }
+
+    /// Inserts a value.
+    #[inline]
+    pub fn insert(
+        &mut self,
+        node: Owned<Node<K, V>>,
+        guard: &'g Guard,
+    ) -> Result<(), Owned<Node<K, V>>> {
+        node.next.store(self.curr, Ordering::Relaxed);
+        match self
+            .prev
+            .compare_and_set(self.curr, node, Ordering::Release, guard)
+        {
+            Ok(node) => {
+                self.curr = node;
+                Ok(())
+            }
+            Err(e) => Err(e.new),
+        }
+    }
+
+    /// removes the current node.
+    #[inline]
+    pub fn remove(self, guard: &'g Guard) -> Result<&'g V, ()> {
+        let curr_node = unsafe { self.curr.deref() };
+
+        let next = curr_node.next.fetch_or(1, Ordering::Acquire, guard);
+        if next.tag() == 1 {
+            return Err(());
+        }
+
+        if self
+            .prev
+            .compare_and_set(self.curr, next, Ordering::Release, guard)
+            .is_ok()
+        {
+            unsafe { guard.defer_destroy(self.curr) };
+        }
+
+        Ok(&curr_node.value)
+    }
 }
 
 impl<K, V> List<K, V>
 where
     K: Ord,
 {
+    /// Creates a new list.
     pub fn new() -> Self {
         List {
             head: Atomic::null(),
         }
     }
 
+    /// Creates the head cursor.
+    #[inline]
+    pub fn head<'g>(&'g self, guard: &'g Guard) -> Cursor<'g, K, V> {
+        Cursor::new(&self.head, self.head.load(Ordering::Acquire, guard))
+    }
+
+    /// Finds a key using the given find strategy.
     #[inline]
     fn find<'g, F>(&'g self, key: &K, find: &F, guard: &'g Guard) -> (bool, Cursor<'g, K, V>)
     where
         F: Fn(&mut Cursor<'g, K, V>, &K, &'g Guard) -> Result<bool, ()>,
     {
         loop {
-            let mut cursor = Cursor {
-                prev: &self.head,
-                curr: self.head.load(Ordering::Acquire, guard),
-            };
+            let mut cursor = self.head(guard);
             if let Ok(r) = find(&mut cursor, key, guard) {
                 return (r, cursor);
             }
@@ -193,7 +261,7 @@ where
     {
         let (found, cursor) = self.find(key, &find, guard);
         if found {
-            unsafe { cursor.curr.as_ref().map(|n| &*n.value) }
+            cursor.get()
         } else {
             None
         }
@@ -204,34 +272,22 @@ where
     where
         F: Fn(&mut Cursor<'g, K, V>, &K, &'g Guard) -> Result<bool, ()>,
     {
-        let mut node = Owned::new(Node {
-            key,
-            value: ManuallyDrop::new(value),
-            next: Atomic::null(),
-        });
-
+        let mut node = Owned::new(Node::new(key, value));
         loop {
-            let (found, cursor) = self.find(&node.key, &find, guard);
+            let (found, mut cursor) = self.find(&node.key, &find, guard);
             if found {
-                unsafe {
-                    ManuallyDrop::drop(&mut node.value);
-                }
                 return false;
             }
 
-            node.next.store(cursor.curr, Ordering::Relaxed);
-            match cursor
-                .prev
-                .compare_and_set(cursor.curr, node, Ordering::Release, guard)
-            {
-                Ok(_) => return true,
-                Err(e) => node = e.new,
+            match cursor.insert(node, guard) {
+                Err(n) => node = n,
+                Ok(()) => return true,
             }
         }
     }
 
     #[inline]
-    fn remove<'g, F>(&'g self, key: &K, find: F, guard: &'g Guard) -> Option<V>
+    fn remove<'g, F>(&'g self, key: &K, find: F, guard: &'g Guard) -> Option<&'g V>
     where
         F: Fn(&mut Cursor<'g, K, V>, &K, &'g Guard) -> Result<bool, ()>,
     {
@@ -241,60 +297,46 @@ where
                 return None;
             }
 
-            let curr_node = unsafe { cursor.curr.as_ref() }.unwrap();
-            let value = unsafe { ptr::read(&curr_node.value) };
-
-            let next = curr_node.next.fetch_or(1, Ordering::Relaxed, guard);
-            if next.tag() == 1 {
-                continue;
+            match cursor.remove(guard) {
+                Err(()) => continue,
+                Ok(value) => return Some(value),
             }
-
-            if cursor
-                .prev
-                .compare_and_set(cursor.curr, next, Ordering::Release, guard)
-                .is_ok()
-            {
-                unsafe { guard.defer_destroy(cursor.curr) };
-            }
-
-            return Some(ManuallyDrop::into_inner(value));
         }
     }
 
+    /// Omitted
     pub fn harris_get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         self.get(key, Cursor::find_harris, guard)
     }
 
+    /// Omitted
     pub fn harris_insert<'g>(&'g self, key: K, value: V, guard: &'g Guard) -> bool {
         self.insert(key, value, Cursor::find_harris, guard)
     }
 
-    pub fn harris_remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<V> {
+    /// Omitted
+    pub fn harris_remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         self.remove(key, Cursor::find_harris, guard)
     }
 
+    /// Omitted
     pub fn harris_michael_get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         self.get(key, Cursor::find_harris_michael, guard)
     }
 
+    /// Omitted
     pub fn harris_michael_insert(&self, key: K, value: V, guard: &Guard) -> bool {
         self.insert(key, value, Cursor::find_harris_michael, guard)
     }
 
-    pub fn harris_michael_remove(&self, key: &K, guard: &Guard) -> Option<V> {
+    /// Omitted
+    pub fn harris_michael_remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         self.remove(key, Cursor::find_harris_michael, guard)
     }
 
+    /// Omitted
     pub fn harris_herlihy_shavit_get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         self.get(key, Cursor::find_harris_herlihy_shavit, guard)
-    }
-
-    pub fn harris_herlihy_shavit_insert(&self, key: K, value: V, guard: &Guard) -> bool {
-        self.insert(key, value, Cursor::find_harris_michael, guard)
-    }
-
-    pub fn harris_herlihy_shavit_remove(&self, key: &K, guard: &Guard) -> Option<V> {
-        self.remove(key, Cursor::find_harris_michael, guard)
     }
 }
 
@@ -319,7 +361,7 @@ where
         self.inner.harris_insert(key, value, guard)
     }
     #[inline]
-    fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
+    fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         self.inner.harris_remove(key, guard)
     }
 }
@@ -345,7 +387,7 @@ where
         self.inner.harris_michael_insert(key, value, guard)
     }
     #[inline]
-    fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
+    fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         self.inner.harris_michael_remove(key, guard)
     }
 }
@@ -368,11 +410,11 @@ where
     }
     #[inline]
     fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
-        self.inner.harris_herlihy_shavit_insert(key, value, guard)
+        self.inner.harris_michael_insert(key, value, guard)
     }
     #[inline]
-    fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
-        self.inner.harris_herlihy_shavit_remove(key, guard)
+    fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        self.inner.harris_michael_remove(key, guard)
     }
 }
 
