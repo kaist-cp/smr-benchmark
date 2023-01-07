@@ -24,7 +24,7 @@ use typenum::{Unsigned, U1, U4};
 use pebr_benchmark::ebr;
 use pebr_benchmark::hp;
 use pebr_benchmark::hp_pp;
-use pebr_benchmark::pebr;
+// use pebr_benchmark::pebr;
 
 arg_enum! {
     #[derive(PartialEq, Debug)]
@@ -382,7 +382,7 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 PrefillStrategy::Random,
             ),
         },
-        MM::PEBR => match config.ds {
+        MM::PEBR =>  unimplemented!() /* match config.ds {
             DS::HList => bench_map_pebr::<pebr::HList<String, String>, N>(
                 config,
                 PrefillStrategy::Decreasing,
@@ -407,7 +407,7 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 config,
                 PrefillStrategy::Random,
             ),
-        },
+        } */,
         MM::HP => match config.ds {
             DS::HMList => {
                 bench_map_hp::<hp::HMList<String, String>, N>(config, PrefillStrategy::Decreasing)
@@ -489,7 +489,7 @@ impl PrefillStrategy {
         stdout().flush().unwrap();
     }
 
-    fn prefill_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(
+    /* fn prefill_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(
         self,
         config: &Config,
         map: &M,
@@ -520,7 +520,7 @@ impl PrefillStrategy {
         }
         print!("prefilled... ");
         stdout().flush().unwrap();
-    }
+    } */
 
     fn prefill_hp<M: hp::ConcurrentMap<String, String> + Send + Sync>(
         self,
@@ -779,7 +779,7 @@ fn bench_map_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigne
     (ops_per_sec, peak_mem, avg_mem)
 }
 
-fn bench_map_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>(
+/* fn bench_map_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize) {
@@ -888,7 +888,7 @@ fn bench_map_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync, N: Unsig
     let ops_per_sec = ops / config.interval;
     let (peak_mem, avg_mem) = mem_receiver.recv().unwrap();
     (ops_per_sec, peak_mem, avg_mem)
-}
+} */
 
 fn bench_map_hp<M: hp::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>(
     config: &Config,
