@@ -1,85 +1,61 @@
 use super::concurrent_map::ConcurrentMap;
 
 use std::cmp::Ordering::{Equal, Greater, Less};
-use std::mem::{self, ManuallyDrop};
+use std::mem;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
-use haphazard::{decompose_ptr, retire, tag, HazardPointer};
+use hp_pp::{decompose_ptr, light_membarrier, retire, tag, untagged, HazardPointer};
 
 #[derive(Debug)]
-struct Node<K, V>
-where
-    K: Send,
-    V: Send,
-{
+struct Node<K, V> {
+    /// Mark: tag(), Tag: not needed
     next: AtomicPtr<Node<K, V>>,
     key: K,
-    value: ManuallyDrop<V>,
+    value: V,
 }
 
-pub struct List<K, V>
-where
-    K: Send,
-    V: Send,
-{
+pub struct List<K, V> {
     head: AtomicPtr<Node<K, V>>,
 }
 
 impl<K, V> Default for List<K, V>
 where
-    K: Ord + Send,
-    V: Send,
+    K: Ord,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<K, V> Drop for List<K, V>
-where
-    K: Send,
-    V: Send,
-{
+impl<K, V> Drop for List<K, V> {
     fn drop(&mut self) {
         unsafe {
-            let mut curr = self.head.load(Ordering::Relaxed);
+            let mut curr = *self.head.get_mut();
 
             while !curr.is_null() {
-                let (next, next_tag) = decompose_ptr((*curr).next.load(Ordering::Relaxed));
-                if next_tag == 0 {
-                    ManuallyDrop::drop(&mut (*curr).value);
-                }
-                // unsafe { Domain::global().retire_ptr::<_, Box<_>>(curr) };
-                retire(curr);
+                let next = untagged(*(*curr).next.get_mut());
+                drop(Box::from_raw(curr));
                 curr = next;
             }
         }
     }
 }
 
-pub struct Cursor<'g, K, V>
-where
-    K: Send,
-    V: Send,
-{
+pub struct Cursor<'domain, K, V> {
     prev: *mut Node<K, V>, // not &AtomicPtr because we can't construct the cursor out of thin air
-    prev_h: HazardPointer<'g>,
+    prev_h: HazardPointer<'domain>,
     curr: *mut Node<K, V>,
-    curr_h: HazardPointer<'g>,
+    curr_h: HazardPointer<'domain>,
 }
 
-impl<'g, 'h, K, V> Cursor<'g, K, V>
-where
-    K: Send,
-    V: Send,
-{
+impl<'domain, 'h, K, V> Cursor<'domain, K, V> {
     pub fn new() -> Self {
         Self {
             prev: ptr::null_mut(),
-            prev_h: HazardPointer::new(),
+            prev_h: HazardPointer::default(),
             curr: ptr::null_mut(),
-            curr_h: HazardPointer::new(),
+            curr_h: HazardPointer::default(),
         }
     }
 
@@ -92,12 +68,17 @@ where
         self.prev = head as *const _ as *mut _;
         self.curr = head.load(Ordering::Acquire);
     }
+
+    // bypass E0499-E0503, etc that are supposed to be fixed by polonius
+    #[inline]
+    fn launder<'hp1, 'hp2>(&'hp1 mut self) -> &'hp2 mut Self {
+        unsafe { core::mem::transmute(self) }
+    }
 }
 
-impl<'g, K, V> Cursor<'g, K, V>
+impl<'domain, K, V> Cursor<'domain, K, V>
 where
-    K: Ord + Send,
-    V: Send,
+    K: Ord,
 {
     #[inline]
     fn find_harris_michael(&mut self, key: &K) -> Result<bool, ()> {
@@ -110,7 +91,7 @@ where
             let prev = unsafe { &(*self.prev).next };
 
             self.curr_h.protect_raw(self.curr);
-            membarrier::light_membarrier();
+            light_membarrier();
             if prev.load(Ordering::Acquire) != self.curr {
                 return Err(());
             }
@@ -129,16 +110,13 @@ where
                     Equal => return Ok(true),
                     Greater => return Ok(false),
                 }
+            } else if prev
+                .compare_exchange(self.curr, next_base, Ordering::Release, Ordering::Relaxed)
+                .is_ok()
+            {
+                unsafe { retire(self.curr) };
             } else {
-                if prev
-                    .compare_exchange(self.curr, next_base, Ordering::Release, Ordering::Relaxed)
-                    .is_ok()
-                {
-                    // unsafe { Domain::global().retire_ptr::<_, Box<_>>(self.curr) };
-                    retire(self.curr);
-                } else {
-                    return Err(());
-                }
+                return Err(());
             }
             self.curr = next_base;
         }
@@ -147,9 +125,9 @@ where
 
 impl<K, V> List<K, V>
 where
-    K: Ord + Send,
-    V: Send,
+    K: Ord,
 {
+    /// Creates a new list.
     pub fn new() -> Self {
         List {
             head: AtomicPtr::new(ptr::null_mut()),
@@ -157,13 +135,18 @@ where
     }
 
     #[inline]
-    fn find<'g, 'domain, F>(&'g self, key: &K, find: &F, cursor: &mut Cursor<'domain, K, V>) -> bool
+    fn find<'domain, 'hp, F>(
+        &self,
+        key: &K,
+        find: &F,
+        cursor: &'hp mut Cursor<'domain, K, V>,
+    ) -> bool
     where
-        F: Fn(&mut Cursor<'domain, K, V>, &K) -> Result<bool, ()>,
+        F: Fn(&'hp mut Cursor<'domain, K, V>, &K) -> Result<bool, ()>,
     {
         loop {
             cursor.init_find(&self.head);
-            match find(cursor, key) {
+            match find(cursor.launder(), key) {
                 Ok(r) => return r,
                 Err(_) => continue,
             }
@@ -171,16 +154,16 @@ where
     }
 
     #[inline]
-    fn get<'g, 'domain, F>(
-        &'g self,
+    fn get<'domain, 'hp, F>(
+        &self,
         key: &K,
         find: F,
-        cursor: &'g mut Cursor<'domain, K, V>,
-    ) -> Option<&'g V>
+        cursor: &'hp mut Cursor<'domain, K, V>,
+    ) -> Option<&'hp V>
     where
-        F: Fn(&mut Cursor<'domain, K, V>, &K) -> Result<bool, ()>,
+        F: Fn(&'hp mut Cursor<'domain, K, V>, &K) -> Result<bool, ()>,
     {
-        let found = self.find(key, &find, cursor);
+        let found = self.find(key, &find, cursor.launder());
 
         if found {
             Some(unsafe { &((*cursor.curr).value) })
@@ -189,23 +172,20 @@ where
         }
     }
 
-    fn insert_inner<'g, 'domain, F>(
-        &'g self,
+    fn insert_inner<'domain, 'hp, F>(
+        &self,
         node: *mut Node<K, V>,
         find: &F,
-        cursor: &mut Cursor<'domain, K, V>,
+        cursor: &'hp mut Cursor<'domain, K, V>,
     ) -> Result<bool, ()>
     where
-        F: Fn(&mut Cursor<'domain, K, V>, &K) -> Result<bool, ()>,
+        F: Fn(&'hp mut Cursor<'domain, K, V>, &K) -> Result<bool, ()>,
     {
         loop {
             cursor.init_find(&self.head);
-            let found = find(cursor, unsafe { &(*node).key })?;
+            let found = find(cursor.launder(), unsafe { &(*node).key })?;
             if found {
-                unsafe {
-                    ManuallyDrop::drop(&mut (*node).value);
-                    drop(Box::from_raw(node));
-                }
+                drop(unsafe { Box::from_raw(node) });
                 return Ok(false);
             }
 
@@ -221,42 +201,42 @@ where
     }
 
     #[inline]
-    fn insert<'g, 'domain, F>(
-        &'g self,
+    fn insert<'domain, 'hp, F>(
+        &self,
         key: K,
         value: V,
         find: F,
-        cursor: &mut Cursor<'domain, K, V>,
+        cursor: &'hp mut Cursor<'domain, K, V>,
     ) -> bool
     where
-        F: Fn(&mut Cursor<'domain, K, V>, &K) -> Result<bool, ()>,
+        F: Fn(&'hp mut Cursor<'domain, K, V>, &K) -> Result<bool, ()>,
     {
         let node = Box::into_raw(Box::new(Node {
             key,
-            value: ManuallyDrop::new(value),
+            value,
             next: AtomicPtr::new(ptr::null_mut()),
         }));
 
         loop {
-            match self.insert_inner(node, &find, cursor) {
+            match self.insert_inner(node, &find, cursor.launder()) {
                 Ok(r) => return r,
                 Err(()) => continue,
             }
         }
     }
 
-    fn remove_inner<'g, 'domain, F>(
-        &'g self,
+    fn remove_inner<'domain, 'hp, F>(
+        &self,
         key: &K,
         find: &F,
-        cursor: &mut Cursor<'domain, K, V>,
-    ) -> Result<Option<V>, ()>
+        cursor: &'hp mut Cursor<'domain, K, V>,
+    ) -> Result<Option<&'hp V>, ()>
     where
-        F: Fn(&mut Cursor<'domain, K, V>, &K) -> Result<bool, ()>,
+        F: Fn(&'hp mut Cursor<'domain, K, V>, &K) -> Result<bool, ()>,
     {
         loop {
             cursor.init_find(&self.head);
-            let found = find(cursor, key)?;
+            let found = find(cursor.launder(), key)?;
             if !found {
                 return Ok(None);
             }
@@ -268,44 +248,42 @@ where
                 continue;
             }
 
-            let value = unsafe { ptr::read(&curr_node.value) };
             let prev = unsafe { &(*cursor.prev).next };
 
             if prev
                 .compare_exchange(cursor.curr, next, Ordering::Release, Ordering::Relaxed)
                 .is_ok()
             {
-                // unsafe { Domain::global().retire_ptr::<_, Box<_>>(cursor.curr) };
-                retire(cursor.curr);
+                unsafe { retire(cursor.curr) };
             }
 
-            return Ok(Some(ManuallyDrop::into_inner(value)));
+            return Ok(Some(&curr_node.value));
         }
     }
 
     #[inline]
-    fn remove<'g, 'domain, F>(
-        &'g self,
+    fn remove<'domain, 'hp, F>(
+        &self,
         key: &K,
         find: F,
-        cursor: &mut Cursor<'domain, K, V>,
-    ) -> Option<V>
+        cursor: &'hp mut Cursor<'domain, K, V>,
+    ) -> Option<&'hp V>
     where
-        F: Fn(&mut Cursor<'domain, K, V>, &K) -> Result<bool, ()>,
+        F: Fn(&'hp mut Cursor<'domain, K, V>, &K) -> Result<bool, ()>,
     {
         loop {
-            match self.remove_inner(key, &find, cursor) {
+            match self.remove_inner(key, &find, cursor.launder()) {
                 Ok(r) => return r,
                 Err(_) => continue,
             }
         }
     }
 
-    pub fn harris_michael_get<'g>(
-        &'g self,
+    pub fn harris_michael_get<'hp>(
+        &self,
         key: &K,
-        cursor: &'g mut Cursor<K, V>,
-    ) -> Option<&'g V> {
+        cursor: &'hp mut Cursor<K, V>,
+    ) -> Option<&'hp V> {
         self.get(key, Cursor::find_harris_michael, cursor)
     }
 
@@ -313,23 +291,22 @@ where
         self.insert(key, value, Cursor::find_harris_michael, cursor)
     }
 
-    pub fn harris_michael_remove(&self, key: &K, cursor: &mut Cursor<K, V>) -> Option<V> {
+    pub fn harris_michael_remove<'hp>(
+        &self,
+        key: &K,
+        cursor: &'hp mut Cursor<K, V>,
+    ) -> Option<&'hp V> {
         self.remove(key, Cursor::find_harris_michael, cursor)
     }
 }
 
-pub struct HMList<K, V>
-where
-    K: Send,
-    V: Send,
-{
+pub struct HMList<K, V> {
     inner: List<K, V>,
 }
 
 impl<K, V> ConcurrentMap<K, V> for HMList<K, V>
 where
-    K: Ord + Send,
-    V: Send,
+    K: Ord,
 {
     type Handle<'domain> = Cursor<'domain, K, V>;
 
@@ -346,20 +323,24 @@ where
     }
 
     #[inline]
-    fn get<'g, 'domain>(&'g self, handle: &'g mut Self::Handle<'domain>, key: &K) -> Option<&'g V> {
+    fn get<'domain, 'hp>(&self, handle: &'hp mut Self::Handle<'domain>, key: &K) -> Option<&'hp V> {
         self.inner.harris_michael_get(key, handle)
     }
     #[inline]
-    fn insert<'g, 'domain>(
-        &'g self,
-        handle: &'g mut Self::Handle<'domain>,
+    fn insert<'domain, 'hp>(
+        &self,
+        handle: &'hp mut Self::Handle<'domain>,
         key: K,
         value: V,
     ) -> bool {
         self.inner.harris_michael_insert(key, value, handle)
     }
     #[inline]
-    fn remove<'g, 'domain>(&'g self, handle: &'g mut Self::Handle<'domain>, key: &K) -> Option<V> {
+    fn remove<'domain, 'hp>(
+        &self,
+        handle: &'hp mut Self::Handle<'domain>,
+        key: &K,
+    ) -> Option<&'hp V> {
         self.inner.harris_michael_remove(key, handle)
     }
 }

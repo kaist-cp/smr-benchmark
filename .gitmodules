@@ -4,6 +4,3 @@
 [submodule "crossbeam-pebr"]
 	path = crossbeam-pebr
 	url = https://github.com/kaist-cp/crossbeam
-[submodule "haphazard"]
-	path = haphazard
-	url = ssh://git@cp-git.kaist.ac.kr:9001/verification/haphazard.git

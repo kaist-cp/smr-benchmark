@@ -5,18 +5,13 @@ use std::hash::{Hash, Hasher};
 pub use super::list::Cursor;
 use super::list::HMList;
 
-pub struct HashMap<K, V>
-where
-    K: Send,
-    V: Send,
-{
+pub struct HashMap<K, V> {
     buckets: Vec<HMList<K, V>>,
 }
 
 impl<K, V> HashMap<K, V>
 where
-    K: Ord + Hash + Send,
-    V: Send,
+    K: Ord + Hash,
 {
     pub fn with_capacity(n: usize) -> Self {
         let mut buckets = Vec::with_capacity(n);
@@ -40,30 +35,25 @@ where
         s.finish() as usize
     }
 
-    pub fn get<'g, 'domain>(
-        &'g self,
-        cursor: &'g mut Cursor<'domain, K, V>,
-        k: &'g K,
-    ) -> Option<&'g V> {
+    pub fn get<'domain, 'hp>(
+        &self,
+        cursor: &'hp mut Cursor<'domain, K, V>,
+        k: &K,
+    ) -> Option<&'hp V> {
         let i = Self::hash(k);
         self.get_bucket(i).get(cursor, k)
     }
 
-    pub fn insert<'g, 'domain>(
-        &'g self,
-        cursor: &'g mut Cursor<'domain, K, V>,
-        k: K,
-        v: V,
-    ) -> bool {
+    pub fn insert<'domain, 'hp>(&self, cursor: &'hp mut Cursor<'domain, K, V>, k: K, v: V) -> bool {
         let i = Self::hash(&k);
         self.get_bucket(i).insert(cursor, k, v)
     }
 
-    pub fn remove<'g, 'domain>(
-        &'g self,
-        cursor: &'g mut Cursor<'domain, K, V>,
+    pub fn remove<'domain, 'hp>(
+        &self,
+        cursor: &'hp mut Cursor<'domain, K, V>,
         k: &K,
-    ) -> Option<V> {
+    ) -> Option<&'hp V> {
         let i = Self::hash(&k);
         self.get_bucket(i).remove(cursor, k)
     }
@@ -89,24 +79,24 @@ where
     }
 
     #[inline]
-    fn get<'g, 'domain>(
-        &'g self,
-        handle: &'g mut Self::Handle<'domain>,
-        key: &'g K,
-    ) -> Option<&'g V> {
+    fn get<'domain, 'hp>(&self, handle: &'hp mut Self::Handle<'domain>, key: &K) -> Option<&'hp V> {
         self.get(handle, key)
     }
     #[inline]
-    fn insert<'g, 'domain>(
-        &'g self,
-        handle: &'g mut Self::Handle<'domain>,
+    fn insert<'domain, 'hp>(
+        &self,
+        handle: &'hp mut Self::Handle<'domain>,
         key: K,
         value: V,
     ) -> bool {
         self.insert(handle, key, value)
     }
     #[inline]
-    fn remove<'g, 'domain>(&'g self, handle: &'g mut Self::Handle<'domain>, key: &K) -> Option<V> {
+    fn remove<'domain, 'hp>(
+        &self,
+        handle: &'hp mut Self::Handle<'domain>,
+        key: &K,
+    ) -> Option<&'hp V> {
         self.remove(handle, key)
     }
 }
