@@ -5,7 +5,7 @@ use std::mem::{self, ManuallyDrop};
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::{ptr, slice};
 
-use haphazard::{decompose_ptr, retire, tag, tagged, try_unlink, untagged, HazardPointer};
+use haphazard::{decompose_ptr, retire, tag, tagged, try_unlink, HazardPointer};
 
 #[derive(Debug)]
 struct Node<K, V>
@@ -199,7 +199,7 @@ where
         let found = self.find(key, &find, cursor);
 
         if found {
-            Some(unsafe { &((*untagged(cursor.curr)).value) })
+            Some(unsafe { &((*cursor.curr).value) })
         } else {
             None
         }
@@ -226,7 +226,7 @@ where
             }
 
             unsafe { &*node }.next.store(cursor.curr, Ordering::Relaxed);
-            if unsafe { &*untagged(cursor.prev) }
+            if unsafe { &*cursor.prev }
                 .next
                 .compare_exchange(cursor.curr, node, Ordering::Release, Ordering::Relaxed)
                 .is_ok()
@@ -277,10 +277,9 @@ where
                 return Ok(None);
             }
 
-            let curr_base = untagged(cursor.curr);
-            let curr_node = unsafe { &*curr_base };
+            let curr_node = unsafe { &*cursor.curr };
             let next = curr_node.next.fetch_or(1, Ordering::Relaxed);
-            let (_, next_tag) = decompose_ptr(next);
+            let next_tag = tag(next);
             if next_tag == 1 {
                 continue;
             }
