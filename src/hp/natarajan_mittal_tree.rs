@@ -1,4 +1,4 @@
-use haphazard::{retire, tag, tagged, untagged, HazardPointer};
+use hp_pp::{retire, tag, tagged, untagged, HazardPointer};
 
 use super::concurrent_map::ConcurrentMap;
 use std::cmp;
@@ -32,17 +32,14 @@ impl Marks {
 }
 
 #[derive(Clone, PartialEq, Eq, Ord, Debug)]
-enum Key<K>
-where
-    K: Send,
-{
+enum Key<K> {
     Fin(K),
     Inf,
 }
 
 impl<K> PartialOrd for Key<K>
 where
-    K: PartialOrd + Send,
+    K: PartialOrd,
 {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         match (self, other) {
@@ -56,7 +53,7 @@ where
 
 impl<K> PartialEq<K> for Key<K>
 where
-    K: PartialEq + Send,
+    K: PartialEq,
 {
     fn eq(&self, rhs: &K) -> bool {
         match self {
@@ -68,7 +65,7 @@ where
 
 impl<K> PartialOrd<K> for Key<K>
 where
-    K: PartialOrd + Send,
+    K: PartialOrd,
 {
     fn partial_cmp(&self, rhs: &K) -> Option<std::cmp::Ordering> {
         match self {
@@ -80,7 +77,7 @@ where
 
 impl<K> Key<K>
 where
-    K: Ord + Send,
+    K: Ord,
 {
     fn cmp(&self, rhs: &K) -> std::cmp::Ordering {
         match self {
@@ -91,11 +88,7 @@ where
 }
 
 #[derive(Debug)]
-struct Node<K, V>
-where
-    K: Send,
-    V: Send,
-{
+struct Node<K, V> {
     key: Key<K>,
     // TODO(@jeehoonkang): how about having another type that is either (1) value, or (2) left and
     // right.
@@ -106,8 +99,8 @@ where
 
 impl<K, V> Node<K, V>
 where
-    K: Clone + Send,
-    V: Clone + Send,
+    K: Clone,
+    V: Clone,
 {
     fn new_leaf(key: Key<K>, value: Option<V>) -> Node<K, V> {
         Node {
@@ -142,11 +135,7 @@ enum Direction {
 /// All Shared<_> are unmarked.
 ///
 /// All of the edges of path from `successor` to `parent` are in the process of removal.
-pub struct SeekRecord<'domain, K, V>
-where
-    K: Send,
-    V: Send,
-{
+pub struct SeekRecord<'domain, K, V> {
     /// Parent of `successor`
     ancestor: *mut Node<K, V>,
     /// The first internal node with a marked outgoing edge
@@ -168,11 +157,7 @@ where
 }
 
 // TODO(@jeehoonkang): code duplication...
-impl<'domain, K, V> SeekRecord<'domain, K, V>
-where
-    K: Send,
-    V: Send,
-{
+impl<'domain, K, V> SeekRecord<'domain, K, V> {
     fn new() -> Self {
         Self {
             ancestor: ptr::null_mut(),
@@ -181,11 +166,17 @@ where
             parent: ptr::null_mut(),
             leaf: ptr::null_mut(),
             leaf_dir: Direction::L,
-            ancestor_h: HazardPointer::new(),
-            successor_h: HazardPointer::new(),
-            parent_h: HazardPointer::new(),
-            leaf_h: HazardPointer::new(),
+            ancestor_h: HazardPointer::default(),
+            successor_h: HazardPointer::default(),
+            parent_h: HazardPointer::default(),
+            leaf_h: HazardPointer::default(),
         }
+    }
+
+    // bypass E0499-E0503, etc that are supposed to be fixed by polonius
+    #[inline]
+    fn launder<'hp1, 'hp2>(&'hp1 mut self) -> &'hp2 mut Self {
+        unsafe { core::mem::transmute(self) }
     }
 
     fn release(&mut self) {
@@ -218,29 +209,21 @@ where
 }
 
 // COMMENT(@jeehoonkang): write down the invariant of the tree
-pub struct NMTreeMap<K, V>
-where
-    K: Send,
-    V: Send,
-{
+pub struct NMTreeMap<K, V> {
     r: Node<K, V>,
 }
 
 impl<K, V> Default for NMTreeMap<K, V>
 where
-    K: Ord + Clone + Send,
-    V: Clone + Send,
+    K: Ord + Clone,
+    V: Clone,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<K, V> Drop for NMTreeMap<K, V>
-where
-    K: Send,
-    V: Send,
-{
+impl<K, V> Drop for NMTreeMap<K, V> {
     fn drop(&mut self) {
         unsafe {
             let mut stack = vec![
@@ -267,8 +250,8 @@ where
 
 impl<K, V> NMTreeMap<K, V>
 where
-    K: Ord + Clone + Send,
-    V: Clone + Send,
+    K: Ord + Clone,
+    V: Clone,
 {
     pub fn new() -> Self {
         // An empty tree has 5 default nodes with infinite keys so that the SeekRecord is allways
@@ -413,7 +396,11 @@ where
         is_unlinked
     }
 
-    fn get_inner(&self, key: &K, record: &mut SeekRecord<K, V>) -> Result<Option<&V>, ()> {
+    fn get_inner<'hp>(
+        &self,
+        key: &K,
+        record: &'hp mut SeekRecord<K, V>,
+    ) -> Result<Option<&'hp V>, ()> {
         self.seek(key, record)?;
         let leaf_node = unsafe { &*untagged(record.leaf) };
 
@@ -424,11 +411,9 @@ where
         Ok(Some(leaf_node.value.as_ref().unwrap()))
     }
 
-    pub fn get(&self, key: &K, record: &mut SeekRecord<K, V>) -> Option<&V> {
-        // TODO(@jeehoonkang): we want to use `FindError::retry`, but it requires higher-kinded
-        // things...
+    pub fn get<'hp>(&self, key: &K, record: &'hp mut SeekRecord<K, V>) -> Option<&'hp V> {
         loop {
-            if let Ok(r) = self.get_inner(key, record) {
+            if let Ok(r) = self.get_inner(key, record.launder()) {
                 return r;
             }
         }
@@ -511,11 +496,14 @@ where
         }
     }
 
-    fn remove_inner(&self, key: &K, record: &mut SeekRecord<K, V>) -> Result<Option<V>, ()> {
+    fn remove_inner<'domain, 'hp>(
+        &self,
+        key: &K,
+        record: &'hp mut SeekRecord<'domain, K, V>,
+    ) -> Result<Option<&'hp V>, ()> {
+        // `leaf` and `value` are the snapshot of the node to be deleted.
         // NOTE: The paper version uses one big loop for both phases.
         // injection phase
-        //
-        // `leaf` and `value` are the snapshot of the node to be deleted.
         let (leaf, value) = loop {
             self.seek(key, record)?;
 
@@ -527,8 +515,7 @@ where
                 return Ok(None);
             }
 
-            // Copy the value before the physical deletion.
-            let value = leaf_node.value.as_ref().unwrap().clone();
+            let value = leaf_node.value.as_ref().unwrap();
 
             // Try injecting the deletion flag.
             match record.leaf_addr().compare_exchange(
@@ -542,7 +529,6 @@ where
                     if self.cleanup(&record) {
                         return Ok(Some(value));
                     }
-
                     // In-place cleanup failed. Enter the cleanup phase.
                     break (leaf, value);
                 }
@@ -575,9 +561,13 @@ where
         }
     }
 
-    pub fn remove(&self, key: &K, record: &mut SeekRecord<K, V>) -> Option<V> {
+    pub fn remove<'domain, 'hp>(
+        &self,
+        key: &K,
+        record: &'hp mut SeekRecord<'domain, K, V>,
+    ) -> Option<&'hp V> {
         loop {
-            if let Ok(r) = self.remove_inner(key, record) {
+            if let Ok(r) = self.remove_inner(key, record.launder()) {
                 return r;
             }
         }
@@ -586,8 +576,8 @@ where
 
 impl<K, V> ConcurrentMap<K, V> for NMTreeMap<K, V>
 where
-    K: Ord + Clone + Send + 'static,
-    V: Clone + Send + 'static,
+    K: Ord + Clone,
+    V: Clone,
 {
     type Handle<'domain> = SeekRecord<'domain, K, V>;
 
@@ -604,17 +594,26 @@ where
     }
 
     #[inline]
-    fn get<'domain, 'g>(&self, handle: &mut Self::Handle<'domain>, key: &K) -> Option<&V> {
+    fn get<'domain, 'hp>(&self, handle: &'hp mut Self::Handle<'domain>, key: &K) -> Option<&'hp V> {
         self.get(key, handle)
     }
 
     #[inline]
-    fn insert<'domain>(&self, handle: &mut Self::Handle<'domain>, key: K, value: V) -> bool {
+    fn insert<'domain, 'hp>(
+        &self,
+        handle: &'hp mut Self::Handle<'domain>,
+        key: K,
+        value: V,
+    ) -> bool {
         self.insert(key, value, handle).is_ok()
     }
 
     #[inline]
-    fn remove<'domain>(&self, handle: &mut Self::Handle<'domain>, key: &K) -> Option<V> {
+    fn remove<'domain, 'hp>(
+        &self,
+        handle: &'hp mut Self::Handle<'domain>,
+        key: &K,
+    ) -> Option<&'hp V> {
         self.remove(key, handle)
     }
 }
