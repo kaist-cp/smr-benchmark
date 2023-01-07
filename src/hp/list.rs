@@ -5,7 +5,7 @@ use std::mem::{self, ManuallyDrop};
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
-use haphazard::{decompose_ptr, retire, tag, untagged, HazardPointer};
+use haphazard::{decompose_ptr, retire, tag, HazardPointer};
 
 #[derive(Debug)]
 struct Node<K, V>
@@ -43,7 +43,7 @@ where
 {
     fn drop(&mut self) {
         unsafe {
-            let mut curr = untagged(self.head.load(Ordering::Relaxed));
+            let mut curr = self.head.load(Ordering::Relaxed);
 
             while !curr.is_null() {
                 let (next, next_tag) = decompose_ptr((*curr).next.load(Ordering::Relaxed));
@@ -103,12 +103,11 @@ where
     fn find_harris_michael(&mut self, key: &K) -> Result<bool, ()> {
         loop {
             debug_assert_eq!(tag(self.curr), 0);
-
-            let prev = unsafe { &(*self.prev).next };
-
             if self.curr.is_null() {
                 return Ok(false);
             }
+
+            let prev = unsafe { &(*self.prev).next };
 
             self.curr_h.protect_raw(self.curr);
             membarrier::light_membarrier();
@@ -184,7 +183,7 @@ where
         let found = self.find(key, &find, cursor);
 
         if found {
-            Some(unsafe { &((*untagged(cursor.curr)).value) })
+            Some(unsafe { &((*cursor.curr).value) })
         } else {
             None
         }
@@ -211,7 +210,7 @@ where
             }
 
             unsafe { &*node }.next.store(cursor.curr, Ordering::Relaxed);
-            if unsafe { &*untagged(cursor.prev) }
+            if unsafe { &*cursor.prev }
                 .next
                 .compare_exchange(cursor.curr, node, Ordering::Release, Ordering::Relaxed)
                 .is_ok()
@@ -262,23 +261,22 @@ where
                 return Ok(None);
             }
 
-            let curr_base = untagged(cursor.curr);
-            let curr_node = unsafe { &*curr_base };
+            let curr_node = unsafe { &*cursor.curr };
             let next = curr_node.next.fetch_or(1, Ordering::Relaxed);
-            let (_, next_tag) = decompose_ptr(next);
+            let next_tag = tag(next);
             if next_tag == 1 {
                 continue;
             }
 
             let value = unsafe { ptr::read(&curr_node.value) };
+            let prev = unsafe { &(*cursor.prev).next };
 
-            if unsafe { &*cursor.prev }
-                .next
+            if prev
                 .compare_exchange(cursor.curr, next, Ordering::Release, Ordering::Relaxed)
                 .is_ok()
             {
-                // unsafe { Domain::global().retire_ptr::<_, Box<_>>(curr_base) };
-                retire(curr_base);
+                // unsafe { Domain::global().retire_ptr::<_, Box<_>>(cursor.curr) };
+                retire(cursor.curr);
             }
 
             return Ok(Some(ManuallyDrop::into_inner(value)));
