@@ -231,7 +231,10 @@ impl<'domain> Iterator for ThreadRecordsIter<'domain> {
 }
 
 impl ThreadRecord {
-    pub(crate) fn iter<'domain>(&self, reader: &mut Thread<'domain>) -> ThreadHazardArrayIter<'domain> {
+    pub(crate) fn iter<'domain>(
+        &self,
+        reader: &mut Thread<'domain>,
+    ) -> ThreadHazardArrayIter<'domain> {
         let mut hp = HazardPointer::new(reader);
         let array = hp.protect(&self.hazptrs);
         ThreadHazardArrayIter {

@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 membarrier = { git = "https://github.com/jeehoonkang/membarrier-rs.git", branch = "pebr" }
 crossbeam-utils = "0.8.14"
+rustc-hash = "1.1.0"
