@@ -111,7 +111,7 @@ where
             }
 
             self.curr_h.protect_raw(self.curr);
-            membarrier::light();
+            membarrier::light_membarrier();
             if prev.load(Ordering::Acquire) != self.curr {
                 return Err(());
             }
