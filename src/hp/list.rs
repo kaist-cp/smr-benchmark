@@ -5,7 +5,7 @@ use std::mem::{self, ManuallyDrop};
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
-use haphazard::{decompose_ptr, retire_locally, tag, untagged, HazardPointer};
+use haphazard::{decompose_ptr, retire, tag, untagged, HazardPointer};
 
 #[derive(Debug)]
 struct Node<K, V>
@@ -51,7 +51,7 @@ where
                     ManuallyDrop::drop(&mut (*curr).value);
                 }
                 // unsafe { Domain::global().retire_ptr::<_, Box<_>>(curr) };
-                retire_locally(curr);
+                retire(curr);
                 curr = next;
             }
         }
@@ -136,7 +136,7 @@ where
                     .is_ok()
                 {
                     // unsafe { Domain::global().retire_ptr::<_, Box<_>>(self.curr) };
-                    retire_locally(self.curr);
+                    retire(self.curr);
                 } else {
                     return Err(());
                 }
@@ -278,7 +278,7 @@ where
                 .is_ok()
             {
                 // unsafe { Domain::global().retire_ptr::<_, Box<_>>(curr_base) };
-                retire_locally(curr_base);
+                retire(curr_base);
             }
 
             return Ok(Some(ManuallyDrop::into_inner(value)));
