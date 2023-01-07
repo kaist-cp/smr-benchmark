@@ -5,7 +5,7 @@ use std::mem::{self, ManuallyDrop};
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::{ptr, slice};
 
-use haphazard::{decompose_ptr, retire_locally, tag, tagged, try_unlink, untagged, HazardPointer};
+use haphazard::{decompose_ptr, retire, tag, tagged, try_unlink, untagged, HazardPointer};
 
 #[derive(Debug)]
 struct Node<K, V>
@@ -52,7 +52,7 @@ where
                     ManuallyDrop::drop(&mut (*curr).value);
                 }
                 // unsafe { Domain::global().retire_ptr::<_, Box<_>>(curr) };
-                retire_locally(curr);
+                retire(curr);
                 curr = next;
             }
         }
@@ -109,12 +109,14 @@ where
             }
 
             let prev = unsafe { &(*self.prev).next };
-            self.curr_h.try_protect_pp(
-                self.curr,
-                unsafe { &*self.prev },
-                &|prev| &prev.next,
-                &|prev| tag(prev.next.load(Ordering::Acquire)) & 2 == 2,
-            ).map_err(|_| ())?;
+            self.curr_h
+                .try_protect_pp(
+                    self.curr,
+                    unsafe { &*self.prev },
+                    &|prev| &prev.next,
+                    &|prev| tag(prev.next.load(Ordering::Acquire)) & 2 == 2,
+                )
+                .map_err(|_| ())?;
 
             let curr_node = unsafe { &*self.curr };
 
@@ -175,7 +177,6 @@ where
     where
         F: Fn(&mut Cursor<'domain, K, V>, &K) -> Result<bool, ()>,
     {
-        // TODO: we want to use `FindError::retry()`, but it requires higher-kinded things...
         loop {
             cursor.init_find(&self.head);
             match find(cursor, key) {
