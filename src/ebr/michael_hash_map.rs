@@ -45,7 +45,7 @@ where
         self.get_bucket(i).insert(k, v, guard)
     }
 
-    pub fn remove(&self, k: &K, guard: &Guard) -> Option<V> {
+    pub fn remove<'g>(&'g self, k: &K, guard: &'g Guard) -> Option<&'g V> {
         let i = Self::hash(&k);
         self.get_bucket(i).remove(k, guard)
     }
@@ -68,7 +68,7 @@ where
         self.insert(key, value, guard)
     }
     #[inline]
-    fn remove(&self, key: &K, guard: &Guard) -> Option<V> {
+    fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         self.remove(key, guard)
     }
 }
