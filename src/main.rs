@@ -979,9 +979,6 @@ fn bench_map_hp<M: hp::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>
                         }
                     }
                     ops += 1;
-                    if ops % N::to_u64() == 0 {
-                        M::clear(&mut map_handle);
-                    }
                 }
 
                 ops_sender.send(ops).unwrap();
@@ -1087,9 +1084,6 @@ fn bench_map_hp_pp<M: hp_pp::ConcurrentMap<String, String> + Send + Sync, N: Uns
                         }
                     }
                     ops += 1;
-                    if ops % N::to_u64() == 0 {
-                        M::clear(&mut map_handle);
-                    }
                 }
 
                 ops_sender.send(ops).unwrap();

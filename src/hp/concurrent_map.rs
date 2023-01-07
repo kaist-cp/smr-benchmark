@@ -2,8 +2,8 @@ pub trait ConcurrentMap<K, V> {
     type Handle<'domain>;
 
     fn new() -> Self;
-    fn handle<'domain>() -> Self::Handle<'domain>;
-    fn clear<'domain>(handle: &mut Self::Handle<'domain>);
+
+    fn handle() -> Self::Handle<'static>;
 
     fn get<'domain, 'hp>(&self, handle: &'hp mut Self::Handle<'domain>, key: &K) -> Option<&'hp V>;
 

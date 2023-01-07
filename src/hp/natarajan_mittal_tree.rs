@@ -132,10 +132,36 @@ enum Direction {
     R,
 }
 
+pub struct Handle<'domain> {
+    ancestor_h: HazardPointer<'domain>,
+    successor_h: HazardPointer<'domain>,
+    parent_h: HazardPointer<'domain>,
+    leaf_h: HazardPointer<'domain>,
+}
+
+impl Default for Handle<'static> {
+    fn default() -> Self {
+        Self {
+            ancestor_h: HazardPointer::default(),
+            successor_h: HazardPointer::default(),
+            parent_h: HazardPointer::default(),
+            leaf_h: HazardPointer::default(),
+        }
+    }
+}
+
+impl<'domain> Handle<'domain> {
+    // bypass E0499-E0503, etc that are supposed to be fixed by polonius
+    #[inline]
+    fn launder<'hp1, 'hp2>(&'hp1 mut self) -> &'hp2 mut Self {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+
 /// All Shared<_> are unmarked.
 ///
 /// All of the edges of path from `successor` to `parent` are in the process of removal.
-pub struct SeekRecord<'domain, K, V> {
+pub struct SeekRecord<'domain, 'hp, K, V> {
     /// Parent of `successor`
     ancestor: *mut Node<K, V>,
     /// The first internal node with a marked outgoing edge
@@ -149,16 +175,12 @@ pub struct SeekRecord<'domain, K, V> {
     /// The direction of leaf from parent.
     leaf_dir: Direction,
 
-    // HazardPointers(Shields) of items above
-    ancestor_h: HazardPointer<'domain>,
-    successor_h: HazardPointer<'domain>,
-    parent_h: HazardPointer<'domain>,
-    leaf_h: HazardPointer<'domain>,
+    handle: &'hp mut Handle<'domain>,
 }
 
 // TODO(@jeehoonkang): code duplication...
-impl<'domain, K, V> SeekRecord<'domain, K, V> {
-    fn new() -> Self {
+impl<'domain, 'hp, K, V> SeekRecord<'domain, 'hp, K, V> {
+    fn new(handle: &'hp mut Handle<'domain>) -> Self {
         Self {
             ancestor: ptr::null_mut(),
             successor: ptr::null_mut(),
@@ -166,24 +188,8 @@ impl<'domain, K, V> SeekRecord<'domain, K, V> {
             parent: ptr::null_mut(),
             leaf: ptr::null_mut(),
             leaf_dir: Direction::L,
-            ancestor_h: HazardPointer::default(),
-            successor_h: HazardPointer::default(),
-            parent_h: HazardPointer::default(),
-            leaf_h: HazardPointer::default(),
+            handle,
         }
-    }
-
-    // bypass E0499-E0503, etc that are supposed to be fixed by polonius
-    #[inline]
-    fn launder<'hp1, 'hp2>(&'hp1 mut self) -> &'hp2 mut Self {
-        unsafe { core::mem::transmute(self) }
-    }
-
-    fn release(&mut self) {
-        self.ancestor_h.reset_protection();
-        self.successor_h.reset_protection();
-        self.parent_h.reset_protection();
-        self.leaf_h.reset_protection();
     }
 
     fn successor_addr(&self) -> &AtomicPtr<Node<K, V>> {
@@ -270,7 +276,11 @@ where
     }
 
     // All `Shared<_>` fields are unmarked.
-    fn seek(&self, key: &K, record: &mut SeekRecord<K, V>) -> Result<(), ()> {
+    fn seek<'domain, 'hp>(
+        &self,
+        key: &K,
+        record: &mut SeekRecord<'domain, 'hp, K, V>,
+    ) -> Result<(), ()> {
         let s = untagged(self.r.left.load(Ordering::Relaxed));
         let s_node = unsafe { &*s };
 
@@ -285,7 +295,7 @@ where
         // We doesn't have to defend with hazard pointers here
         record.parent = s;
 
-        record.leaf_h.protect_raw(leaf);
+        record.handle.leaf_h.protect_raw(leaf);
         if leaf != tagged(s_node.left.load(Ordering::Relaxed), Marks::empty().bits()) {
             return Err(());
         }
@@ -299,19 +309,22 @@ where
         while !untagged(curr).is_null() {
             if !prev_tag {
                 // untagged edge: advance ancestor and successor pointers
-                record.ancestor_h.protect_raw(untagged(record.parent));
+                record
+                    .handle
+                    .ancestor_h
+                    .protect_raw(untagged(record.parent));
                 record.ancestor = record.parent;
-                record.successor_h.protect_raw(untagged(record.leaf));
+                record.handle.successor_h.protect_raw(untagged(record.leaf));
                 record.successor = record.leaf;
                 record.successor_dir = record.leaf_dir;
             }
 
             // advance parent and leaf pointers
             mem::swap(&mut record.parent, &mut record.leaf);
-            mem::swap(&mut record.parent_h, &mut record.leaf_h);
+            mem::swap(&mut record.handle.parent_h, &mut record.handle.leaf_h);
             let mut curr_base = untagged(curr);
             loop {
-                record.leaf_h.protect_raw(curr_base);
+                record.handle.leaf_h.protect_raw(curr_base);
                 let curr_base_new = untagged(match curr_dir {
                     Direction::L => unsafe { &*record.parent }.left.load(Ordering::Acquire),
                     Direction::R => unsafe { &*record.parent }.right.load(Ordering::Acquire),
@@ -396,12 +409,14 @@ where
         is_unlinked
     }
 
-    fn get_inner<'hp>(
+    fn get_inner<'domain, 'hp>(
         &self,
         key: &K,
-        record: &'hp mut SeekRecord<K, V>,
+        handle: &'hp mut Handle<'domain>,
     ) -> Result<Option<&'hp V>, ()> {
-        self.seek(key, record)?;
+        let mut record = SeekRecord::new(handle);
+
+        self.seek(key, &mut record)?;
         let leaf_node = unsafe { &*untagged(record.leaf) };
 
         if leaf_node.key.cmp(key) != cmp::Ordering::Equal {
@@ -411,9 +426,9 @@ where
         Ok(Some(leaf_node.value.as_ref().unwrap()))
     }
 
-    pub fn get<'hp>(&self, key: &K, record: &'hp mut SeekRecord<K, V>) -> Option<&'hp V> {
+    pub fn get<'domain, 'hp>(&self, key: &K, handle: &'hp mut Handle<'domain>) -> Option<&'hp V> {
         loop {
-            if let Ok(r) = self.get_inner(key, record.launder()) {
+            if let Ok(r) = self.get_inner(key, handle.launder()) {
                 return r;
             }
         }
@@ -481,14 +496,15 @@ where
         }
     }
 
-    pub fn insert(
+    pub fn insert<'domain, 'hp>(
         &self,
         key: K,
         mut value: V,
-        record: &mut SeekRecord<K, V>,
+        handle: &'hp mut Handle<'domain>,
     ) -> Result<(), (K, V)> {
         loop {
-            match self.insert_inner(&key, value, record) {
+            let mut record = SeekRecord::new(handle);
+            match self.insert_inner(&key, value, &mut record) {
                 Ok(()) => return Ok(()),
                 Err(Ok(v)) => return Err((key, v)),
                 Err(Err(v)) => value = v,
@@ -499,17 +515,18 @@ where
     fn remove_inner<'domain, 'hp>(
         &self,
         key: &K,
-        record: &'hp mut SeekRecord<'domain, K, V>,
+        handle: &'hp mut Handle<'domain>,
     ) -> Result<Option<&'hp V>, ()> {
         // `leaf` and `value` are the snapshot of the node to be deleted.
         // NOTE: The paper version uses one big loop for both phases.
         // injection phase
+        let mut record = SeekRecord::new(handle);
         let (leaf, value) = loop {
-            self.seek(key, record)?;
+            self.seek(key, &mut record)?;
 
             // candidates
             let leaf = record.leaf;
-            let leaf_node = unsafe { untagged(record.leaf).as_ref().unwrap() };
+            let leaf_node = unsafe { &*untagged(record.leaf) };
 
             if leaf_node.key.cmp(key) != cmp::Ordering::Equal {
                 return Ok(None);
@@ -548,7 +565,7 @@ where
 
         // cleanup phase
         loop {
-            self.seek(key, record)?;
+            self.seek(key, &mut record)?;
             if record.leaf != leaf {
                 // The edge to leaf flagged for deletion was removed by a helping thread
                 return Ok(Some(value));
@@ -564,10 +581,10 @@ where
     pub fn remove<'domain, 'hp>(
         &self,
         key: &K,
-        record: &'hp mut SeekRecord<'domain, K, V>,
+        handle: &'hp mut Handle<'domain>,
     ) -> Option<&'hp V> {
         loop {
-            if let Ok(r) = self.remove_inner(key, record.launder()) {
+            if let Ok(r) = self.remove_inner(key, handle.launder()) {
                 return r;
             }
         }
@@ -579,18 +596,14 @@ where
     K: Ord + Clone,
     V: Clone,
 {
-    type Handle<'domain> = SeekRecord<'domain, K, V>;
+    type Handle<'domain> = Handle<'domain>;
 
     fn new() -> Self {
         Self::new()
     }
 
-    fn handle<'domain>() -> Self::Handle<'domain> {
-        SeekRecord::new()
-    }
-
-    fn clear<'domain>(handle: &mut Self::Handle<'domain>) {
-        handle.release();
+    fn handle() -> Self::Handle<'static> {
+        Handle::default()
     }
 
     #[inline]
