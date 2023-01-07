@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::hazard::{ThreadRecord, ThreadRecords};
+use crate::{hazard::ThreadRecords, thread::Thread};
 
 pub struct Domain {
     pub(crate) threads: ThreadRecords,
@@ -12,14 +12,11 @@ impl Domain {
             threads: ThreadRecords::new(),
         }
     }
-    pub fn acquire(&self) -> &ThreadRecord {
-        self.threads.acquire()
-    }
 
-    pub fn collect_guarded_ptrs(&self) -> HashSet<*mut u8> {
+    pub fn collect_guarded_ptrs<'domain>(&self, reclaimer: &mut Thread<'domain>) -> HashSet<*mut u8> {
         self.threads
             .iter()
-            .flat_map(|thread| thread.hazptrs.iter())
+            .flat_map(|thread| thread.iter(reclaimer))
             .collect()
     }
 }

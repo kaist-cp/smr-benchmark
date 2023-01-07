@@ -1,15 +1,16 @@
-use core::cell::Cell;
 use core::marker::PhantomData;
-use core::ptr;
 use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use core::{mem, ptr};
 
+use crossbeam_utils::CachePadded;
+
+use crate::thread::Thread;
 use crate::untagged;
 use crate::DEFAULT_THREAD;
 
 pub struct HazardPointer<'domain> {
-    hazard: &'domain ThreadHazPtrRecord,
-    thread: &'domain ThreadRecord,
-    _marker: PhantomData<*mut ()>, // !Send + !Sync
+    thread: *const Thread<'domain>,
+    idx: usize,
 }
 
 pub enum ProtectError<T> {
@@ -19,17 +20,22 @@ pub enum ProtectError<T> {
 
 impl Default for HazardPointer<'static> {
     fn default() -> Self {
-        DEFAULT_THREAD.with(|t| HazardPointer::new(t.hazards))
+        DEFAULT_THREAD.with(|t| HazardPointer::new(&mut t.borrow_mut()))
     }
 }
 
 impl<'domain> HazardPointer<'domain> {
     /// Creat a hazard pointer in the given thread
-    pub fn new(thread: &'domain ThreadRecord) -> Self {
-        Self {
-            hazard: thread.hazptrs.acquire(),
-            thread,
-            _marker: PhantomData,
+    pub fn new(thread: &mut Thread<'domain>) -> Self {
+        let idx = thread.acquire();
+        Self { thread, idx }
+    }
+
+    #[inline]
+    fn slot(&self) -> &AtomicPtr<u8> {
+        unsafe {
+            let array = &*(*self.thread).hazards.hazptrs.load(Ordering::Relaxed);
+            array.get_unchecked(self.idx)
         }
     }
 
@@ -43,7 +49,7 @@ impl<'domain> HazardPointer<'domain> {
     /// pointer does so through the same [`Domain`] as this hazard pointer is associated with.
     ///
     pub fn protect_raw<T>(&mut self, ptr: *mut T) {
-        self.hazard.protect(ptr as *mut u8);
+        self.slot().store(ptr as *mut u8, Ordering::Release);
     }
 
     /// Release the protection awarded by this hazard pointer, if any.
@@ -51,7 +57,7 @@ impl<'domain> HazardPointer<'domain> {
     /// If the hazard pointer was protecting an object, that object may now be reclaimed when
     /// retired (assuming it isn't protected by any _other_ hazard pointers).
     pub fn reset_protection(&mut self) {
-        self.hazard.reset();
+        self.slot().store(ptr::null_mut(), Ordering::Release);
     }
 
     /// Check if `src` still points to `pointer`. If not, returns the current value.
@@ -119,8 +125,8 @@ impl<'domain> HazardPointer<'domain> {
 
 impl Drop for HazardPointer<'_> {
     fn drop(&mut self) {
-        self.hazard.reset();
-        self.thread.hazptrs.release(self.hazard);
+        self.reset_protection();
+        unsafe { (*(self.thread as *mut Thread)).release(self.idx) };
     }
 }
 
@@ -129,29 +135,17 @@ pub(crate) struct ThreadRecords {
     head: AtomicPtr<ThreadRecord>,
 }
 
-pub struct ThreadRecord {
-    pub(crate) hazptrs: ThreadHazPtrRecords,
-    pub(crate) next: *mut ThreadRecord,
-    pub(crate) available: AtomicBool,
-}
-
 /// Single-writer hazard pointer bag.
 /// - push only
 /// - efficient recycling
 /// - No need to use CAS.
-// TODO: This can be array, like Chase-Lev deque.
-pub(crate) struct ThreadHazPtrRecords {
-    head: AtomicPtr<ThreadHazPtrRecord>,
-    // this is cell because it's only used by the owning thread
-    head_available: Cell<*mut ThreadHazPtrRecord>,
+pub struct ThreadRecord {
+    pub(crate) next: *mut ThreadRecord,
+    pub(crate) available: AtomicBool,
+    pub(crate) hazptrs: CachePadded<AtomicPtr<HazardArray>>,
 }
 
-pub(crate) struct ThreadHazPtrRecord {
-    pub(crate) ptr: AtomicPtr<u8>,
-    pub(crate) next: *mut ThreadHazPtrRecord,
-    // this is cell because it's only used by the owning thread
-    pub(crate) available_next: Cell<*mut ThreadHazPtrRecord>,
-}
+type HazardArray = Vec<AtomicPtr<u8>>;
 
 impl ThreadRecords {
     pub(crate) const fn new() -> Self {
@@ -160,14 +154,14 @@ impl ThreadRecords {
         }
     }
 
-    pub(crate) fn acquire(&self) -> &ThreadRecord {
+    pub(crate) fn acquire(&self) -> (&ThreadRecord, Vec<usize>) {
         if let Some(avail) = self.try_acquire_available() {
             return avail;
         }
         self.acquire_new()
     }
 
-    fn try_acquire_available(&self) -> Option<&ThreadRecord> {
+    fn try_acquire_available(&self) -> Option<(&ThreadRecord, Vec<usize>)> {
         let mut cur = self.head.load(Ordering::Acquire);
         while let Some(cur_ref) = unsafe { cur.as_ref() } {
             if cur_ref.available.load(Ordering::Relaxed)
@@ -176,19 +170,19 @@ impl ThreadRecords {
                     .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed)
                     .is_ok()
             {
-                return Some(cur_ref);
+                let len = unsafe { &*cur_ref.hazptrs.load(Ordering::Relaxed) }.len();
+                return Some((cur_ref, (0..len).collect()));
             }
             cur = cur_ref.next;
         }
         None
     }
 
-    fn acquire_new(&self) -> &ThreadRecord {
+    fn acquire_new(&self) -> (&ThreadRecord, Vec<usize>) {
+        const HAZARD_ARRAY_INIT_SIZE: usize = 64;
+        let array = Vec::from(unsafe { mem::zeroed::<[AtomicPtr<u8>; HAZARD_ARRAY_INIT_SIZE]>() });
         let new = Box::leak(Box::new(ThreadRecord {
-            hazptrs: ThreadHazPtrRecords {
-                head: AtomicPtr::new(ptr::null_mut()),
-                head_available: Cell::new(ptr::null_mut()),
-            },
+            hazptrs: CachePadded::new(AtomicPtr::new(Box::into_raw(Box::new(array)))),
             next: ptr::null_mut(),
             available: AtomicBool::new(false),
         }));
@@ -200,7 +194,7 @@ impl ThreadRecords {
                 .head
                 .compare_exchange(head, new, Ordering::Release, Ordering::Relaxed)
             {
-                Ok(_) => return new,
+                Ok(_) => return (new, (0..HAZARD_ARRAY_INIT_SIZE).collect()),
                 Err(head_new) => head = head_new,
             }
         }
@@ -236,69 +230,32 @@ impl<'domain> Iterator for ThreadRecordsIter<'domain> {
     }
 }
 
-impl ThreadHazPtrRecords {
-    pub(crate) fn acquire(&self) -> &ThreadHazPtrRecord {
-        if let Some(avail) = self.try_acquire_available() {
-            return avail;
-        }
-        self.acquire_new()
-    }
-
-    fn try_acquire_available(&self) -> Option<&ThreadHazPtrRecord> {
-        let head = self.head_available.get();
-        let head_ref = unsafe { head.as_ref()? };
-        let next = head_ref.available_next.get();
-        self.head_available.set(next);
-        Some(head_ref)
-    }
-
-    fn acquire_new(&self) -> &ThreadHazPtrRecord {
-        let head = self.head.load(Ordering::Relaxed);
-        let hazptr = Box::leak(Box::new(ThreadHazPtrRecord {
-            ptr: AtomicPtr::new(ptr::null_mut()),
-            next: head,
-            available_next: Cell::new(ptr::null_mut()),
-        }));
-        self.head.store(hazptr, Ordering::Release);
-        hazptr
-    }
-
-    pub(crate) fn release(&self, rec: &ThreadHazPtrRecord) {
-        let avail = self.head_available.get();
-        rec.available_next.set(avail);
-        self.head_available.set(rec as *const _ as *mut _);
-    }
-
-    pub(crate) fn iter(&self) -> ThreadHazPtrRecordsIter {
-        ThreadHazPtrRecordsIter {
-            cur: self.head.load(Ordering::Acquire),
+impl ThreadRecord {
+    pub(crate) fn iter<'domain>(&self, reader: &mut Thread<'domain>) -> ThreadHazardArrayIter<'domain> {
+        let mut hp = HazardPointer::new(reader);
+        let array = hp.protect(&self.hazptrs);
+        ThreadHazardArrayIter {
+            array,
+            idx: 0,
+            _hp: hp,
         }
     }
 }
 
-pub(crate) struct ThreadHazPtrRecordsIter {
-    cur: *mut ThreadHazPtrRecord,
+pub(crate) struct ThreadHazardArrayIter<'domain> {
+    array: *const HazardArray,
+    idx: usize,
+    _hp: HazardPointer<'domain>,
 }
 
-impl Iterator for ThreadHazPtrRecordsIter {
+impl<'domain> Iterator for ThreadHazardArrayIter<'domain> {
     type Item = *mut u8;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(cur_ref) = unsafe { self.cur.as_ref() } {
-            self.cur = cur_ref.next;
-            Some(cur_ref.ptr.load(Ordering::Acquire))
-        } else {
-            None
-        }
-    }
-}
-
-impl ThreadHazPtrRecord {
-    fn reset(&self) {
-        self.ptr.store(ptr::null_mut(), Ordering::Release);
-    }
-
-    fn protect(&self, ptr: *mut u8) {
-        self.ptr.store(ptr, Ordering::Release);
+        let array = unsafe { &*self.array };
+        array.get(self.idx).map(|slot| {
+            self.idx += 1;
+            slot.load(Ordering::Acquire)
+        })
     }
 }
