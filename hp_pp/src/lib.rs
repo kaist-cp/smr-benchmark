@@ -8,6 +8,7 @@ pub use hazard::HazardPointer;
 pub use membarrier::light_membarrier;
 pub use tag::*;
 
+use core::cell::RefCell;
 use std::thread_local;
 
 use crate::domain::Domain;
@@ -16,7 +17,7 @@ use crate::thread::Thread;
 static DEFAULT_DOMAIN: Domain = Domain::new();
 
 thread_local! {
-    static DEFAULT_THREAD: Thread<'static> = Thread::new(&DEFAULT_DOMAIN);
+    static DEFAULT_THREAD: RefCell<Thread<'static>> = RefCell::new(Thread::new(&DEFAULT_DOMAIN));
 }
 
 /// Retire a pointer, in the thread-local retired pointer bag.
@@ -25,7 +26,7 @@ thread_local! {
 /// TODO
 #[inline]
 pub unsafe fn retire<T>(ptr: *mut T) {
-    DEFAULT_THREAD.with(|t| t.retire(ptr))
+    DEFAULT_THREAD.with(|t| t.borrow_mut().retire(ptr))
 }
 
 /// Protects `links`, try unlinking `to_be_unlinked`, if successful, mark them as stopped and
@@ -44,13 +45,15 @@ where
     F1: FnOnce() -> bool,
     F2: Fn(*mut T),
 {
-    DEFAULT_THREAD.with(|t| t.try_unlink(links, to_be_unlinked, do_unlink, set_stop))
+    DEFAULT_THREAD.with(|t| {
+        t.borrow_mut()
+            .try_unlink(links, to_be_unlinked, do_unlink, set_stop)
+    })
 }
 
 /// Trigger reclamation
 pub fn do_reclamation() {
     DEFAULT_THREAD.with(|t| {
-        let mut reclaim = t.reclaim.borrow_mut();
-        t.do_reclamation(&mut reclaim);
+        t.borrow_mut().do_reclamation();
     })
 }
