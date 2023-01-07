@@ -2,8 +2,8 @@ use super::concurrent_map::ConcurrentMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-pub use super::list::Cursor;
 use super::list::HMList;
+pub use super::list::{Cursor, Handle};
 
 pub struct HashMap<K, V> {
     buckets: Vec<HMList<K, V>>,
@@ -35,27 +35,19 @@ where
         s.finish() as usize
     }
 
-    pub fn get<'domain, 'hp>(
-        &self,
-        cursor: &'hp mut Cursor<'domain, K, V>,
-        k: &K,
-    ) -> Option<&'hp V> {
+    pub fn get<'domain, 'hp>(&self, handle: &'hp mut Handle<'domain>, k: &K) -> Option<&'hp V> {
         let i = Self::hash(k);
-        self.get_bucket(i).get(cursor, k)
+        self.get_bucket(i).get(handle, k)
     }
 
-    pub fn insert<'domain, 'hp>(&self, cursor: &'hp mut Cursor<'domain, K, V>, k: K, v: V) -> bool {
+    pub fn insert<'domain, 'hp>(&self, handle: &'hp mut Handle<'domain>, k: K, v: V) -> bool {
         let i = Self::hash(&k);
-        self.get_bucket(i).insert(cursor, k, v)
+        self.get_bucket(i).insert(handle, k, v)
     }
 
-    pub fn remove<'domain, 'hp>(
-        &self,
-        cursor: &'hp mut Cursor<'domain, K, V>,
-        k: &K,
-    ) -> Option<&'hp V> {
+    pub fn remove<'domain, 'hp>(&self, handle: &'hp mut Handle<'domain>, k: &K) -> Option<&'hp V> {
         let i = Self::hash(&k);
-        self.get_bucket(i).remove(cursor, k)
+        self.get_bucket(i).remove(handle, k)
     }
 }
 
@@ -64,18 +56,14 @@ where
     K: Ord + Hash + Send,
     V: Send,
 {
-    type Handle<'domain> = Cursor<'domain, K, V>;
+    type Handle<'domain> = Handle<'domain>;
 
     fn new() -> Self {
         Self::with_capacity(30000)
     }
 
-    fn handle<'domain>() -> Self::Handle<'domain> {
-        Cursor::new()
-    }
-
-    fn clear<'domain>(handle: &mut Self::Handle<'domain>) {
-        handle.release();
+    fn handle() -> Self::Handle<'static> {
+        Handle::default()
     }
 
     #[inline]
