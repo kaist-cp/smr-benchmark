@@ -105,14 +105,12 @@ where
                 self.curr = curr;
                 break false;
             }
-            
-            match self.handle
-                .curr_h
-                .try_protect_pp(
-                    curr,
-                    unsafe { &*curr_origin },
-                    &|origin| &origin.next,
-                    &|origin| tag(origin.next.load(Ordering::Acquire)) & 2 == 2,
+
+            match self.handle.curr_h.try_protect_pp(
+                curr,
+                unsafe { &*curr_origin },
+                &|origin| &origin.next,
+                &|origin| tag(origin.next.load(Ordering::Acquire)) & 2 == 2,
             ) {
                 Err(ProtectError::Changed(ptr_new)) => {
                     curr = ptr_new;
@@ -155,7 +153,7 @@ where
         if prev_next == curr {
             return Ok(found);
         }
-        
+
         // cleanup marked nodes between prev and curr
         if unsafe {
             !try_unlink(
@@ -176,7 +174,7 @@ where
         } {
             return Err(());
         }
-        
+
         Ok(found)
     }
 
@@ -258,13 +256,11 @@ where
                 return Ok(false);
             }
 
-            match self.handle
-                .curr_h
-                .try_protect_pp(
-                    curr,
-                    curr_origin,
-                    &|origin| origin,
-                    &|origin| tag(origin.load(Ordering::Acquire)) & 2 == 2,
+            match self.handle.curr_h.try_protect_pp(
+                curr,
+                curr_origin,
+                &|origin| origin,
+                &|origin| tag(origin.load(Ordering::Acquire)) & 2 == 2,
             ) {
                 Err(ProtectError::Changed(ptr_new)) => {
                     curr = ptr_new;
@@ -273,7 +269,7 @@ where
                 Err(ProtectError::Stopped) => return Err(()),
                 Ok(_) => {}
             }
-            
+
             self.curr = curr;
             let curr_node = unsafe { &*curr };
 
@@ -502,23 +498,6 @@ where
     ) -> Option<&'hp V> {
         self.get(key, Cursor::find_harris_herlihy_shavit, handle)
     }
-
-    pub fn harris_herlihy_shavit_insert<'domain, 'hp>(
-        &self,
-        key: K,
-        value: V,
-        handle: &'hp mut Handle<'domain>,
-    ) -> bool {
-        self.insert(key, value, Cursor::find_harris_herlihy_shavit, handle)
-    }
-
-    pub fn harris_herlihy_shavit_remove<'domain, 'hp>(
-        &self,
-        key: &K,
-        handle: &'hp mut Handle<'domain>,
-    ) -> Option<&'hp V> {
-        self.remove(key, Cursor::find_harris_herlihy_shavit, handle)
-    }
 }
 
 pub struct HList<K, V> {
@@ -632,7 +611,7 @@ where
         key: K,
         value: V,
     ) -> bool {
-        self.inner.harris_herlihy_shavit_insert(key, value, handle)
+        self.inner.harris_insert(key, value, handle)
     }
     #[inline]
     fn remove<'domain, 'hp>(
@@ -640,13 +619,13 @@ where
         handle: &'hp mut Self::Handle<'domain>,
         key: &K,
     ) -> Option<&'hp V> {
-        self.inner.harris_herlihy_shavit_remove(key, handle)
+        self.inner.harris_remove(key, handle)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{HList, HMList, HHSList};
+    use super::{HHSList, HList, HMList};
     use crate::hp_pp::concurrent_map;
 
     #[test]
