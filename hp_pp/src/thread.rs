@@ -165,3 +165,16 @@ impl<'domain> Drop for Thread<'domain> {
         global_retires.append(&mut self.retired);
     }
 }
+
+impl core::fmt::Debug for Thread<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Thread")
+            .field("domain", &(&self.domain as *const _))
+            .field("hazards", &(&self.hazards as *const _))
+            .field("available_indices", &self.available_indices.as_ptr())
+            .field("hps", &self.hps)
+            .field("retired", &format!("[...; {}]", self.retired.len()))
+            .field("collect_count", &self.collect_count)
+            .finish()
+    }
+}

@@ -8,6 +8,7 @@ use crate::thread::Thread;
 use crate::untagged;
 use crate::DEFAULT_THREAD;
 
+#[derive(Debug)]
 pub struct HazardPointer<'domain> {
     thread: *const Thread<'domain>,
     idx: usize,
@@ -131,6 +132,7 @@ impl Drop for HazardPointer<'_> {
 }
 
 /// Push-only list of thread records
+#[derive(Debug)]
 pub(crate) struct ThreadRecords {
     head: AtomicPtr<ThreadRecord>,
 }
@@ -139,6 +141,7 @@ pub(crate) struct ThreadRecords {
 /// - push only
 /// - efficient recycling
 /// - No need to use CAS.
+#[derive(Debug)]
 pub struct ThreadRecord {
     pub(crate) next: *mut ThreadRecord,
     pub(crate) available: AtomicBool,

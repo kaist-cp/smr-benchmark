@@ -1,3 +1,4 @@
+#[derive(Debug)]
 pub(crate) struct Retired {
     pub(crate) ptr: *mut u8,
     pub(crate) deleter: unsafe fn(ptr: *mut u8),
