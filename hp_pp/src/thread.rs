@@ -36,12 +36,16 @@ impl<'domain> Thread<'domain> {
 
 // stuff related to reclamation
 impl<'domain> Thread<'domain> {
-    const COUNTS_BETWEEN_COLLECT: usize = 64;
+    const COUNTS_BETWEEN_PUSH: usize = 64;
+    const COUNTS_BETWEEN_COLLECT: usize = 128;
 
     // NOTE: T: Send not required because we reclaim only locally.
     #[inline]
     pub unsafe fn retire<T>(&mut self, ptr: *mut T) {
         self.retired.push(Retired::new(ptr));
+        if self.retired.len() > Self::COUNTS_BETWEEN_PUSH {
+            self.domain.retireds.push(mem::take(&mut self.retired))
+        }
 
         let collect_count = self.collect_count.wrapping_add(1);
         self.collect_count = collect_count;
@@ -97,27 +101,29 @@ impl<'domain> Thread<'domain> {
 
     #[inline]
     pub(crate) fn do_reclamation(&mut self) {
+        let retireds = self.domain.retireds.pop_all();
+        if retireds.is_empty() {
+            return;
+        }
+
         self.domain.barrier.barrier();
 
         // only for hp++, but this doesn't introduce big cost for plain hp.
         drop(mem::take(&mut self.hps));
 
         let guarded_ptrs = self.domain.collect_guarded_ptrs(self);
-        self.retired = self
-            .retired
-            .iter()
+        let not_freed = retireds
+            .into_iter()
             .filter_map(|element| {
                 if guarded_ptrs.contains(&element.ptr) {
-                    Some(Retired {
-                        ptr: element.ptr,
-                        deleter: element.deleter,
-                    })
+                    Some(element)
                 } else {
                     unsafe { (element.deleter)(element.ptr) };
                     None
                 }
             })
             .collect();
+        self.domain.retireds.push(not_freed);
     }
 }
 
@@ -165,8 +171,7 @@ impl<'domain> Drop for Thread<'domain> {
         drop(mem::take(&mut self.hps));
         drop(mem::take(&mut self.available_indices));
         self.domain.threads.release(self.hazards);
-        let mut global_retires = self.domain.retires.lock().unwrap();
-        global_retires.append(&mut self.retired);
+        self.domain.retireds.push(mem::take(&mut self.retired));
     }
 }
 

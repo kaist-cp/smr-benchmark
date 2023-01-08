@@ -1,17 +1,17 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
 
+use crossbeam_utils::CachePadded;
 use rustc_hash::FxHashSet;
 
 use crate::hazard::ThreadRecords;
-use crate::retire::Retired;
+use crate::retire::RetiredList;
 use crate::thread::Thread;
 
 #[derive(Debug)]
 pub struct Domain {
     pub(crate) threads: ThreadRecords,
     pub(crate) barrier: EpochBarrier,
-    pub(crate) retires: Mutex<Vec<Retired>>,
+    pub(crate) retireds: CachePadded<RetiredList>,
 }
 
 impl Domain {
@@ -19,7 +19,7 @@ impl Domain {
         Self {
             threads: ThreadRecords::new(),
             barrier: EpochBarrier(AtomicUsize::new(0)),
-            retires: Mutex::new(Vec::new()),
+            retireds: CachePadded::new(RetiredList::new()),
         }
     }
 
@@ -40,8 +40,8 @@ impl Drop for Domain {
         for t in self.threads.iter() {
             assert!(t.available.load(Ordering::Relaxed))
         }
-        let retires = self.retires.get_mut().unwrap();
-        for r in retires.drain(..) {
+        let mut retireds = self.retireds.pop_all();
+        for r in retireds.drain(..) {
             unsafe { (r.deleter)(r.ptr) };
         }
     }
