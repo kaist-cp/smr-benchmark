@@ -160,6 +160,10 @@ impl<'domain> Thread<'domain> {
 
 impl<'domain> Drop for Thread<'domain> {
     fn drop(&mut self) {
+        // WARNING: Dropping HazardPointer touches available_indices. So available_indices MUST be
+        // dropped after hps. For the same reason, Thread::drop MUST NOT acquire HazardPointer.
+        drop(mem::take(&mut self.hps));
+        drop(mem::take(&mut self.available_indices));
         self.domain.threads.release(self.hazards);
         let mut global_retires = self.domain.retires.lock().unwrap();
         global_retires.append(&mut self.retired);
