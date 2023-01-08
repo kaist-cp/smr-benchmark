@@ -1,7 +1,9 @@
 use core::sync::atomic::{AtomicPtr, Ordering};
 use core::{mem, ptr};
+use std::collections::VecDeque;
 
 use crate::domain::Domain;
+use crate::domain::EpochBarrier;
 use crate::hazard::ThreadRecord;
 use crate::retire::Retired;
 use crate::HazardPointer;
@@ -12,7 +14,8 @@ pub struct Thread<'domain> {
     /// available slots of hazard array
     pub(crate) available_indices: Vec<usize>,
     // Used for HP++
-    pub(crate) hps: Vec<HazardPointer<'domain>>,
+    // TODO: only 2 entries required
+    pub(crate) hps: VecDeque<(usize, Vec<HazardPointer<'domain>>)>,
     pub(crate) retired: Vec<Retired>,
     pub(crate) collect_count: usize,
 }
@@ -24,7 +27,7 @@ impl<'domain> Thread<'domain> {
             domain,
             hazards: thread,
             available_indices: available_indices,
-            hps: Vec::new(),
+            hps: VecDeque::new(),
             retired: Vec::new(),
             collect_count: 0,
         }
@@ -58,7 +61,7 @@ impl<'domain> Thread<'domain> {
         F1: FnOnce() -> bool,
         F2: Fn(*mut T),
     {
-        let mut hps: Vec<_> = links
+        let hps: Vec<_> = links
             .iter()
             .map(|&ptr| {
                 let mut hp = HazardPointer::new(self);
@@ -67,12 +70,21 @@ impl<'domain> Thread<'domain> {
             })
             .collect();
 
+        let epoch = self.domain.barrier.read();
+        while let Some(&(old_epoch, _)) = self.hps.front() {
+            if EpochBarrier::check(old_epoch, epoch) {
+                drop(self.hps.pop_front());
+            } else {
+                break;
+            }
+        }
+
         let unlinked = do_unlink();
         if unlinked {
             for &ptr in to_be_unlinked {
                 set_stop(ptr);
             }
-            self.hps.append(&mut hps);
+            self.hps.push_back((epoch, hps));
             for &ptr in to_be_unlinked {
                 unsafe { self.retire(ptr) }
             }
@@ -85,7 +97,7 @@ impl<'domain> Thread<'domain> {
 
     #[inline]
     pub(crate) fn do_reclamation(&mut self) {
-        membarrier::heavy();
+        self.domain.barrier.barrier();
 
         // only for hp++, but this doesn't introduce big cost for plain hp.
         drop(mem::take(&mut self.hps));
