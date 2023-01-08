@@ -7,6 +7,7 @@ use crate::hazard::ThreadRecords;
 use crate::retire::Retired;
 use crate::thread::Thread;
 
+#[derive(Debug)]
 pub struct Domain {
     pub(crate) threads: ThreadRecords,
     pub(crate) barrier: EpochBarrier,
@@ -46,6 +47,7 @@ impl Drop for Domain {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct EpochBarrier(AtomicUsize);
 
 impl EpochBarrier {
