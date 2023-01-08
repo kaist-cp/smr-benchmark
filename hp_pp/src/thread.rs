@@ -161,9 +161,7 @@ impl<'domain> Thread<'domain> {
 impl<'domain> Drop for Thread<'domain> {
     fn drop(&mut self) {
         self.domain.threads.release(self.hazards);
-        while !self.retired.is_empty() {
-            self.do_reclamation();
-            core::hint::spin_loop();
-        }
+        let mut global_retires = self.domain.retires.lock().unwrap();
+        global_retires.append(&mut self.retired);
     }
 }
