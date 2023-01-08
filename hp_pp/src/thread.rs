@@ -146,7 +146,9 @@ impl<'domain> Thread<'domain> {
         for _ in size..new_size {
             new_array.push(AtomicPtr::new(ptr::null_mut()));
         }
-        self.hazards.hazptrs.store(Box::into_raw(new_array), Ordering::Release);
+        self.hazards
+            .hazptrs
+            .store(Box::into_raw(new_array), Ordering::Release);
         self.available_indices.extend(size..new_size)
     }
 
