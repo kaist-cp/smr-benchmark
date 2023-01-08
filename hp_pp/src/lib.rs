@@ -16,8 +16,9 @@ use crate::thread::Thread;
 
 static DEFAULT_DOMAIN: Domain = Domain::new();
 
+// NOTE: MUST NOT take raw pointer to TLS. They randomly move???
 thread_local! {
-    static DEFAULT_THREAD: RefCell<Thread<'static>> = RefCell::new(Thread::new(&DEFAULT_DOMAIN));
+    static DEFAULT_THREAD: RefCell<Box<Thread<'static>>> = RefCell::new(Box::new(Thread::new(&DEFAULT_DOMAIN)));
 }
 
 /// Retire a pointer, in the thread-local retired pointer bag.
