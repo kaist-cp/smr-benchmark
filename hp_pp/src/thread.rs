@@ -54,17 +54,15 @@ impl<'domain> Thread<'domain> {
         }
     }
 
-    pub unsafe fn try_unlink<T, F1, F2, F3>(
+    pub unsafe fn try_unlink<T, F1, F2>(
         &mut self,
         links: &[*mut T],
-        collect_unlinked: F1,
-        do_unlink: F2,
-        set_stop: F3,
+        do_unlink: F1,
+        set_stop: F2,
     ) -> bool
     where
-        F1: FnOnce() -> Vec<*mut T>,
-        F2: FnOnce() -> bool,
-        F3: Fn(*mut T),
+        F1: FnOnce() -> Result<Vec<*mut T>, ()>,
+        F2: Fn(*mut T),
     {
         let hps: Vec<_> = links
             .iter()
@@ -84,9 +82,7 @@ impl<'domain> Thread<'domain> {
             }
         }
 
-        let unlinked = do_unlink();
-        if unlinked {
-            let unlinked_nodes = collect_unlinked();
+        if let Ok(unlinked_nodes) = do_unlink() {
             for &ptr in &unlinked_nodes {
                 set_stop(ptr);
             }
@@ -94,11 +90,11 @@ impl<'domain> Thread<'domain> {
             for &ptr in &unlinked_nodes {
                 unsafe { self.retire(ptr) }
             }
+            true
         } else {
             drop(hps);
+            false
         }
-
-        unlinked
     }
 
     #[inline]

@@ -1,11 +1,11 @@
-use hp_pp::{ProtectError, try_unlink};
 use hp_pp::{tag, tagged, untagged, HazardPointer};
+use hp_pp::{try_unlink, ProtectError};
 
 use super::concurrent_map::ConcurrentMap;
-use std::{cmp, slice};
 use std::mem;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
+use std::{cmp, slice};
 
 bitflags! {
     /// TODO
@@ -305,12 +305,9 @@ where
         record
             .handle
             .leaf_h
-            .try_protect_pp(
-                leaf,
-                s_node,
-                &|s_node| &s_node.left,
-                &|s_node| tag(s_node.left.load(Ordering::Acquire)) & 2 == 2,
-            )
+            .try_protect_pp(leaf, s_node, &|s_node| &s_node.left, &|s_node| {
+                tag(s_node.left.load(Ordering::Acquire)) & 2 == 2
+            })
             .map_err(|_| ())?;
         record.leaf = leaf;
         record.leaf_dir = Direction::L;
@@ -337,25 +334,24 @@ where
             mem::swap(&mut record.handle.parent_h, &mut record.handle.leaf_h);
             let mut curr_base = untagged(curr);
             loop {
-                match record
-                    .handle
-                    .leaf_h
-                    .try_protect_pp(
-                        curr_base,
-                        unsafe { &*record.parent },
-                        &|src| match curr_dir {
-                            Direction::L => &src.left,
-                            Direction::R => &src.right,
-                        },
-                        &|src| Marks::from_bits_truncate(tag(match curr_dir {
+                match record.handle.leaf_h.try_protect_pp(
+                    curr_base,
+                    unsafe { &*record.parent },
+                    &|src| match curr_dir {
+                        Direction::L => &src.left,
+                        Direction::R => &src.right,
+                    },
+                    &|src| {
+                        Marks::from_bits_truncate(tag(match curr_dir {
                             Direction::L => src.left.load(Ordering::Acquire),
                             Direction::R => src.right.load(Ordering::Acquire),
-                        })).stop()
-                    )
-                {
+                        }))
+                        .stop()
+                    },
+                ) {
                     Ok(_) => break,
                     Err(ProtectError::Changed(curr_base_new)) => curr_base = curr_base_new,
-                    Err(ProtectError::Stopped) => return Err(())
+                    Err(ProtectError::Stopped) => return Err(()),
                 }
             }
 
@@ -405,26 +401,7 @@ where
             try_unlink(
                 slice::from_ref(&link),
                 || {
-                    // destroy the subtree of successor except target_sibling
-                    let mut stack = vec![record.successor];
-                    let mut collected = Vec::with_capacity(32);
-    
-                    while let Some(node) = stack.pop() {
-                        let node_addr = untagged(node);
-                        if node_addr.is_null() || (node_addr == untagged(target_sibling)) {
-                            continue;
-                        }
-    
-                        let node_ref = &*node_addr;
-    
-                        stack.push(node_ref.left.load(Ordering::Relaxed));
-                        stack.push(node_ref.right.load(Ordering::Relaxed));
-                        collected.push(node_addr);
-                    }
-                    collected
-                },
-                || {
-                    record
+                    if record
                         .successor_addr()
                         .compare_exchange(
                             record.successor,
@@ -433,14 +410,41 @@ where
                             Ordering::Acquire,
                         )
                         .is_ok()
+                    {
+                        // destroy the subtree of successor except target_sibling
+                        let mut stack = vec![record.successor];
+                        let mut collected = Vec::with_capacity(32);
+
+                        while let Some(node) = stack.pop() {
+                            let node_addr = untagged(node);
+                            if node_addr.is_null() || (node_addr == untagged(target_sibling)) {
+                                continue;
+                            }
+
+                            let node_ref = &*node_addr;
+
+                            stack.push(node_ref.left.load(Ordering::Relaxed));
+                            stack.push(node_ref.right.load(Ordering::Relaxed));
+                            collected.push(node_addr);
+                        }
+                        Ok(collected)
+                    } else {
+                        Err(())
+                    }
                 },
                 |node| {
                     let node = &*node;
                     let left = node.left.load(Ordering::Acquire);
                     let right = node.right.load(Ordering::Acquire);
-                    node.left.store(tagged(left, Marks::new(true, true, true).bits), Ordering::Release);
-                    node.right.store(tagged(right, Marks::new(true, true, true).bits), Ordering::Release);
-                }
+                    node.left.store(
+                        tagged(left, Marks::new(true, true, true).bits),
+                        Ordering::Release,
+                    );
+                    node.right.store(
+                        tagged(right, Marks::new(true, true, true).bits),
+                        Ordering::Release,
+                    );
+                },
             )
         }
     }
