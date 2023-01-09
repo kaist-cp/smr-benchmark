@@ -303,10 +303,11 @@ where
         let flag = Marks::from_bits_truncate(target_sibling.tag()).flag();
         let is_unlinked = record
             .successor_addr()
-            .compare_and_set(
+            .compare_exchange(
                 record.successor,
                 target_sibling.with_tag(Marks::new(flag, false).bits()),
                 Ordering::AcqRel,
+                Ordering::Acquire,
                 &guard,
             )
             .is_ok();
@@ -381,10 +382,11 @@ where
             new_internal_node.right.store(new_right, Ordering::Relaxed);
 
             // NOTE: record.leaf_addr is called childAddr in the paper.
-            match record.leaf_addr().compare_and_set(
+            match record.leaf_addr().compare_exchange(
                 record.leaf,
                 new_internal,
                 Ordering::AcqRel,
+                Ordering::Acquire,
                 &guard,
             ) {
                 Ok(_) => return Ok(()),
@@ -418,10 +420,11 @@ where
             let value = leaf_node.value.as_ref().unwrap();
 
             // Try injecting the deletion flag.
-            match record.leaf_addr().compare_and_set(
+            match record.leaf_addr().compare_exchange(
                 record.leaf,
                 record.leaf.with_tag(Marks::new(true, false).bits()),
                 Ordering::AcqRel,
+                Ordering::Acquire,
                 &guard,
             ) {
                 Ok(_) => {
