@@ -1,4 +1,4 @@
-use super::concurrent_map::ConcurrentMap;
+use crate::hp::concurrent_map::ConcurrentMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -92,7 +92,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::HashMap;
-    use crate::hp_pp::concurrent_map;
+    use crate::hp::concurrent_map;
 
     #[test]
     fn smoke_hashmap() {

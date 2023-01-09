@@ -1,7 +1,7 @@
 use hp_pp::{tag, tagged, untagged, HazardPointer};
 use hp_pp::{try_unlink, ProtectError};
 
-use super::concurrent_map::ConcurrentMap;
+use crate::hp::concurrent_map::ConcurrentMap;
 use std::mem;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
@@ -674,7 +674,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::NMTreeMap;
-    use crate::hp_pp::concurrent_map;
+    use crate::hp::concurrent_map;
 
     #[test]
     fn smoke_nm_tree() {
