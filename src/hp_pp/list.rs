@@ -155,24 +155,26 @@ where
             !try_unlink(
                 slice::from_ref(&curr),
                 || {
-                    let mut collected = Vec::with_capacity(16);
-                    let mut node = prev_next;
-                    loop {
-                        if untagged(node) == curr {
-                            break;
-                        }
-                        let node_ref = node.as_ref().unwrap();
-                        let next = node_ref.next.load(Ordering::Acquire);
-                        collected.push(node);
-                        node = next;
-                    }
-                    collected
-                },
-                || {
-                    (&*self.prev)
+                    if (&*self.prev)
                         .next
                         .compare_exchange(prev_next, curr, Ordering::Release, Ordering::Relaxed)
                         .is_ok()
+                    {
+                        let mut collected = Vec::with_capacity(16);
+                        let mut node = prev_next;
+                        loop {
+                            if untagged(node) == curr {
+                                break;
+                            }
+                            let node_ref = node.as_ref().unwrap();
+                            let next = node_ref.next.load(Ordering::Acquire);
+                            collected.push(node);
+                            node = next;
+                        }
+                        Ok(collected)
+                    } else {
+                        Err(())
+                    }
                 },
                 |node| {
                     let node = &*node;
@@ -226,15 +228,20 @@ where
                 if unsafe {
                     !try_unlink(
                         links,
-                        || vec![self.curr],
                         || {
-                            prev.compare_exchange(
-                                self.curr,
-                                next_base,
-                                Ordering::Release,
-                                Ordering::Relaxed,
-                            )
-                            .is_ok()
+                            if prev
+                                .compare_exchange(
+                                    self.curr,
+                                    next_base,
+                                    Ordering::Release,
+                                    Ordering::Relaxed,
+                                )
+                                .is_ok()
+                            {
+                                Ok(vec![self.curr])
+                            } else {
+                                Err(())
+                            }
                         },
                         |node| {
                             let node = &*node;
@@ -408,15 +415,20 @@ where
             unsafe {
                 try_unlink(
                     links,
-                    || vec![cursor.curr],
                     || {
-                        prev.compare_exchange(
-                            cursor.curr,
-                            next,
-                            Ordering::Release,
-                            Ordering::Relaxed,
-                        )
-                        .is_ok()
+                        if prev
+                            .compare_exchange(
+                                cursor.curr,
+                                next,
+                                Ordering::Release,
+                                Ordering::Relaxed,
+                            )
+                            .is_ok()
+                        {
+                            Ok(vec![cursor.curr])
+                        } else {
+                            Err(())
+                        }
                     },
                     |node| {
                         let node = &*node;

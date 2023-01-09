@@ -31,26 +31,26 @@ pub unsafe fn retire<T>(ptr: *mut T) {
     DEFAULT_THREAD.with(|t| t.borrow_mut().retire(ptr))
 }
 
-/// Protects `links`, try unlinking `to_be_unlinked`, if successful, mark them as stopped and
+/// Protects `links` and try unlinking by `do_unlink`. if successful, mark the returned nodes as stopped and
 /// retire them.
+/// 
+/// `do_unlink` tries unlinking, and if successful, it returns raw pointers to unlinked nodes.
 ///
 /// # Safety
 /// * The memory blocks in `to_be_unlinked` are no longer modified.
 /// * TODO
-pub unsafe fn try_unlink<T, F1, F2, F3>(
+pub unsafe fn try_unlink<T, F1, F2>(
     links: &[*mut T],
-    collect_unlinked: F1,
-    do_unlink: F2,
-    set_stop: F3,
+    do_unlink: F1,
+    set_stop: F2,
 ) -> bool
 where
-    F1: FnOnce() -> Vec<*mut T>,
-    F2: FnOnce() -> bool,
-    F3: Fn(*mut T),
+    F1: FnOnce() -> Result<Vec<*mut T>, ()>,
+    F2: Fn(*mut T),
 {
     DEFAULT_THREAD.with(|t| {
         t.borrow_mut()
-            .try_unlink(links, collect_unlinked, do_unlink, set_stop)
+            .try_unlink(links, do_unlink, set_stop)
     })
 }
 
