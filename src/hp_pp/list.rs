@@ -5,7 +5,9 @@ use std::mem;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::{ptr, slice};
 
-use hp_pp::{decompose_ptr, tag, tagged, try_unlink, untagged, HazardPointer, ProtectError};
+use hp_pp::{
+    decompose_ptr, light_membarrier, tag, tagged, try_unlink, untagged, HazardPointer, ProtectError,
+};
 
 #[derive(Debug)]
 pub struct Node<K, V> {
@@ -199,15 +201,18 @@ where
 
             let prev = unsafe { &(*self.prev).next };
 
-            self.handle
-                .curr_h
-                .try_protect_pp(
-                    self.curr,
-                    unsafe { &*self.prev },
-                    &|prev| &prev.next,
-                    &|prev| tag(prev.next.load(Ordering::Acquire)) & 2 == 2,
-                )
-                .map_err(|_| ())?;
+            // Inlined version of hp++ protection, without duplicate load
+            self.handle.curr_h.protect_raw(self.curr);
+            light_membarrier();
+            let (curr_new_base, curr_new_tag) = decompose_ptr(prev.load(Ordering::Acquire));
+            if curr_new_tag == 2 {
+                // Stopped. Restart from head.
+                return Err(());
+            } else if curr_new_base != self.curr {
+                // If link changed but not stopped, retry protecting the new node.
+                self.curr = curr_new_base;
+                continue;
+            }
 
             let curr_node = unsafe { &*self.curr };
 

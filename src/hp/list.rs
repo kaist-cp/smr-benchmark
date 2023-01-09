@@ -96,8 +96,14 @@ where
 
             self.handle.curr_h.protect_raw(self.curr);
             light_membarrier();
-            if prev.load(Ordering::Acquire) != self.curr {
+            let (curr_new_base, curr_new_tag) = decompose_ptr(prev.load(Ordering::Acquire));
+            if curr_new_tag != 0 {
                 return Err(());
+            } else if curr_new_base != self.curr {
+                // In contrary to what HP04 paper does, it's fine to retry protecting the new node
+                // without restarting from head as long as prev is not logically deleted.
+                self.curr = curr_new_base;
+                continue;
             }
 
             let curr_node = unsafe { &*self.curr };
