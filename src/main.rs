@@ -879,8 +879,6 @@ fn bench_map_hp<M: hp::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>
     let map = &M::new();
     strategy.prefill_hp(config, map);
 
-    let collector = &crossbeam_pebr::Collector::new();
-
     let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
     let (ops_sender, ops_receiver) = mpsc::channel();
     let (mem_sender, mem_receiver) = mpsc::channel();
@@ -893,17 +891,10 @@ fn bench_map_hp<M: hp::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>
                 let mut samples = 0usize;
                 let mut acc = 0usize;
                 let mut peak = 0usize;
-                let handle = collector.register();
                 barrier.clone().wait();
 
                 let start = Instant::now();
-                // Immediately drop if no non-coop else keep it and repin periodically.
-                let mut guard = ManuallyDrop::new(handle.pin());
-                if config.non_coop == 0 {
-                    unsafe { ManuallyDrop::drop(&mut guard) };
-                }
                 let mut next_sampling = start + config.sampling_period;
-                let mut next_repin = start + config.non_coop_period;
                 while start.elapsed() < config.duration {
                     let now = Instant::now();
                     if now > next_sampling {
@@ -913,15 +904,7 @@ fn bench_map_hp<M: hp::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>
                         peak = max(peak, allocated);
                         next_sampling = now + config.sampling_period;
                     }
-                    if now > next_repin {
-                        (*guard).repin();
-                        next_repin = now + config.non_coop_period;
-                    }
                     std::thread::sleep(config.aux_thread_period);
-                }
-
-                if config.non_coop > 0 {
-                    unsafe { ManuallyDrop::drop(&mut guard) };
                 }
 
                 if config.sampling {
