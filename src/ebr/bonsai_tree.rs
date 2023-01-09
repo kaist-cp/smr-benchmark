@@ -597,7 +597,13 @@ where
 
             if self
                 .root
-                .compare_and_set(old_root, new_root, Ordering::AcqRel, guard)
+                .compare_exchange(
+                    old_root,
+                    new_root,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                    guard,
+                )
                 .is_ok()
             {
                 state.commit(guard);
@@ -621,7 +627,13 @@ where
 
             if self
                 .root
-                .compare_and_set(old_root, new_root, Ordering::AcqRel, guard)
+                .compare_exchange(
+                    old_root,
+                    new_root,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                    guard,
+                )
                 .is_ok()
             {
                 state.commit(guard);
