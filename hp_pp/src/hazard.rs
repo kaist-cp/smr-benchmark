@@ -67,9 +67,8 @@ impl<'domain> HazardPointer<'domain> {
     /// then `Ok(())` means that shields set to `p` are validated.
     pub fn validate<T>(pointer: *mut T, src: &AtomicPtr<T>) -> Result<(), *mut T> {
         membarrier::light_membarrier();
-        // relaxed is ok thanks to the previous load (that created `pointer`) + the fence above
-        let new = src.load(Ordering::Relaxed);
-        if pointer as usize == new as usize {
+        let new = src.load(Ordering::Acquire);
+        if pointer == new {
             Ok(())
         } else {
             Err(new)
@@ -82,10 +81,7 @@ impl<'domain> HazardPointer<'domain> {
     /// means that this shield is validated.
     pub fn try_protect<T>(&mut self, pointer: *mut T, src: &AtomicPtr<T>) -> Result<(), *mut T> {
         self.protect_raw(pointer);
-        Self::validate(pointer, src).map_err(|new| {
-            self.reset_protection();
-            new
-        })
+        Self::validate(pointer, src)
     }
 
     /// Get a protected pointer from `src`.
@@ -106,7 +102,7 @@ impl<'domain> HazardPointer<'domain> {
         src: &S,
         src_link: &F1,
         check_stop: &F2,
-    ) -> Result<*mut T, ProtectError<T>>
+    ) -> Result<(), ProtectError<T>>
     where
         F1: Fn(&S) -> &AtomicPtr<T>,
         F2: Fn(&S) -> bool,
@@ -118,9 +114,30 @@ impl<'domain> HazardPointer<'domain> {
         }
         let ptr_new = untagged(src_link(src).load(Ordering::Acquire));
         if ptr == ptr_new {
-            return Ok(ptr);
+            return Ok(());
         }
         Err(ProtectError::Changed(ptr_new))
+    }
+
+    /// hp++ protection
+    pub fn protect_pp<T, S, F1, F2>(
+        &mut self,
+        src: &S,
+        src_link: &F1,
+        check_stop: &F2,
+    ) -> Result<*mut T, ()>
+    where
+        F1: Fn(&S) -> &AtomicPtr<T>,
+        F2: Fn(&S) -> bool,
+    {
+        let mut ptr = src_link(src).load(Ordering::Relaxed);
+        loop {
+            match self.try_protect_pp(ptr, src, src_link, check_stop) {
+                Err(ProtectError::Stopped) => return Err(()),
+                Err(ProtectError::Changed(ptr_new)) => ptr = ptr_new,
+                Ok(_) => return Ok(ptr),
+            }
+        }
     }
 }
 
