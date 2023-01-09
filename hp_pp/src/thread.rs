@@ -107,7 +107,7 @@ impl<'domain> Thread<'domain> {
         self.domain.barrier.barrier();
 
         // only for hp++, but this doesn't introduce big cost for plain hp.
-        drop(mem::take(&mut self.hps));
+        for _ in self.hps.drain(..) {}
 
         let guarded_ptrs = self.domain.collect_guarded_ptrs(self);
         let not_freed = retireds
@@ -166,8 +166,8 @@ impl<'domain> Drop for Thread<'domain> {
     fn drop(&mut self) {
         // WARNING: Dropping HazardPointer touches available_indices. So available_indices MUST be
         // dropped after hps. For the same reason, Thread::drop MUST NOT acquire HazardPointer.
-        drop(mem::take(&mut self.hps));
-        drop(mem::take(&mut self.available_indices));
+        for _ in self.hps.drain(..) {}
+        for _ in self.available_indices.drain(..) {}
         self.domain.threads.release(self.hazards);
         self.domain.retireds.push(mem::take(&mut self.retired));
     }
