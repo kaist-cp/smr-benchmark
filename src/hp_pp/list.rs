@@ -1,4 +1,4 @@
-use super::concurrent_map::ConcurrentMap;
+use crate::hp::concurrent_map::ConcurrentMap;
 
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::mem;
@@ -650,7 +650,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{HHSList, HList, HMList};
-    use crate::hp_pp::concurrent_map;
+    use crate::hp::concurrent_map;
 
     #[test]
     fn smoke_h_list() {
