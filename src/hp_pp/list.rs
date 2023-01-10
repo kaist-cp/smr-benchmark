@@ -100,6 +100,7 @@ where
 
         let mut anchor_next = self.curr;
         let found = loop {
+            crate::traverse();
             if self.curr.is_null() {
                 break false;
             }
@@ -111,6 +112,7 @@ where
                 decompose_ptr(unsafe { &(*self.prev).next }.load(Ordering::Acquire));
             if curr_new_tag & 2 == 2 {
                 // Stopped. Restart from head.
+                crate::restart();
                 return Err(());
             } else if curr_new_base != self.curr {
                 // If link changed but not stopped, retry protecting the new node.
@@ -197,6 +199,7 @@ where
                 },
             )
         } {
+            crate::restart();
             return Err(());
         }
 
@@ -207,6 +210,7 @@ where
     #[inline]
     fn find_harris_michael(&mut self, key: &K) -> Result<bool, ()> {
         loop {
+            crate::traverse();
             debug_assert_eq!(tag(self.curr), 0);
             if self.curr.is_null() {
                 return Ok(false);
@@ -220,6 +224,7 @@ where
             let (curr_new_base, curr_new_tag) = decompose_ptr(prev.load(Ordering::Acquire));
             if curr_new_tag & 2 == 2 {
                 // Stopped. Restart from head.
+                crate::restart();
                 return Err(());
             } else if curr_new_base != self.curr {
                 // If link changed but not stopped, retry protecting the new node.
@@ -268,6 +273,7 @@ where
                         },
                     )
                 } {
+                    crate::restart();
                     return Err(());
                 }
             }
@@ -278,6 +284,7 @@ where
     #[inline]
     fn find_harris_herlihy_shavit(&mut self, key: &K) -> Result<bool, ()> {
         loop {
+            crate::traverse();
             if self.curr.is_null() {
                 return Ok(false);
             }
@@ -290,6 +297,7 @@ where
             let (curr_new_base, curr_new_tag) = decompose_ptr(prev.load(Ordering::Acquire));
             if curr_new_tag & 2 == 2 {
                 // Stopped. Restart from head.
+                crate::restart();
                 return Err(());
             } else if curr_new_base != self.curr {
                 // If link changed but not stopped, retry protecting the new node.
