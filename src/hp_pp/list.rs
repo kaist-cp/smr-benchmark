@@ -5,9 +5,7 @@ use std::mem;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::{ptr, slice};
 
-use hp_pp::{
-    decompose_ptr, light_membarrier, tag, tagged, try_unlink, untagged, HazardPointer, ProtectError,
-};
+use hp_pp::{decompose_ptr, light_membarrier, tag, tagged, try_unlink, untagged, HazardPointer};
 
 #[derive(Debug)]
 pub struct Node<K, V> {
@@ -279,41 +277,34 @@ where
 
     #[inline]
     fn find_harris_herlihy_shavit(&mut self, key: &K) -> Result<bool, ()> {
-        if self.curr.is_null() {
-            return Ok(false);
-        }
-        let mut curr_origin = unsafe { &(*self.prev).next };
-        let mut curr = curr_origin.load(Ordering::Acquire);
-
         loop {
-            if curr.is_null() {
-                self.curr = curr;
+            if self.curr.is_null() {
                 return Ok(false);
             }
 
-            match self.handle.curr_h.try_protect_pp(
-                curr,
-                curr_origin,
-                &|origin| origin,
-                &|origin| tag(origin.load(Ordering::Acquire)) & 2 == 2,
-            ) {
-                Err(ProtectError::Changed(ptr_new)) => {
-                    curr = ptr_new;
-                    continue;
-                }
-                Err(ProtectError::Stopped) => return Err(()),
-                Ok(_) => {}
+            let prev = unsafe { &(*self.prev).next };
+
+            // Inlined version of hp++ protection, without duplicate load
+            self.handle.curr_h.protect_raw(self.curr);
+            light_membarrier();
+            let (curr_new_base, curr_new_tag) = decompose_ptr(prev.load(Ordering::Acquire));
+            if curr_new_tag & 2 == 2 {
+                // Stopped. Restart from head.
+                return Err(());
+            } else if curr_new_base != self.curr {
+                // If link changed but not stopped, retry protecting the new node.
+                self.curr = curr_new_base;
+                continue;
             }
 
-            self.curr = curr;
-            let curr_node = unsafe { &*curr };
+            let curr_node = unsafe { &*self.curr };
 
             match curr_node.key.cmp(key) {
                 Less => {
-                    curr = curr_node.next.load(Ordering::Acquire);
-                    curr_origin = &curr_node.next;
-                    mem::swap(&mut self.prev, &mut self.curr);
+                    self.prev = self.curr;
+                    self.curr = curr_node.next.load(Ordering::Acquire);
                     mem::swap(&mut self.handle.prev_h, &mut self.handle.curr_h);
+                    continue;
                 }
                 Equal => return Ok(tag(curr_node.next.load(Ordering::Relaxed)) == 0),
                 Greater => return Ok(false),
