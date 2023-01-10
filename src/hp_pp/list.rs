@@ -73,7 +73,7 @@ pub struct Cursor<'domain, 'hp, K, V> {
     prev: *mut Node<K, V>, // not &AtomicPtr because we can't construct the cursor out of thin air
     curr: *mut Node<K, V>,
     // `anchor` is used for `find_harris`
-    anchor: Option<*mut Node<K, V>>,
+    anchor: *mut Node<K, V>,
     handle: &'hp mut Handle<'domain>,
 }
 
@@ -82,7 +82,7 @@ impl<'domain, 'hp, K, V> Cursor<'domain, 'hp, K, V> {
         Self {
             prev: head as *const _ as *mut _,
             curr: head.load(Ordering::Acquire),
-            anchor: None,
+            anchor: head as *const _ as *mut _,
             handle,
         }
     }
@@ -116,6 +116,9 @@ where
                 return Err(());
             } else if curr_new_base != self.curr {
                 // If link changed but not stopped, retry protecting the new node.
+                if anchor_next == self.curr {
+                    anchor_next = curr_new_base;
+                }
                 self.curr = curr_new_base;
                 continue;
             }
@@ -131,19 +134,19 @@ where
             if next_tag == 0 {
                 match curr_node.key.cmp(key) {
                     Less => {
-                        self.anchor = None;
-                        self.handle.anchor_h.reset_protection();
+                        self.anchor = self.curr;
+                        anchor_next = next_base;
                         self.prev = self.curr;
                         self.curr = next_base;
-                        anchor_next = next_base;
+                        self.handle.anchor_h.reset_protection();
+                        mem::swap(&mut self.handle.curr_h, &mut self.handle.prev_h);
                     }
                     Equal => break true,
                     Greater => break false,
                 }
             } else {
                 // `next_tag` is dirty, if `anchor` is not set, assign `prev`
-                if self.anchor.is_none() {
-                    self.anchor = Some(self.prev);
+                if self.anchor == self.prev {
                     mem::swap(&mut self.handle.anchor_h, &mut self.handle.prev_h);
                 }
                 self.prev = self.curr;
@@ -154,7 +157,7 @@ where
         };
 
         // If `anchor` and `curr` WERE adjacent, no need to clean up
-        if self.anchor.is_none() || anchor_next == self.curr {
+        if anchor_next == self.curr {
             return Ok(found);
         }
 
@@ -163,7 +166,7 @@ where
             !try_unlink(
                 slice::from_ref(&self.curr),
                 || {
-                    if (&*self.anchor.unwrap())
+                    if (&*self.anchor)
                         .next
                         .compare_exchange(
                             anchor_next,
@@ -180,9 +183,9 @@ where
                                 break;
                             }
                             let node_ref = node.as_ref().unwrap();
-                            let next = untagged(node_ref.next.load(Ordering::Acquire));
+                            let next_base = untagged(node_ref.next.load(Ordering::Acquire));
                             collected.push(node);
-                            node = next;
+                            node = next_base;
                         }
                         Ok(collected)
                     } else {
@@ -199,6 +202,7 @@ where
             return Err(());
         }
 
+        self.prev = self.anchor;
         Ok(found)
     }
 
