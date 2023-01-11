@@ -109,7 +109,7 @@ where
             light_membarrier();
             let (curr_new_base, curr_new_tag) =
                 decompose_ptr(unsafe { &(*self.prev).next }.load(Ordering::Acquire));
-            if curr_new_tag & 2 == 2 {
+            if curr_new_tag == 3 {
                 // Stopped. Restart from head.
                 crate::restart();
                 return Err(());
@@ -220,7 +220,7 @@ where
             self.handle.curr_h.protect_raw(self.curr);
             light_membarrier();
             let (curr_new_base, curr_new_tag) = decompose_ptr(prev.load(Ordering::Acquire));
-            if curr_new_tag & 2 == 2 {
+            if curr_new_tag == 3 {
                 // Stopped. Restart from head.
                 crate::restart();
                 return Err(());
@@ -292,7 +292,7 @@ where
             self.handle.curr_h.protect_raw(self.curr);
             light_membarrier();
             let (curr_new_base, curr_new_tag) = decompose_ptr(prev.load(Ordering::Acquire));
-            if curr_new_tag & 2 == 2 {
+            if curr_new_tag == 3 {
                 // Stopped. Restart from head.
                 crate::restart();
                 return Err(());
