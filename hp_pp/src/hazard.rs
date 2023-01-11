@@ -140,6 +140,11 @@ impl<'domain> HazardPointer<'domain> {
         }
     }
 
+    #[inline]
+    pub fn swap(x: &mut HazardPointer, y: &mut HazardPointer) {
+        mem::swap(&mut x.idx, &mut y.idx);
+    }
+
     /// Copy protection to another hp. Previous protection of `to` is reset.
     /// This is only possible when `to` is scanned after `self`.
     /// Correctness of this is quite subtle, so avoid using it.
