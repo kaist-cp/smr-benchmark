@@ -433,7 +433,6 @@ where
                     }
                 },
                 |node| {
-                    let node = &*node;
                     let left = node.left.load(Ordering::Acquire);
                     let right = node.right.load(Ordering::Acquire);
                     node.left.store(

@@ -46,7 +46,7 @@ pub unsafe fn try_unlink<T, F1, F2>(
 ) -> bool
 where
     F1: FnOnce() -> Result<Vec<*mut T>, ()>,
-    F2: Fn(*mut T),
+    F2: Fn(&T),
 {
     DEFAULT_THREAD.with(|t| {
         t.borrow_mut()
