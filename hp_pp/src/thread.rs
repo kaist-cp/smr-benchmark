@@ -62,7 +62,7 @@ impl<'domain> Thread<'domain> {
     ) -> bool
     where
         F1: FnOnce() -> Result<Vec<*mut T>, ()>,
-        F2: Fn(*mut T),
+        F2: Fn(&T),
     {
         let hps: Vec<_> = links
             .iter()
@@ -83,11 +83,14 @@ impl<'domain> Thread<'domain> {
         }
 
         if let Ok(unlinked_nodes) = do_unlink() {
-            for &ptr in &unlinked_nodes {
-                set_stop(ptr);
-            }
             self.hps.push_back((epoch, hps));
             for &ptr in &unlinked_nodes {
+                // we unlinked them, so no one else can retire them, so we can deref them
+                set_stop(unsafe { &*ptr });
+            }
+            // WARNING: These loops must not be merged because stopping of unlinked nodes
+            // must be announced together.
+            for ptr in unlinked_nodes {
                 unsafe { self.retire(ptr) }
             }
             true
@@ -107,7 +110,7 @@ impl<'domain> Thread<'domain> {
         self.domain.barrier.barrier();
 
         // only for hp++, but this doesn't introduce big cost for plain hp.
-        for _ in self.hps.drain(..) {}
+        self.hps.clear();
 
         let guarded_ptrs = self.domain.collect_guarded_ptrs(self);
         let not_freed = retireds
@@ -166,8 +169,8 @@ impl<'domain> Drop for Thread<'domain> {
     fn drop(&mut self) {
         // WARNING: Dropping HazardPointer touches available_indices. So available_indices MUST be
         // dropped after hps. For the same reason, Thread::drop MUST NOT acquire HazardPointer.
-        for _ in self.hps.drain(..) {}
-        for _ in self.available_indices.drain(..) {}
+        self.hps.clear();
+        self.available_indices.clear();
         self.domain.threads.release(self.hazards);
         self.domain.retireds.push(mem::take(&mut self.retired));
     }

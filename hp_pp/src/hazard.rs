@@ -26,7 +26,7 @@ impl Default for HazardPointer<'static> {
 }
 
 impl<'domain> HazardPointer<'domain> {
-    /// Creat a hazard pointer in the given thread
+    /// Create a hazard pointer in the given thread
     pub fn new(thread: &mut Thread<'domain>) -> Self {
         let idx = thread.acquire();
         Self { thread, idx }
@@ -139,6 +139,18 @@ impl<'domain> HazardPointer<'domain> {
             }
         }
     }
+
+    /// Copy protection to another hp. Previous protection of `to` is reset.
+    /// This is only possible when `to` is scanned after `self`.
+    /// Correctness of this is quite subtle, so avoid using it.
+    /// There are usually better alternative approaches.
+    pub fn copy_to(&mut self, to: &mut HazardPointer) -> Result<(), ()> {
+        if to.idx <= self.idx {
+            return Err(());
+        }
+        to.protect_raw(self.slot().load(Ordering::Relaxed));
+        Ok(())
+    }
 }
 
 impl Drop for HazardPointer<'_> {
@@ -148,16 +160,14 @@ impl Drop for HazardPointer<'_> {
     }
 }
 
-/// Push-only list of thread records
+/// Push-only list of recyclable thread records
 #[derive(Debug)]
 pub(crate) struct ThreadRecords {
     head: AtomicPtr<ThreadRecord>,
 }
 
-/// Single-writer hazard pointer bag.
-/// - push only
-/// - efficient recycling
-/// - No need to use CAS.
+/// Single-writer growable hazard pointer array.
+/// Does not shrink. (Use single-writer doubly linked list? see HP04)
 #[derive(Debug)]
 pub struct ThreadRecord {
     pub(crate) next: *mut ThreadRecord,

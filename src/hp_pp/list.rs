@@ -193,7 +193,6 @@ where
                     }
                 },
                 |node| {
-                    let node = &*node;
                     let next = node.next.load(Ordering::Acquire);
                     node.next.store(tagged(next, 1 | 2), Ordering::Release);
                 },
@@ -267,7 +266,6 @@ where
                             }
                         },
                         |node| {
-                            let node = &*node;
                             let next = node.next.load(Ordering::Acquire);
                             node.next.store(tagged(next, 1 | 2), Ordering::Release);
                         },
@@ -450,7 +448,6 @@ where
                         }
                     },
                     |node| {
-                        let node = &*node;
                         let next = node.next.load(Ordering::Acquire);
                         node.next.store(tagged(next, 1 | 2), Ordering::Release);
                     },
