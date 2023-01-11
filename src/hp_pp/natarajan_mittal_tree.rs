@@ -261,6 +261,67 @@ impl<K, V> Drop for NMTreeMap<K, V> {
     }
 }
 
+impl<K, V> hp_pp::Invalidate for Node<K, V> {
+    fn invalidate(&self) {
+        let left = self.left.load(Ordering::Acquire);
+        let right = self.right.load(Ordering::Acquire);
+        self.left.store(
+            tagged(left, Marks::new(true, true, true).bits),
+            Ordering::Release,
+        );
+        self.right.store(
+            tagged(right, Marks::new(true, true, true).bits),
+            Ordering::Release,
+        );
+    }
+}
+
+struct Unlink<'r, 'domain, 'hp, K, V> {
+    record: &'r SeekRecord<'domain, 'hp, K, V>,
+    target_sibling: *mut Node<K, V>,
+    flag: bool,
+}
+
+impl<'r, 'domain, 'hp, K, V> hp_pp::Unlink<Node<K, V>> for Unlink<'r, 'domain, 'hp, K, V> {
+    fn do_unlink(&self) -> Result<Vec<*mut Node<K, V>>, ()> {
+        let link = tagged(
+            self.target_sibling,
+            Marks::new(false, self.flag, false).bits(),
+        );
+        if self
+            .record
+            .successor_addr()
+            .compare_exchange(
+                self.record.successor,
+                link,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+        {
+            // destroy the subtree of successor except target_sibling
+            let mut stack = vec![self.record.successor];
+            let mut collected = Vec::with_capacity(32);
+
+            while let Some(node) = stack.pop() {
+                let node_addr = untagged(node);
+                if node_addr.is_null() || (node_addr == untagged(self.target_sibling)) {
+                    continue;
+                }
+
+                let node_ref = unsafe { &*node_addr };
+
+                stack.push(node_ref.left.load(Ordering::Relaxed));
+                stack.push(node_ref.right.load(Ordering::Relaxed));
+                collected.push(node_addr);
+            }
+            Ok(collected)
+        } else {
+            Err(())
+        }
+    }
+}
+
 impl<K, V> NMTreeMap<K, V>
 where
     K: Ord + Clone,
@@ -396,56 +457,13 @@ where
         let target_sibling = target_sibling_addr.load(Ordering::Acquire);
         let flag = Marks::from_bits_truncate(tag(target_sibling)).flag();
         let link = tagged(target_sibling, Marks::new(false, flag, false).bits());
+        let unlink = Unlink {
+            record,
+            target_sibling,
+            flag,
+        };
 
-        unsafe {
-            try_unlink(
-                slice::from_ref(&link),
-                || {
-                    if record
-                        .successor_addr()
-                        .compare_exchange(
-                            record.successor,
-                            link,
-                            Ordering::AcqRel,
-                            Ordering::Acquire,
-                        )
-                        .is_ok()
-                    {
-                        // destroy the subtree of successor except target_sibling
-                        let mut stack = vec![record.successor];
-                        let mut collected = Vec::with_capacity(32);
-
-                        while let Some(node) = stack.pop() {
-                            let node_addr = untagged(node);
-                            if node_addr.is_null() || (node_addr == untagged(target_sibling)) {
-                                continue;
-                            }
-
-                            let node_ref = &*node_addr;
-
-                            stack.push(node_ref.left.load(Ordering::Relaxed));
-                            stack.push(node_ref.right.load(Ordering::Relaxed));
-                            collected.push(node_addr);
-                        }
-                        Ok(collected)
-                    } else {
-                        Err(())
-                    }
-                },
-                |node| {
-                    let left = node.left.load(Ordering::Acquire);
-                    let right = node.right.load(Ordering::Acquire);
-                    node.left.store(
-                        tagged(left, Marks::new(true, true, true).bits),
-                        Ordering::Release,
-                    );
-                    node.right.store(
-                        tagged(right, Marks::new(true, true, true).bits),
-                        Ordering::Release,
-                    );
-                },
-            )
-        }
+        unsafe { try_unlink(unlink, slice::from_ref(&link)) }
     }
 
     fn get_inner<'domain, 'hp>(

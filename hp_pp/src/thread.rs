@@ -6,6 +6,7 @@ use crate::domain::Domain;
 use crate::domain::EpochBarrier;
 use crate::hazard::ThreadRecord;
 use crate::retire::Retired;
+use crate::{Invalidate, Unlink};
 use crate::HazardPointer;
 
 pub struct Thread<'domain> {
@@ -54,15 +55,9 @@ impl<'domain> Thread<'domain> {
         }
     }
 
-    pub unsafe fn try_unlink<T, F1, F2>(
-        &mut self,
-        links: &[*mut T],
-        do_unlink: F1,
-        set_stop: F2,
-    ) -> bool
+    pub unsafe fn try_unlink<T>(&mut self, unlink: impl Unlink<T>, links: &[*mut T]) -> bool
     where
-        F1: FnOnce() -> Result<Vec<*mut T>, ()>,
-        F2: Fn(&T),
+        T: Invalidate,
     {
         let hps: Vec<_> = links
             .iter()
@@ -82,11 +77,11 @@ impl<'domain> Thread<'domain> {
             }
         }
 
-        if let Ok(unlinked_nodes) = do_unlink() {
+        if let Ok(unlinked_nodes) = unlink.do_unlink() {
             self.hps.push_back((epoch, hps));
             for &ptr in &unlinked_nodes {
                 // we unlinked them, so no one else can retire them, so we can deref them
-                set_stop(unsafe { &*ptr });
+                unsafe { &*ptr }.invalidate();
             }
             // WARNING: These loops must not be merged because stopping of unlinked nodes
             // must be announced together.

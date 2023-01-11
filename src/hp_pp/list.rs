@@ -85,6 +85,37 @@ impl<'domain, 'hp, K, V> Cursor<'domain, 'hp, K, V> {
     }
 }
 
+impl<K, V> hp_pp::Invalidate for Node<K, V> {
+    fn invalidate(&self) {
+        let next = self.next.load(Ordering::Acquire);
+        self.next.store(tagged(next, 1 | 2), Ordering::Release);
+    }
+}
+
+struct Unlink<'c, 'domain, 'hp, K, V> {
+    cursor: &'c Cursor<'domain, 'hp, K, V>,
+    next_base: *mut Node<K, V>,
+}
+
+impl<'r, 'domain, 'hp, K, V> hp_pp::Unlink<Node<K, V>> for Unlink<'r, 'domain, 'hp, K, V> {
+    fn do_unlink(&self) -> Result<Vec<*mut Node<K, V>>, ()> {
+        let prev = unsafe { &(*self.cursor.prev).next };
+        if prev
+            .compare_exchange(
+                self.cursor.curr,
+                self.next_base,
+                Ordering::Release,
+                Ordering::Relaxed,
+            )
+            .is_ok()
+        {
+            Ok(vec![self.cursor.curr])
+        } else {
+            Err(())
+        }
+    }
+}
+
 impl<'domain, 'hp, K, V> Cursor<'domain, 'hp, K, V>
 where
     K: Ord,
@@ -92,6 +123,8 @@ where
     /// Clean up a chain of logically removed nodes in each traversal.
     #[inline]
     fn find_harris(&mut self, key: &K) -> Result<bool, ()> {
+        todo!()
+        /*
         // Finding phase
         // - cursor.curr: first unmarked node w/ key >= search key (4)
         // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
@@ -162,40 +195,28 @@ where
 
         // cleanup marked nodes between anchor and curr
         if unsafe {
-            !try_unlink(
-                slice::from_ref(&self.curr),
-                || {
-                    if (&*self.anchor)
-                        .next
-                        .compare_exchange(
-                            anchor_next,
-                            self.curr,
-                            Ordering::Release,
-                            Ordering::Relaxed,
-                        )
-                        .is_ok()
-                    {
-                        let mut collected = Vec::with_capacity(16);
-                        let mut node = anchor_next;
-                        loop {
-                            if untagged(node) == self.curr {
-                                break;
-                            }
-                            let node_ref = node.as_ref().unwrap();
-                            let next_base = untagged(node_ref.next.load(Ordering::Acquire));
-                            collected.push(node);
-                            node = next_base;
+            !try_unlink(slice::from_ref(&self.curr), || {
+                if (&*self.anchor)
+                    .next
+                    .compare_exchange(anchor_next, self.curr, Ordering::Release, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    let mut collected = Vec::with_capacity(16);
+                    let mut node = anchor_next;
+                    loop {
+                        if untagged(node) == self.curr {
+                            break;
                         }
-                        Ok(collected)
-                    } else {
-                        Err(())
+                        let node_ref = node.as_ref().unwrap();
+                        let next_base = untagged(node_ref.next.load(Ordering::Acquire));
+                        collected.push(node);
+                        node = next_base;
                     }
-                },
-                |node| {
-                    let next = node.next.load(Ordering::Acquire);
-                    node.next.store(tagged(next, 1 | 2), Ordering::Release);
-                },
-            )
+                    Ok(collected)
+                } else {
+                    Err(())
+                }
+            })
         } {
             crate::restart();
             return Err(());
@@ -203,6 +224,7 @@ where
 
         self.prev = self.anchor;
         Ok(found)
+        */
     }
 
     #[inline]
@@ -246,30 +268,11 @@ where
                 }
             } else {
                 let links = slice::from_ref(&next_base);
-                if unsafe {
-                    !try_unlink(
-                        links,
-                        || {
-                            if prev
-                                .compare_exchange(
-                                    self.curr,
-                                    next_base,
-                                    Ordering::Release,
-                                    Ordering::Relaxed,
-                                )
-                                .is_ok()
-                            {
-                                Ok(vec![self.curr])
-                            } else {
-                                Err(())
-                            }
-                        },
-                        |node| {
-                            let next = node.next.load(Ordering::Acquire);
-                            node.next.store(tagged(next, 1 | 2), Ordering::Release);
-                        },
-                    )
-                } {
+                let unlink = Unlink {
+                    cursor: self,
+                    next_base,
+                };
+                if unsafe { !try_unlink(unlink, links) } {
                     crate::restart();
                     return Err(());
                 }
@@ -425,33 +428,12 @@ where
                 continue;
             }
 
-            let prev = unsafe { &(*cursor.prev).next };
-
             let links = slice::from_ref(&next);
-            unsafe {
-                try_unlink(
-                    links,
-                    || {
-                        if prev
-                            .compare_exchange(
-                                cursor.curr,
-                                next,
-                                Ordering::Release,
-                                Ordering::Relaxed,
-                            )
-                            .is_ok()
-                        {
-                            Ok(vec![cursor.curr])
-                        } else {
-                            Err(())
-                        }
-                    },
-                    |node| {
-                        let next = node.next.load(Ordering::Acquire);
-                        node.next.store(tagged(next, 1 | 2), Ordering::Release);
-                    },
-                )
+            let unlink = Unlink {
+                cursor: &cursor,
+                next_base: next,
             };
+            unsafe { try_unlink(unlink, links) };
 
             return Ok(Some(&curr_node.value));
         }

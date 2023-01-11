@@ -22,6 +22,14 @@ thread_local! {
     static DEFAULT_THREAD: RefCell<Box<Thread<'static>>> = RefCell::new(Box::new(Thread::new(&DEFAULT_DOMAIN)));
 }
 
+pub trait Unlink<T> {
+    fn do_unlink(&self) ->Result<Vec<*mut T>, ()>;
+}
+
+pub trait Invalidate {
+    fn invalidate(&self);
+}
+
 /// Retire a pointer, in the thread-local retired pointer bag.
 ///
 /// # Safety
@@ -39,18 +47,16 @@ pub unsafe fn retire<T>(ptr: *mut T) {
 /// # Safety
 /// * The memory blocks in `to_be_unlinked` are no longer modified.
 /// * TODO
-pub unsafe fn try_unlink<T, F1, F2>(
+pub unsafe fn try_unlink<T>(
+    unlink: impl Unlink<T>,
     links: &[*mut T],
-    do_unlink: F1,
-    set_stop: F2,
 ) -> bool
 where
-    F1: FnOnce() -> Result<Vec<*mut T>, ()>,
-    F2: Fn(&T),
+    T: Invalidate,
 {
     DEFAULT_THREAD.with(|t| {
         t.borrow_mut()
-            .try_unlink(links, do_unlink, set_stop)
+            .try_unlink(unlink, links)
     })
 }
 
