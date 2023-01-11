@@ -1,7 +1,6 @@
 use crate::hp::concurrent_map::ConcurrentMap;
 
 use std::cmp::Ordering::{Equal, Greater, Less};
-use std::mem;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::{ptr, slice};
 
@@ -139,7 +138,7 @@ where
                         self.prev = self.curr;
                         self.curr = next_base;
                         self.handle.anchor_h.reset_protection();
-                        mem::swap(&mut self.handle.curr_h, &mut self.handle.prev_h);
+                        HazardPointer::swap(&mut self.handle.curr_h, &mut self.handle.prev_h);
                     }
                     Equal => break true,
                     Greater => break false,
@@ -147,11 +146,11 @@ where
             } else {
                 // `next_tag` is dirty, if `anchor` is not set, assign `prev`
                 if self.anchor == self.prev {
-                    mem::swap(&mut self.handle.anchor_h, &mut self.handle.prev_h);
+                    HazardPointer::swap(&mut self.handle.anchor_h, &mut self.handle.prev_h);
                 }
                 self.prev = self.curr;
                 self.curr = next_base;
-                mem::swap(&mut self.handle.prev_h, &mut self.handle.curr_h);
+                HazardPointer::swap(&mut self.handle.prev_h, &mut self.handle.curr_h);
                 // `curr_h` will be used for protecting on next iteration.
             }
         };
@@ -239,8 +238,8 @@ where
             if next_tag == 0 {
                 match curr_node.key.cmp(key) {
                     Less => {
-                        mem::swap(&mut self.prev, &mut self.curr);
-                        mem::swap(&mut self.handle.prev_h, &mut self.handle.curr_h);
+                        self.prev = self.curr;
+                        HazardPointer::swap(&mut self.handle.prev_h, &mut self.handle.curr_h);
                     }
                     Equal => return Ok(true),
                     Greater => return Ok(false),
@@ -309,7 +308,7 @@ where
                 Less => {
                     self.prev = self.curr;
                     self.curr = curr_node.next.load(Ordering::Acquire);
-                    mem::swap(&mut self.handle.prev_h, &mut self.handle.curr_h);
+                    HazardPointer::swap(&mut self.handle.prev_h, &mut self.handle.curr_h);
                     continue;
                 }
                 Equal => return Ok(tag(curr_node.next.load(Ordering::Relaxed)) == 0),

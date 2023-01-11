@@ -1,7 +1,6 @@
 use super::concurrent_map::ConcurrentMap;
 
 use std::cmp::Ordering::{Equal, Greater, Less};
-use std::mem;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
@@ -116,8 +115,8 @@ where
             if next_tag == 0 {
                 match curr_node.key.cmp(key) {
                     Less => {
-                        mem::swap(&mut self.prev, &mut self.curr);
-                        mem::swap(&mut self.handle.prev_h, &mut self.handle.curr_h);
+                        self.prev = self.curr;
+                        HazardPointer::swap(&mut self.handle.prev_h, &mut self.handle.curr_h);
                     }
                     Equal => return Ok(true),
                     Greater => return Ok(false),
