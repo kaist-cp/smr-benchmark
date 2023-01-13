@@ -88,7 +88,7 @@ pub enum Update<K, V> {
     Insert {
         p: Atomic<Node<K, V>>,
         new_internal: Atomic<Node<K, V>>,
-        leaf: Atomic<Node<K, V>>,
+        l: Atomic<Node<K, V>>,
     },
     Delete {
         gp: Atomic<Node<K, V>>,
@@ -236,7 +236,7 @@ where
     }
 
     pub fn find<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g Node<K, V>> {
-        let mut cursor = Cursor::new(self.root.load(Ordering::Acquire, guard));
+        let mut cursor = Cursor::new(self.root.load(Ordering::Relaxed, guard));
         cursor.search(key, guard);
         let l_node = unsafe { cursor.l.as_ref().unwrap() };
         if l_node.key.eq(key) {
@@ -248,7 +248,7 @@ where
 
     pub fn insert(&self, key: &K, value: V, guard: &Guard) -> bool {
         loop {
-            let mut cursor = Cursor::new(self.root.load(Ordering::Acquire, guard));
+            let mut cursor = Cursor::new(self.root.load(Ordering::Relaxed, guard));
             cursor.search(key, guard);
             let l_node = unsafe { cursor.l.as_ref().unwrap() };
             let p_node = unsafe { cursor.p.as_ref().unwrap() };
@@ -287,7 +287,7 @@ where
                 let op = Update::Insert {
                     p: Atomic::from(cursor.p),
                     new_internal: Atomic::from(new_internal),
-                    leaf: Atomic::from(cursor.l),
+                    l: Atomic::from(cursor.l),
                 };
 
                 let new_pupdate = Owned::new(op)
@@ -297,8 +297,8 @@ where
                 match p_node.update.compare_exchange(
                     cursor.pupdate,
                     new_pupdate,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
+                    Ordering::Release,
+                    Ordering::Relaxed,
                     guard,
                 ) {
                     Ok(_) => {
@@ -326,14 +326,14 @@ where
         }
     }
 
-    pub fn delete<'g>(&'g self, key: &K, guard: &'g Guard) -> bool {
+    pub fn delete<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         loop {
-            let mut cursor = Cursor::new(self.root.load(Ordering::Acquire, guard));
+            let mut cursor = Cursor::new(self.root.load(Ordering::Relaxed, guard));
             cursor.search(key, guard);
 
             if cursor.gp.is_null() {
                 // The tree is empty. There's no more things to do.
-                return false;
+                return None;
             }
 
             let l_node = unsafe { cursor.l.as_ref().unwrap() };
@@ -354,7 +354,7 @@ where
             }
 
             if l_node.key != Key::Fin(key.clone()) {
-                return false;
+                return None;
             }
             if cursor.gpupdate.tag() != UpdateTag::CLEAN.bits() {
                 self.help(cursor.gpupdate, guard);
@@ -375,8 +375,8 @@ where
                     .compare_exchange(
                         cursor.gpupdate,
                         new_update,
-                        Ordering::SeqCst,
-                        Ordering::SeqCst,
+                        Ordering::Release,
+                        Ordering::Relaxed,
                         guard,
                     ) {
                     Ok(_) => {
@@ -385,7 +385,9 @@ where
                                 guard.defer_destroy(cursor.gpupdate);
                             }
                         }
-                        return self.help_delete(new_update, guard);
+                        if self.help_delete(new_update, guard) {
+                            return Some(l_node.value.as_ref().unwrap());
+                        }
                     }
                     Err(e) => {
                         unsafe { drop(new_update.into_owned()) };
@@ -411,15 +413,15 @@ where
         // Precondition: op points to a DInfo record (i.e., it is not ⊥)
         let op_ref = unsafe { op.as_ref().unwrap() };
         if let Update::Delete { gp, p, pupdate, .. } = op_ref {
-            let p_ref = unsafe { p.load(Ordering::Acquire, guard).as_ref().unwrap() };
-            let pupdate_sh = pupdate.load(Ordering::Acquire, guard);
+            let p_ref = unsafe { p.load(Ordering::Relaxed, guard).as_ref().unwrap() };
+            let pupdate_sh = pupdate.load(Ordering::Relaxed, guard);
             let new_op = op.with_tag(UpdateTag::MARK.bits());
 
             match p_ref.update.compare_exchange(
                 pupdate_sh,
                 new_op,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
+                Ordering::Release,
+                Ordering::Acquire,
                 guard,
             ) {
                 Ok(_) => {
@@ -444,8 +446,8 @@ where
                             .compare_exchange(
                                 op.with_tag(UpdateTag::DFLAG.bits()),
                                 op.with_tag(UpdateTag::CLEAN.bits()),
-                                Ordering::SeqCst,
-                                Ordering::SeqCst,
+                                Ordering::Release,
+                                Ordering::Relaxed,
                                 guard,
                             );
                         return false;
@@ -462,9 +464,9 @@ where
         let op_ref = unsafe { op.as_ref().unwrap() };
         if let Update::Delete { gp, p, l, .. } = op_ref {
             // Set other to point to the sibling of the node to which op → l points
-            let gp = gp.load(Ordering::Acquire, guard);
-            let p = p.load(Ordering::Acquire, guard);
-            let l = l.load(Ordering::Acquire, guard);
+            let gp = gp.load(Ordering::Relaxed, guard);
+            let p = p.load(Ordering::Relaxed, guard);
+            let l = l.load(Ordering::Relaxed, guard);
 
             let p_ref = unsafe { p.as_ref().unwrap() };
             let other = if p_ref.right.load(Ordering::Acquire, guard) == l {
@@ -484,8 +486,8 @@ where
             let _ = unsafe { gp.as_ref().unwrap() }.update.compare_exchange(
                 op.with_tag(UpdateTag::DFLAG.bits()),
                 op.with_tag(UpdateTag::CLEAN.bits()),
-                Ordering::SeqCst,
-                Ordering::SeqCst,
+                Ordering::Release,
+                Ordering::Relaxed,
                 guard,
             );
         } else {
@@ -496,27 +498,22 @@ where
     fn help_insert<'g>(&'g self, op: Shared<'g, Update<K, V>>, guard: &'g Guard) {
         // Precondition: op points to an IInfo record (i.e., it is not ⊥)
         let op_ref = unsafe { op.as_ref().unwrap() };
-        if let Update::Insert {
-            p,
-            new_internal,
-            leaf,
-        } = op_ref
-        {
-            let p = p.load(Ordering::Acquire, guard);
-            let new_internal = new_internal.load(Ordering::Acquire, guard);
-            let leaf = leaf.load(Ordering::Acquire, guard);
+        if let Update::Insert { p, new_internal, l } = op_ref {
+            let p = p.load(Ordering::Relaxed, guard);
+            let new_internal = new_internal.load(Ordering::Relaxed, guard);
+            let l = l.load(Ordering::Relaxed, guard);
 
-            if self.cas_child(p, leaf, new_internal, guard).is_ok() {
+            if self.cas_child(p, l, new_internal, guard).is_ok() {
                 unsafe {
-                    guard.defer_destroy(leaf);
+                    guard.defer_destroy(l);
                 };
             }
             let p_ref = unsafe { p.as_ref().unwrap() };
             let _ = p_ref.update.compare_exchange(
                 op.with_tag(UpdateTag::IFLAG.bits()),
                 op.with_tag(UpdateTag::CLEAN.bits()),
-                Ordering::SeqCst,
-                Ordering::SeqCst,
+                Ordering::Release,
+                Ordering::Relaxed,
                 guard,
             );
         } else {
@@ -542,7 +539,7 @@ where
         } else {
             &parent_node.right
         };
-        node_to_cas.compare_exchange(old, new, Ordering::SeqCst, Ordering::SeqCst, guard)
+        node_to_cas.compare_exchange(old, new, Ordering::Release, Ordering::Acquire, guard)
     }
 }
 
@@ -567,11 +564,7 @@ where
     }
 
     fn remove<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
-        let res = self.get(key, guard);
-        if res.is_some() {
-            self.delete(key, guard);
-        }
-        res
+        self.delete(key, guard)
     }
 }
 
