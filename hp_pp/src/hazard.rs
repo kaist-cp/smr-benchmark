@@ -96,23 +96,22 @@ impl<'domain> HazardPointer<'domain> {
     }
 
     /// hp++ protection
-    pub fn try_protect_pp<T, S, F1, F2>(
+    pub fn try_protect_pp<T, S, F>(
         &mut self,
         ptr: *mut T,
         src: &S,
-        src_link: &F1,
-        check_stop: &F2,
+        src_link: &AtomicPtr<T>,
+        check_stop: &F,
     ) -> Result<(), ProtectError<T>>
     where
-        F1: Fn(&S) -> &AtomicPtr<T>,
-        F2: Fn(&S) -> bool,
+        F: Fn(&S) -> bool,
     {
         self.protect_raw(ptr);
         membarrier::light_membarrier();
         if check_stop(src) {
             return Err(ProtectError::Stopped);
         }
-        let ptr_new = untagged(src_link(src).load(Ordering::Acquire));
+        let ptr_new = untagged(src_link.load(Ordering::Acquire));
         if ptr == ptr_new {
             return Ok(());
         }
@@ -120,17 +119,16 @@ impl<'domain> HazardPointer<'domain> {
     }
 
     /// hp++ protection
-    pub fn protect_pp<T, S, F1, F2>(
+    pub fn protect_pp<T, S, F>(
         &mut self,
         src: &S,
-        src_link: &F1,
-        check_stop: &F2,
+        src_link: &AtomicPtr<T>,
+        check_stop: &F,
     ) -> Result<*mut T, ()>
     where
-        F1: Fn(&S) -> &AtomicPtr<T>,
-        F2: Fn(&S) -> bool,
+        F: Fn(&S) -> bool,
     {
-        let mut ptr = src_link(src).load(Ordering::Relaxed);
+        let mut ptr = src_link.load(Ordering::Relaxed);
         loop {
             match self.try_protect_pp(ptr, src, src_link, check_stop) {
                 Err(ProtectError::Stopped) => return Err(()),
