@@ -272,7 +272,7 @@ impl ThreadRecord {
         let mut hp = HazardPointer::new(reader);
         let array = hp.protect(&self.hazptrs);
         ThreadHazardArrayIter {
-            array,
+            array: unsafe { &*array }.as_slice(),
             idx: 0,
             _hp: hp,
         }
@@ -280,7 +280,7 @@ impl ThreadRecord {
 }
 
 pub(crate) struct ThreadHazardArrayIter<'domain> {
-    array: *const HazardArray,
+    array: *const [AtomicPtr<u8>],
     idx: usize,
     _hp: HazardPointer<'domain>,
 }
@@ -290,9 +290,14 @@ impl<'domain> Iterator for ThreadHazardArrayIter<'domain> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let array = unsafe { &*self.array };
-        array.get(self.idx).map(|slot| {
+        for i in self.idx..array.len() {
             self.idx += 1;
-            slot.load(Ordering::Acquire)
-        })
+            let slot = unsafe { array.get_unchecked(i) };
+            let value = slot.load(Ordering::Acquire);
+            if !value.is_null() {
+                return Some(value)
+            }
+        }
+        None
     }
 }

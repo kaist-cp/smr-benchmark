@@ -30,7 +30,6 @@ impl Domain {
         self.threads
             .iter()
             .flat_map(|thread| thread.iter(reclaimer))
-            .filter(|p| !p.is_null())
             .collect()
     }
 }
