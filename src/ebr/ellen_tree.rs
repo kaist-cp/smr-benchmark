@@ -253,13 +253,6 @@ where
             let l_node = unsafe { cursor.l.as_ref().unwrap() };
             let p_node = unsafe { cursor.p.as_ref().unwrap() };
 
-            // Validate cursor: Is l a child of p?
-            if cursor.l != p_node.left.load(Ordering::Acquire, guard)
-                && cursor.l != p_node.right.load(Ordering::Acquire, guard)
-            {
-                continue;
-            }
-
             if l_node.key == *key {
                 return false;
             } else if cursor.pupdate.tag() != UpdateTag::CLEAN.bits() {
@@ -303,9 +296,7 @@ where
                 ) {
                     Ok(_) => {
                         if !cursor.pupdate.is_null() {
-                            unsafe {
-                                guard.defer_destroy(cursor.pupdate);
-                            }
+                            unsafe { guard.defer_destroy(cursor.pupdate) };
                         }
                         self.help_insert(new_pupdate, guard);
                         return true;
@@ -337,21 +328,6 @@ where
             }
 
             let l_node = unsafe { cursor.l.as_ref().unwrap() };
-            let p_node = unsafe { cursor.p.as_ref().unwrap() };
-            let gp_node = unsafe { cursor.gp.as_ref().unwrap() };
-
-            // Validate cursor 1: Is l a child of p?
-            if cursor.l != p_node.left.load(Ordering::Acquire, guard)
-                && cursor.l != p_node.right.load(Ordering::Acquire, guard)
-            {
-                continue;
-            }
-            // Validate cursor 2: Is p a child of gp?
-            if cursor.p != gp_node.left.load(Ordering::Acquire, guard)
-                && cursor.p != gp_node.right.load(Ordering::Acquire, guard)
-            {
-                continue;
-            }
 
             if l_node.key != Key::Fin(key.clone()) {
                 return None;
@@ -381,9 +357,7 @@ where
                     ) {
                     Ok(_) => {
                         if !cursor.gpupdate.is_null() {
-                            unsafe {
-                                guard.defer_destroy(cursor.gpupdate);
-                            }
+                            unsafe { guard.defer_destroy(cursor.gpupdate) };
                         }
                         if self.help_delete(new_update, guard) {
                             return Some(l_node.value.as_ref().unwrap());
@@ -398,6 +372,7 @@ where
         }
     }
 
+    #[inline]
     fn help<'g>(&'g self, update: Shared<'g, Update<K, V>>, guard: &'g Guard) {
         match UpdateTag::from_bits_truncate(update.tag()) {
             UpdateTag::IFLAG => self.help_insert(update, guard),
@@ -426,9 +401,7 @@ where
             ) {
                 Ok(_) => {
                     if !pupdate_sh.is_null() {
-                        unsafe {
-                            guard.defer_destroy(pupdate_sh);
-                        }
+                        unsafe { guard.defer_destroy(pupdate_sh) };
                     }
                     // (prev value) = op → pupdate
                     self.help_marked(new_op, guard);
@@ -504,9 +477,7 @@ where
             let l = l.load(Ordering::Relaxed, guard);
 
             if self.cas_child(p, l, new_internal, guard).is_ok() {
-                unsafe {
-                    guard.defer_destroy(l);
-                };
+                unsafe { guard.defer_destroy(l) };
             }
             let p_ref = unsafe { p.as_ref().unwrap() };
             let _ = p_ref.update.compare_exchange(
