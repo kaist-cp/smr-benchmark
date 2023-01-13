@@ -1,3 +1,28 @@
+//! To apply hazard pointers on EFRBTree, it must have slightly modified implementation.
+//! (according to the authors)
+//!
+//! 1. Search helps Delete operations to perform their dchild CAS steps
+//!   to remove from the tree marked nodes that the Search encounters.
+//!
+//! 2. More specifically, retirement of tree nodes and Info records
+//!   could be performed when an unflag (or backtrack) CAS takes place.
+//!
+//! 3. Search would maintain a hazard pointer to each of the nodes pointed to by
+//!   gp, p, l and l’s sibling, as it traverses its search path.
+//!
+//! 4. Each time an operation O helps another operation O', O first ensures
+//!   that hazard pointers are set to point to the Info record f of O',
+//!   and to the nodes pointed to by f.gp, f.p, f.l and f.l’s sibling.
+//!
+//! 5. This may require storing more information in Info records.
+//!   For example, it might be helpful to store an additional bit indicating
+//!   whether the Info record is retired or not.
+//!   This bit can be updated to True with an additional CAS immediately
+//!   after an unflag or backtrack CAS.
+//!
+//!   * On our implementation, instead of adding another tag bit,
+//!     store null pointer with MARK tag after destroying marked node.
+
 use core::{mem, ptr};
 use std::sync::atomic::{AtomicPtr, Ordering};
 
@@ -188,30 +213,6 @@ where
             handle,
         }
     }
-
-    // #[inline]
-    // fn validate_lower<'g>(&'g self) -> Option<(&'g Node<K, V>, &'g Node<K, V>)> {
-    //     let p_node = unsafe { self.p.as_ref().unwrap() };
-    //     let l_node = unsafe { self.l.as_ref().unwrap() };
-
-    //     // Is l a child of p?
-    //     if self.p_l_dir.src(p_node).load(Ordering::SeqCst) != self.l {
-    //         return None;
-    //     }
-    //     Some((p_node, l_node))
-    // }
-
-    // #[inline]
-    // fn validate_full<'g>(&'g self) -> Option<(&'g Node<K, V>, &'g Node<K, V>, &'g Node<K, V>)> {
-    //     let (p_node, l_node) = some_or!(self.validate_lower(), return None);
-    //     let gp_node = unsafe { self.gp.as_ref().unwrap() };
-
-    //     // Is p a child of gp?
-    //     if self.gp_p_dir.src(gp_node).load(Ordering::SeqCst) != self.p {
-    //         return None;
-    //     }
-    //     Some((gp_node, p_node, l_node))
-    // }
 }
 
 pub struct EFRBTree<K, V> {
@@ -247,13 +248,19 @@ impl<K, V> Drop for EFRBTree<K, V> {
                 stack.push(node_ref.left.load(Ordering::Relaxed));
                 stack.push(node_ref.right.load(Ordering::Relaxed));
                 let update = node_ref.update.load(Ordering::Relaxed);
-                if !untagged(update).is_null() && tag(update) != UpdateTag::CLEAN.bits() && tag(update) != UpdateTag::MARK.bits() {
+                if !untagged(update).is_null()
+                    && tag(update) != UpdateTag::CLEAN.bits()
+                    && tag(update) != UpdateTag::MARK.bits()
+                {
                     drop(Box::from_raw(update));
                 }
                 drop(Box::from_raw(node));
             }
             let update = root.update.load(Ordering::Relaxed);
-            if !untagged(update).is_null() && tag(update) != UpdateTag::CLEAN.bits() && tag(update) != UpdateTag::MARK.bits() {
+            if !untagged(update).is_null()
+                && tag(update) != UpdateTag::CLEAN.bits()
+                && tag(update) != UpdateTag::MARK.bits()
+            {
                 drop(Box::from_raw(update));
             }
         }
@@ -338,17 +345,28 @@ where
                     break;
                 }
             }
-            
-            if tag(cursor.pupdate) == UpdateTag::MARK.bits() && !untagged(cursor.pupdate).is_null() {
-                // Help cleaning marked node on search, and restart.
-                if let Update::Delete { gp, p, l, l_other, .. } = unsafe { &*untagged(cursor.pupdate) } {
-                    let op_gp = gp.load(Ordering::SeqCst);
-                    let op_p = p.load(Ordering::SeqCst);
-                    let op_l = l.load(Ordering::SeqCst);
-                    let op_l_other = l_other.load(Ordering::SeqCst);
-                    // Check whether all required items are protected.
-                    if op_gp == cursor.gp && op_p == cursor.p && ((op_l == cursor.l && op_l_other == cursor.l_other) || (op_l == cursor.l_other && op_l_other == cursor.l)) {
-                        self.help_marked(cursor.pupdate);
+
+            if tag(cursor.pupdate) == UpdateTag::MARK.bits() {
+                // If update is already reclaimed, it will be a null pointer.
+                // Even if the update is null, current searching must be restarted.
+                if !untagged(cursor.pupdate).is_null() {
+                    // Help cleaning marked node on search, and restart.
+                    if let Update::Delete {
+                        gp, p, l, l_other, ..
+                    } = unsafe { &*untagged(cursor.pupdate) }
+                    {
+                        let op_gp = gp.load(Ordering::SeqCst);
+                        let op_p = p.load(Ordering::SeqCst);
+                        let op_l = l.load(Ordering::SeqCst);
+                        let op_l_other = l_other.load(Ordering::SeqCst);
+                        // Check whether all required items are protected.
+                        if op_gp == cursor.gp
+                            && op_p == cursor.p
+                            && ((op_l == cursor.l && op_l_other == cursor.l_other)
+                                || (op_l == cursor.l_other && op_l_other == cursor.l))
+                        {
+                            self.help_marked(cursor.pupdate);
+                        }
                     }
                 }
                 return false;
@@ -419,6 +437,7 @@ where
                 handle.aux_update_h.protect_raw(untagged(new_pupdate));
                 light_membarrier();
 
+                // iflag CAS
                 match p_node.update.compare_exchange(
                     cursor.pupdate,
                     new_pupdate,
@@ -486,6 +505,7 @@ where
                 handle.aux_update_h.protect_raw(untagged(new_update));
                 light_membarrier();
 
+                // dflag CAS
                 match gp_node.update.compare_exchange(
                     cursor.gpupdate,
                     new_update,
@@ -517,21 +537,45 @@ where
     ) {
         handle.aux_update_h.protect_raw(untagged(op));
         light_membarrier();
-        if op == op_src.load(Ordering::SeqCst) && tag(op) != UpdateTag::CLEAN.bits() && tag(op) != UpdateTag::MARK.bits() {
+        if op == op_src.load(Ordering::SeqCst)
+            && tag(op) != UpdateTag::CLEAN.bits()
+            && tag(op) != UpdateTag::MARK.bits()
+        {
             // Protect all nodes in op
             match unsafe { &*untagged(op) } {
-                Update::Insert { p, l, l_other, .. } => {
-                    handle.p_h.protect_raw(p.load(Ordering::SeqCst));
-                    handle.l_h.protect_raw(l.load(Ordering::SeqCst));
-                    handle.l_other_h.protect_raw(l_other.load(Ordering::SeqCst));
+                Update::Insert {
+                    p,
+                    l,
+                    l_other,
+                    new_internal,
+                } => {
+                    handle
+                        .aux_node_h
+                        .protect_raw(new_internal.load(Ordering::SeqCst));
+                    let l = l.load(Ordering::SeqCst);
+                    let l_other = l_other.load(Ordering::SeqCst);
+                    if cursor.p != p.load(Ordering::SeqCst)
+                        || (cursor.l != l && cursor.l != l_other)
+                        || (cursor.l_other != l && cursor.l_other != l_other)
+                    {
+                        return;
+                    }
                 }
-                Update::Delete { gp, p, l, l_other, .. } => {
-                    handle.gp_h.protect_raw(gp.load(Ordering::SeqCst));
-                    handle.p_h.protect_raw(p.load(Ordering::SeqCst));
-                    handle.l_h.protect_raw(l.load(Ordering::SeqCst));
-                    handle.l_other_h.protect_raw(l_other.load(Ordering::SeqCst));
+                Update::Delete {
+                    gp, p, l, l_other, ..
+                } => {
+                    let l = l.load(Ordering::SeqCst);
+                    let l_other = l_other.load(Ordering::SeqCst);
+                    if cursor.gp != gp.load(Ordering::SeqCst)
+                        || cursor.p != p.load(Ordering::SeqCst)
+                        || (cursor.l != l && cursor.l != l_other)
+                        || (cursor.l_other != l && cursor.l_other != l_other)
+                    {
+                        return;
+                    }
                 }
             }
+            light_membarrier();
 
             // NOTE: help_marked is called during `search`.
             match UpdateTag::from_bits_truncate(tag(op)) {
@@ -552,13 +596,7 @@ where
     ) -> bool {
         // Precondition: op points to a DInfo record (i.e., it is not ⊥)
         let op_ref = unsafe { untagged(op).as_ref().unwrap() };
-        if let Update::Delete {
-            gp,
-            p,
-            pupdate,
-            ..
-        } = op_ref
-        {
+        if let Update::Delete { gp, p, pupdate, .. } = op_ref {
             let gp_ptr = gp.load(Ordering::SeqCst);
             let gp_ref = unsafe { gp_ptr.as_ref() }.unwrap();
 
@@ -568,6 +606,7 @@ where
             let pupdate_ptr = pupdate.load(Ordering::SeqCst);
             let new_op = tagged(op, UpdateTag::MARK.bits());
 
+            // mark CAS
             match p_ref.update.compare_exchange(
                 pupdate_ptr,
                 new_op,
@@ -585,12 +624,17 @@ where
                         self.help_marked(new_op);
                         return true;
                     } else {
-                        if gp_ref.update.compare_exchange(
-                            tagged(op, UpdateTag::DFLAG.bits()),
-                            tagged(op, UpdateTag::CLEAN.bits()),
-                            Ordering::SeqCst,
-                            Ordering::SeqCst,
-                        ).is_ok() {
+                        // backtrack CAS
+                        if gp_ref
+                            .update
+                            .compare_exchange(
+                                tagged(op, UpdateTag::DFLAG.bits()),
+                                tagged(op, UpdateTag::CLEAN.bits()),
+                                Ordering::SeqCst,
+                                Ordering::SeqCst,
+                            )
+                            .is_ok()
+                        {
                             unsafe { retire(untagged(op)) };
                         }
                         self.help(current, &p_ref.update, cursor, handle);
@@ -616,16 +660,25 @@ where
             let l = l.load(Ordering::SeqCst);
             let l_other = l_other.load(Ordering::SeqCst);
 
-            // Splice the node to which op → p points out of the tree, replacing it by other
+            // dchild CAS
             let _ = self.cas_child(gp, p, l_other);
-            if unsafe { gp.as_ref().unwrap() }.update.compare_exchange(
-                tagged(op, UpdateTag::DFLAG.bits()),
-                tagged(op, UpdateTag::CLEAN.bits()),
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ).is_ok() {
+
+            // dunflag CAS
+            if unsafe { gp.as_ref().unwrap() }
+                .update
+                .compare_exchange(
+                    tagged(op, UpdateTag::DFLAG.bits()),
+                    tagged(op, UpdateTag::CLEAN.bits()),
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok()
+            {
                 unsafe {
-                    (&*p).update.store(tagged(ptr::null_mut(), UpdateTag::MARK.bits()), Ordering::SeqCst);
+                    (&*p).update.store(
+                        tagged(ptr::null_mut(), UpdateTag::MARK.bits()),
+                        Ordering::SeqCst,
+                    );
                     retire(p);
                     retire(l);
                     retire(untagged(op));
@@ -639,19 +692,32 @@ where
     fn help_insert<'domain, 'hp>(&self, op: *mut Update<K, V>) {
         // Precondition: op points to an IInfo record (i.e., it is not ⊥)
         let op_ref = unsafe { untagged(op).as_ref().unwrap() };
-        if let Update::Insert { p, new_internal, l, .. } = op_ref {
+        if let Update::Insert {
+            p, new_internal, l, ..
+        } = op_ref
+        {
             let p = p.load(Ordering::SeqCst);
             let new_internal = new_internal.load(Ordering::SeqCst);
             let l = l.load(Ordering::SeqCst);
 
-            if self.cas_child(p, l, new_internal).is_ok() && unsafe { p.as_ref().unwrap() }.update.compare_exchange(
-                tagged(op, UpdateTag::IFLAG.bits()),
-                tagged(op, UpdateTag::CLEAN.bits()),
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ).is_ok() {
-                unsafe { retire(l);
-                    retire(untagged(op)); }
+            // ichild CAS
+            let _ = self.cas_child(p, l, new_internal);
+
+            // iunflag CAS
+            if unsafe { p.as_ref().unwrap() }
+                .update
+                .compare_exchange(
+                    tagged(op, UpdateTag::IFLAG.bits()),
+                    tagged(op, UpdateTag::CLEAN.bits()),
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok()
+            {
+                unsafe {
+                    retire(l);
+                    retire(untagged(op));
+                }
             }
         } else {
             panic!("op is not pointing to an IInfo record")
