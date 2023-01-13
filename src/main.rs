@@ -36,6 +36,7 @@ arg_enum! {
         HashMap,
         NMTree,
         BonsaiTree,
+        EFRBTree,
     }
 }
 
@@ -359,6 +360,9 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             DS::BonsaiTree => {
                 bench_map_nr::<ebr::BonsaiTreeMap<String, String>>(config, PrefillStrategy::Random)
             }
+            DS::EFRBTree => {
+                bench_map_nr::<ebr::EFRBTree<String, String>>(config, PrefillStrategy::Random)
+            }
         },
         MM::EBR => match config.ds {
             DS::HList => {
@@ -379,6 +383,10 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 bench_map_ebr::<ebr::NMTreeMap<String, String>, N>(config, PrefillStrategy::Random)
             }
             DS::BonsaiTree => bench_map_ebr::<ebr::BonsaiTreeMap<String, String>, N>(
+                config,
+                PrefillStrategy::Random,
+            ),
+            DS::EFRBTree => bench_map_ebr::<ebr::EFRBTree<String, String>, N>(
                 config,
                 PrefillStrategy::Random,
             ),
@@ -418,6 +426,9 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             }
             DS::NMTree => {
                 bench_map_hp::<hp::NMTreeMap<String, String>, N>(config, PrefillStrategy::Random)
+            }
+            DS::EFRBTree => {
+                bench_map_hp::<hp::EFRBTree<String, String>, N>(config, PrefillStrategy::Random)
             }
             _ => panic!("Unsupported data structure for HP"),
         },
