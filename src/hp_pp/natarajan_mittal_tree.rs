@@ -366,7 +366,7 @@ where
         record
             .handle
             .leaf_h
-            .try_protect_pp(leaf, s_node, &|s_node| &s_node.left, &|s_node| {
+            .try_protect_pp(leaf, s_node, &s_node.left, &|s_node| {
                 tag(s_node.left.load(Ordering::Acquire)) & 2 == 2
             })
             .map_err(|_| ())?;
@@ -394,13 +394,14 @@ where
             mem::swap(&mut record.parent, &mut record.leaf);
             mem::swap(&mut record.handle.parent_h, &mut record.handle.leaf_h);
             let mut curr_base = untagged(curr);
+            let parent_ref = unsafe { &*record.parent };
             loop {
                 match record.handle.leaf_h.try_protect_pp(
                     curr_base,
-                    unsafe { &*record.parent },
-                    &|src| match curr_dir {
-                        Direction::L => &src.left,
-                        Direction::R => &src.right,
+                    parent_ref,
+                    match curr_dir {
+                        Direction::L => &parent_ref.left,
+                        Direction::R => &parent_ref.right,
                     },
                     &|src| {
                         Marks::from_bits_truncate(tag(match curr_dir {
