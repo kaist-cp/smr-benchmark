@@ -254,11 +254,12 @@ impl<'domain> Iterator for ThreadRecordsIter<'domain> {
     type Item = &'domain ThreadRecord;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(cur_ref) = unsafe { self.cur.as_ref() } {
+        loop {
+            let cur_ref = unsafe { self.cur.as_ref()? };
             self.cur = cur_ref.next;
-            Some(cur_ref)
-        } else {
-            None
+            if !cur_ref.available.load(Ordering::Acquire) {
+                return Some(cur_ref);
+            }
         }
     }
 }
