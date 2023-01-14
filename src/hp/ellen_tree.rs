@@ -128,20 +128,12 @@ pub enum Update<K, V> {
 
 impl<K, V> Node<K, V> {
     pub fn internal(key: Key<K>, value: Option<V>, left: Self, right: Self) -> Self {
-        let left_node = Box::into_raw(Box::new(left));
-        let left = AtomicPtr::new(ptr::null_mut());
-        left.store(left_node, Ordering::SeqCst);
-
-        let right_node = Box::into_raw(Box::new(right));
-        let right = AtomicPtr::new(ptr::null_mut());
-        right.store(right_node, Ordering::SeqCst);
-
         Self {
             key,
             value,
             update: AtomicPtr::new(ptr::null_mut()),
-            left,
-            right,
+            left: AtomicPtr::new(Box::into_raw(Box::new(left))),
+            right: AtomicPtr::new(Box::into_raw(Box::new(right))),
         }
     }
 
@@ -157,12 +149,7 @@ impl<K, V> Node<K, V> {
 
     #[inline]
     pub fn is_leaf(&self) -> bool {
-        let left = self.left.load(Ordering::SeqCst);
-        let right = self.right.load(Ordering::SeqCst);
-        assert!(left as usize != 5);
-        assert!(right as usize != 5);
-        assert!(left.is_null() == right.is_null(), "{:p}, {:p}", left, right);
-        left.is_null()
+        self.left.load(Ordering::SeqCst).is_null()
     }
 }
 
@@ -337,8 +324,6 @@ where
     fn search_inner<'domain, 'hp>(&self, key: &K, cursor: &mut Cursor<'domain, 'hp, K, V>) -> bool {
         cursor.l = self.root.load(Ordering::SeqCst);
         cursor.handle.l_h.protect_raw(cursor.l);
-        assert!(cursor.l as usize != 5);
-        light_membarrier();
 
         loop {
             // Check if the parent node is marked.
@@ -406,18 +391,15 @@ where
                 cursor.l = l_src.load(Ordering::SeqCst);
                 cursor.handle.l_h.protect_raw(cursor.l);
                 light_membarrier();
-                if cursor.l != l_src.load(Ordering::SeqCst)
-                    || cursor.l.is_null()
-                {
-                    return false;
+                if cursor.l != l_src.load(Ordering::SeqCst) || cursor.l.is_null() {
+                    continue;
                 }
                 cursor.l_other = l_other_src.load(Ordering::SeqCst);
                 cursor.handle.l_other_h.protect_raw(cursor.l_other);
                 light_membarrier();
-                if cursor.l_other != l_other_src.load(Ordering::SeqCst)
-                    || cursor.l_other.is_null()
+                if cursor.l_other != l_other_src.load(Ordering::SeqCst) || cursor.l_other.is_null()
                 {
-                    return false;
+                    continue;
                 }
                 break;
             }
@@ -457,9 +439,6 @@ where
             let p_node = unsafe { &*cursor.p };
             let l_node = unsafe { &*cursor.l };
 
-            assert!(!cursor.l.is_null() && cursor.l as usize != 5);
-            assert!(!cursor.l_other.is_null() && cursor.l_other as usize != 5);
-
             if l_node.key == *key {
                 return false;
             } else if tag(cursor.pupdate) != UpdateTag::CLEAN.bits() {
@@ -483,21 +462,11 @@ where
                     right,
                 )));
 
-                let p_ptr = AtomicPtr::new(ptr::null_mut());
-                let new_internal_ptr = AtomicPtr::new(ptr::null_mut());
-                let l_ptr = AtomicPtr::new(ptr::null_mut());
-                let l_other_ptr = AtomicPtr::new(ptr::null_mut());
-
-                p_ptr.store(cursor.p, Ordering::SeqCst);
-                new_internal_ptr.store(new_internal, Ordering::SeqCst);
-                l_ptr.store(cursor.l, Ordering::SeqCst);
-                l_other_ptr.store(cursor.l_other, Ordering::SeqCst);
-
                 let op = Update::Insert {
-                    p: p_ptr,
-                    new_internal: new_internal_ptr,
-                    l: l_ptr,
-                    l_other: l_other_ptr,
+                    p: AtomicPtr::new(cursor.p),
+                    new_internal: AtomicPtr::new(new_internal),
+                    l: AtomicPtr::new(cursor.l),
+                    l_other: AtomicPtr::new(cursor.l_other),
                 };
 
                 let new_pupdate = tagged(Box::into_raw(Box::new(op)), UpdateTag::IFLAG.bits());
@@ -563,24 +532,12 @@ where
             } else if tag(cursor.pupdate) != UpdateTag::CLEAN.bits() {
                 self.help(cursor.pupdate, &p_node.update, &cursor, handle);
             } else {
-                let gp = AtomicPtr::new(ptr::null_mut());
-                let p = AtomicPtr::new(ptr::null_mut());
-                let l = AtomicPtr::new(ptr::null_mut());
-                let l_other = AtomicPtr::new(ptr::null_mut());
-                let pupdate = AtomicPtr::new(ptr::null_mut());
-
-                gp.store(cursor.gp, Ordering::SeqCst);
-                p.store(cursor.p, Ordering::SeqCst);
-                l.store(cursor.l, Ordering::SeqCst);
-                l_other.store(cursor.l_other, Ordering::SeqCst);
-                pupdate.store(cursor.pupdate, Ordering::SeqCst);
-
                 let op = Update::Delete {
-                    gp,
-                    p,
-                    l,
-                    l_other,
-                    pupdate,
+                    gp: AtomicPtr::new(cursor.gp),
+                    p: AtomicPtr::new(cursor.p),
+                    l: AtomicPtr::new(cursor.l),
+                    l_other: AtomicPtr::new(cursor.l_other),
+                    pupdate: AtomicPtr::new(cursor.pupdate),
                 };
                 let new_update = tagged(Box::into_raw(Box::new(op)), UpdateTag::DFLAG.bits());
                 handle.aux_update_h.protect_raw(untagged(new_update));
@@ -813,7 +770,6 @@ where
     ) -> Result<*mut Node<K, V>, *mut Node<K, V>> {
         // Precondition: parent points to an Internal node and new points to a Node (i.e., neither is ⊥)
         // This routine tries to change one of the child fields of the node that parent points to from old to new.
-        assert!(!new.is_null() && new as usize != 5);
         let new_node = unsafe { new.as_ref().unwrap() };
         let parent_node = unsafe { parent.as_ref().unwrap() };
 
