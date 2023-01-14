@@ -32,10 +32,10 @@ use super::concurrent_map::ConcurrentMap;
 
 bitflags! {
     struct UpdateTag: usize {
-        const CLEAN = 0usize;
-        const DFLAG = 1usize;
-        const IFLAG = 2usize;
-        const MARK = 3usize;
+        const CLEAN = 0b00;
+        const DFLAG = 0b01;
+        const IFLAG = 0b10;
+        const MARK = 0b11;
     }
 }
 
@@ -128,12 +128,20 @@ pub enum Update<K, V> {
 
 impl<K, V> Node<K, V> {
     pub fn internal(key: Key<K>, value: Option<V>, left: Self, right: Self) -> Self {
+        let left_node = Box::into_raw(Box::new(left));
+        let left = AtomicPtr::new(ptr::null_mut());
+        left.store(left_node, Ordering::SeqCst);
+
+        let right_node = Box::into_raw(Box::new(right));
+        let right = AtomicPtr::new(ptr::null_mut());
+        right.store(right_node, Ordering::SeqCst);
+
         Self {
             key,
             value,
             update: AtomicPtr::new(ptr::null_mut()),
-            left: AtomicPtr::new(Box::into_raw(Box::new(left))),
-            right: AtomicPtr::new(Box::into_raw(Box::new(right))),
+            left,
+            right,
         }
     }
 
@@ -149,7 +157,12 @@ impl<K, V> Node<K, V> {
 
     #[inline]
     pub fn is_leaf(&self) -> bool {
-        self.left.load(Ordering::Acquire).is_null()
+        let left = self.left.load(Ordering::SeqCst);
+        let right = self.right.load(Ordering::SeqCst);
+        assert!(left as usize != 5);
+        assert!(right as usize != 5);
+        assert!(left.is_null() == right.is_null(), "{:p}, {:p}", left, right);
+        left.is_null()
     }
 }
 
@@ -160,7 +173,9 @@ pub struct Handle<'domain> {
     l_other_h: HazardPointer<'domain>,
     pupdate_h: HazardPointer<'domain>,
     gpupdate_h: HazardPointer<'domain>,
+    // Used for protecting new updates and updates from other nodes to help
     aux_update_h: HazardPointer<'domain>,
+    // Used for protecting a new node of insertion
     aux_node_h: HazardPointer<'domain>,
 }
 
@@ -184,6 +199,17 @@ impl<'domain> Handle<'domain> {
     #[inline]
     fn launder<'hp1, 'hp2>(&'hp1 mut self) -> &'hp2 mut Self {
         unsafe { core::mem::transmute(self) }
+    }
+
+    fn release(&mut self) {
+        self.gp_h.reset_protection();
+        self.p_h.reset_protection();
+        self.l_h.reset_protection();
+        self.l_other_h.reset_protection();
+        self.pupdate_h.reset_protection();
+        self.gpupdate_h.reset_protection();
+        self.aux_update_h.reset_protection();
+        self.aux_node_h.reset_protection();
     }
 }
 
@@ -213,6 +239,16 @@ where
             handle,
         }
     }
+
+    fn reset(&mut self) {
+        self.gp = ptr::null_mut();
+        self.p = ptr::null_mut();
+        self.l = ptr::null_mut();
+        self.l_other = ptr::null_mut();
+        self.pupdate = ptr::null_mut();
+        self.gpupdate = ptr::null_mut();
+        self.handle.release();
+    }
 }
 
 pub struct EFRBTree<K, V> {
@@ -232,10 +268,10 @@ where
 impl<K, V> Drop for EFRBTree<K, V> {
     fn drop(&mut self) {
         unsafe {
-            let root = Box::from_raw(self.root.load(Ordering::Relaxed));
+            let root = Box::from_raw(self.root.load(Ordering::SeqCst));
             let mut stack = vec![
-                root.left.load(Ordering::Relaxed),
-                root.right.load(Ordering::Relaxed),
+                root.left.load(Ordering::SeqCst),
+                root.right.load(Ordering::SeqCst),
             ];
 
             while let Some(node) = stack.pop() {
@@ -245,9 +281,9 @@ impl<K, V> Drop for EFRBTree<K, V> {
 
                 let node_ref = &*node;
 
-                stack.push(node_ref.left.load(Ordering::Relaxed));
-                stack.push(node_ref.right.load(Ordering::Relaxed));
-                let update = node_ref.update.load(Ordering::Relaxed);
+                stack.push(node_ref.left.load(Ordering::SeqCst));
+                stack.push(node_ref.right.load(Ordering::SeqCst));
+                let update = node_ref.update.load(Ordering::SeqCst);
                 if !untagged(update).is_null()
                     && tag(update) != UpdateTag::CLEAN.bits()
                     && tag(update) != UpdateTag::MARK.bits()
@@ -256,7 +292,7 @@ impl<K, V> Drop for EFRBTree<K, V> {
                 }
                 drop(Box::from_raw(node));
             }
-            let update = root.update.load(Ordering::Relaxed);
+            let update = root.update.load(Ordering::SeqCst);
             if !untagged(update).is_null()
                 && tag(update) != UpdateTag::CLEAN.bits()
                 && tag(update) != UpdateTag::MARK.bits()
@@ -273,14 +309,16 @@ where
     V: Clone,
 {
     pub fn new() -> Self {
-        Self {
-            root: AtomicPtr::new(Box::into_raw(Box::new(Node::internal(
-                Key::Inf2,
-                None,
-                Node::leaf(Key::Inf1, None),
-                Node::leaf(Key::Inf2, None),
-            )))),
-        }
+        let root_node = Box::into_raw(Box::new(Node::internal(
+            Key::Inf2,
+            None,
+            Node::leaf(Key::Inf1, None),
+            Node::leaf(Key::Inf2, None),
+        )));
+        let root = AtomicPtr::new(ptr::null_mut());
+        root.store(root_node, Ordering::SeqCst);
+
+        Self { root }
     }
 
     /// Used by Insert, Delete and Find to traverse a branch of the BST.
@@ -297,55 +335,13 @@ where
     ///     - gp → update has contained gpupdate
     #[inline]
     fn search_inner<'domain, 'hp>(&self, key: &K, cursor: &mut Cursor<'domain, 'hp, K, V>) -> bool {
-        cursor.l = self.root.load(Ordering::Relaxed);
+        cursor.l = self.root.load(Ordering::SeqCst);
         cursor.handle.l_h.protect_raw(cursor.l);
+        assert!(cursor.l as usize != 5);
+        light_membarrier();
 
         loop {
-            let l_node = unsafe { cursor.l.as_ref() }.unwrap();
-            if l_node.is_leaf() {
-                return true;
-            }
-            cursor.gp = cursor.p;
-            cursor.p = cursor.l;
-            mem::swap(&mut cursor.handle.gp_h, &mut cursor.handle.p_h);
-            mem::swap(&mut cursor.handle.p_h, &mut cursor.handle.l_h);
-
-            cursor.gpupdate = cursor.pupdate;
-            mem::swap(&mut cursor.handle.gpupdate_h, &mut cursor.handle.pupdate_h);
-
-            // Acquire correct `update` of the parent node. (currently it is l_node)
-            cursor.pupdate = l_node.update.load(Ordering::Acquire);
-            loop {
-                cursor
-                    .handle
-                    .pupdate_h
-                    .protect_raw(untagged(cursor.pupdate));
-                light_membarrier();
-                let new_pupdate = l_node.update.load(Ordering::Acquire);
-                if cursor.pupdate == new_pupdate {
-                    break;
-                }
-                cursor.pupdate = new_pupdate;
-            }
-
-            // Acquire correct next nodes of the leaf.
-            loop {
-                let (l_src, l_other_src) = match l_node.key.cmp(key) {
-                    std::cmp::Ordering::Greater => (&l_node.left, &l_node.right),
-                    _ => (&l_node.right, &l_node.left),
-                };
-                cursor.l = l_src.load(Ordering::Acquire);
-                cursor.l_other = l_other_src.load(Ordering::Acquire);
-                cursor.handle.l_h.protect_raw(cursor.l);
-                cursor.handle.l_other_h.protect_raw(cursor.l_other);
-                light_membarrier();
-                if cursor.l == l_src.load(Ordering::Acquire)
-                    && cursor.l_other == l_other_src.load(Ordering::Acquire)
-                {
-                    break;
-                }
-            }
-
+            // Check if the parent node is marked.
             if tag(cursor.pupdate) == UpdateTag::MARK.bits() {
                 // If update is already reclaimed, it will be a null pointer.
                 // Even if the update is null, current searching must be restarted.
@@ -360,6 +356,8 @@ where
                         let op_l = l.load(Ordering::Relaxed);
                         let op_l_other = l_other.load(Ordering::Relaxed);
                         // Check whether all required items are protected.
+                        // This check is necessary because the operation's nodes
+                        // may be retired by other thread.
                         if op_gp == cursor.gp
                             && op_p == cursor.p
                             && ((op_l == cursor.l && op_l_other == cursor.l_other)
@@ -371,11 +369,69 @@ where
                 }
                 return false;
             }
+
+            let l_node = unsafe { cursor.l.as_ref() }.unwrap();
+            if l_node.is_leaf() {
+                return true;
+            }
+            cursor.gp = cursor.p;
+            cursor.p = cursor.l;
+            mem::swap(&mut cursor.handle.gp_h, &mut cursor.handle.p_h);
+            mem::swap(&mut cursor.handle.p_h, &mut cursor.handle.l_h);
+
+            cursor.gpupdate = cursor.pupdate;
+            mem::swap(&mut cursor.handle.gpupdate_h, &mut cursor.handle.pupdate_h);
+
+            // Load correct `update` of the parent node. (currently it is l_node)
+            cursor.pupdate = l_node.update.load(Ordering::SeqCst);
+            loop {
+                cursor
+                    .handle
+                    .pupdate_h
+                    .protect_raw(untagged(cursor.pupdate));
+                light_membarrier();
+                let new_pupdate = l_node.update.load(Ordering::SeqCst);
+                if cursor.pupdate == new_pupdate {
+                    break;
+                }
+                cursor.pupdate = new_pupdate;
+            }
+
+            // Load correct next nodes of the leaf.
+            loop {
+                let (l_src, l_other_src) = match l_node.key.cmp(key) {
+                    std::cmp::Ordering::Greater => (&l_node.left, &l_node.right),
+                    _ => (&l_node.right, &l_node.left),
+                };
+                cursor.l = l_src.load(Ordering::SeqCst);
+                cursor.handle.l_h.protect_raw(cursor.l);
+                light_membarrier();
+                if cursor.l != l_src.load(Ordering::SeqCst)
+                    || cursor.l.is_null()
+                {
+                    return false;
+                }
+                cursor.l_other = l_other_src.load(Ordering::SeqCst);
+                cursor.handle.l_other_h.protect_raw(cursor.l_other);
+                light_membarrier();
+                if cursor.l_other != l_other_src.load(Ordering::SeqCst)
+                    || cursor.l_other.is_null()
+                {
+                    return false;
+                }
+                break;
+            }
         }
     }
 
     fn search<'domain, 'hp>(&self, key: &K, cursor: &mut Cursor<'domain, 'hp, K, V>) {
-        while !self.search_inner(key, cursor) {}
+        loop {
+            if self.search_inner(key, cursor) {
+                break;
+            } else {
+                cursor.reset();
+            }
+        }
     }
 
     pub fn find<'domain, 'hp>(&self, key: &K, handle: &'hp mut Handle<'domain>) -> Option<&'hp V> {
@@ -401,6 +457,9 @@ where
             let p_node = unsafe { &*cursor.p };
             let l_node = unsafe { &*cursor.l };
 
+            assert!(!cursor.l.is_null() && cursor.l as usize != 5);
+            assert!(!cursor.l_other.is_null() && cursor.l_other as usize != 5);
+
             if l_node.key == *key {
                 return false;
             } else if tag(cursor.pupdate) != UpdateTag::CLEAN.bits() {
@@ -424,11 +483,21 @@ where
                     right,
                 )));
 
+                let p_ptr = AtomicPtr::new(ptr::null_mut());
+                let new_internal_ptr = AtomicPtr::new(ptr::null_mut());
+                let l_ptr = AtomicPtr::new(ptr::null_mut());
+                let l_other_ptr = AtomicPtr::new(ptr::null_mut());
+
+                p_ptr.store(cursor.p, Ordering::SeqCst);
+                new_internal_ptr.store(new_internal, Ordering::SeqCst);
+                l_ptr.store(cursor.l, Ordering::SeqCst);
+                l_other_ptr.store(cursor.l_other, Ordering::SeqCst);
+
                 let op = Update::Insert {
-                    p: AtomicPtr::new(cursor.p),
-                    new_internal: AtomicPtr::new(new_internal),
-                    l: AtomicPtr::new(cursor.l),
-                    l_other: AtomicPtr::new(cursor.l_other),
+                    p: p_ptr,
+                    new_internal: new_internal_ptr,
+                    l: l_ptr,
+                    l_other: l_other_ptr,
                 };
 
                 let new_pupdate = tagged(Box::into_raw(Box::new(op)), UpdateTag::IFLAG.bits());
@@ -441,8 +510,8 @@ where
                 match p_node.update.compare_exchange(
                     cursor.pupdate,
                     new_pupdate,
-                    Ordering::Release,
-                    Ordering::Relaxed,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
                 ) {
                     Ok(_) => {
                         self.help_insert(new_pupdate);
@@ -453,12 +522,12 @@ where
                             let new_pupdate_failed = Box::from_raw(untagged(new_pupdate));
                             if let Update::Insert { new_internal, .. } = *new_pupdate_failed {
                                 let new_internal_failed =
-                                    Box::from_raw(new_internal.load(Ordering::Relaxed));
+                                    Box::from_raw(new_internal.load(Ordering::SeqCst));
                                 drop(Box::from_raw(
-                                    new_internal_failed.left.load(Ordering::Relaxed),
+                                    new_internal_failed.left.load(Ordering::SeqCst),
                                 ));
                                 drop(Box::from_raw(
-                                    new_internal_failed.right.load(Ordering::Relaxed),
+                                    new_internal_failed.right.load(Ordering::SeqCst),
                                 ));
                             }
                         }
@@ -494,12 +563,24 @@ where
             } else if tag(cursor.pupdate) != UpdateTag::CLEAN.bits() {
                 self.help(cursor.pupdate, &p_node.update, &cursor, handle);
             } else {
+                let gp = AtomicPtr::new(ptr::null_mut());
+                let p = AtomicPtr::new(ptr::null_mut());
+                let l = AtomicPtr::new(ptr::null_mut());
+                let l_other = AtomicPtr::new(ptr::null_mut());
+                let pupdate = AtomicPtr::new(ptr::null_mut());
+
+                gp.store(cursor.gp, Ordering::SeqCst);
+                p.store(cursor.p, Ordering::SeqCst);
+                l.store(cursor.l, Ordering::SeqCst);
+                l_other.store(cursor.l_other, Ordering::SeqCst);
+                pupdate.store(cursor.pupdate, Ordering::SeqCst);
+
                 let op = Update::Delete {
-                    gp: AtomicPtr::new(cursor.gp),
-                    p: AtomicPtr::new(cursor.p),
-                    l: AtomicPtr::new(cursor.l),
-                    l_other: AtomicPtr::new(cursor.l_other),
-                    pupdate: AtomicPtr::new(cursor.pupdate),
+                    gp,
+                    p,
+                    l,
+                    l_other,
+                    pupdate,
                 };
                 let new_update = tagged(Box::into_raw(Box::new(op)), UpdateTag::DFLAG.bits());
                 handle.aux_update_h.protect_raw(untagged(new_update));
@@ -509,8 +590,8 @@ where
                 match gp_node.update.compare_exchange(
                     cursor.gpupdate,
                     new_update,
-                    Ordering::Release,
-                    Ordering::Relaxed,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
                 ) {
                     Ok(_) => {
                         if self.help_delete(new_update, &cursor, handle) {
@@ -537,7 +618,7 @@ where
     ) {
         handle.aux_update_h.protect_raw(untagged(op));
         light_membarrier();
-        if op == op_src.load(Ordering::Acquire)
+        if op == op_src.load(Ordering::SeqCst)
             && tag(op) != UpdateTag::CLEAN.bits()
             && tag(op) != UpdateTag::MARK.bits()
         {
@@ -551,10 +632,11 @@ where
                 } => {
                     handle
                         .aux_node_h
-                        .protect_raw(new_internal.load(Ordering::Relaxed));
-                    let l = l.load(Ordering::Relaxed);
-                    let l_other = l_other.load(Ordering::Relaxed);
-                    if cursor.p != p.load(Ordering::Relaxed)
+                        .protect_raw(new_internal.load(Ordering::SeqCst));
+                    light_membarrier();
+                    let l = l.load(Ordering::SeqCst);
+                    let l_other = l_other.load(Ordering::SeqCst);
+                    if cursor.p != p.load(Ordering::SeqCst)
                         || (cursor.l != l && cursor.l != l_other)
                         || (cursor.l_other != l && cursor.l_other != l_other)
                     {
@@ -564,10 +646,10 @@ where
                 Update::Delete {
                     gp, p, l, l_other, ..
                 } => {
-                    let l = l.load(Ordering::Relaxed);
-                    let l_other = l_other.load(Ordering::Relaxed);
-                    if cursor.gp != gp.load(Ordering::Relaxed)
-                        || cursor.p != p.load(Ordering::Relaxed)
+                    let l = l.load(Ordering::SeqCst);
+                    let l_other = l_other.load(Ordering::SeqCst);
+                    if cursor.gp != gp.load(Ordering::SeqCst)
+                        || cursor.p != p.load(Ordering::SeqCst)
                         || (cursor.l != l && cursor.l != l_other)
                         || (cursor.l_other != l && cursor.l_other != l_other)
                     {
@@ -577,7 +659,7 @@ where
             }
             light_membarrier();
 
-            // NOTE: help_marked is called during `search`.
+            // NOTE: help_marked is also called during `search`.
             match UpdateTag::from_bits_truncate(tag(op)) {
                 UpdateTag::IFLAG => self.help_insert(op),
                 UpdateTag::DFLAG => {
@@ -597,21 +679,21 @@ where
         // Precondition: op points to a DInfo record (i.e., it is not ⊥)
         let op_ref = unsafe { untagged(op).as_ref().unwrap() };
         if let Update::Delete { gp, p, pupdate, .. } = op_ref {
-            let gp_ptr = gp.load(Ordering::Relaxed);
+            let gp_ptr = gp.load(Ordering::SeqCst);
             let gp_ref = unsafe { gp_ptr.as_ref() }.unwrap();
 
-            let p_ptr = p.load(Ordering::Relaxed);
+            let p_ptr = p.load(Ordering::SeqCst);
             let p_ref = unsafe { p_ptr.as_ref().unwrap() };
 
-            let pupdate_ptr = pupdate.load(Ordering::Relaxed);
+            let pupdate_ptr = pupdate.load(Ordering::SeqCst);
             let new_op = tagged(op, UpdateTag::MARK.bits());
 
             // mark CAS
             match p_ref.update.compare_exchange(
                 pupdate_ptr,
                 new_op,
-                Ordering::Release,
-                Ordering::Acquire,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
             ) {
                 Ok(_) => {
                     // (prev value) = op → pupdate
@@ -630,8 +712,8 @@ where
                             .compare_exchange(
                                 tagged(op, UpdateTag::DFLAG.bits()),
                                 tagged(op, UpdateTag::CLEAN.bits()),
-                                Ordering::Release,
-                                Ordering::Relaxed,
+                                Ordering::SeqCst,
+                                Ordering::SeqCst,
                             )
                             .is_ok()
                         {
@@ -655,33 +737,32 @@ where
         } = op_ref
         {
             // Set other to point to the sibling of the node to which op → l points
-            let gp = gp.load(Ordering::Relaxed);
-            let p = p.load(Ordering::Relaxed);
-            let l = l.load(Ordering::Relaxed);
-            let l_other = l_other.load(Ordering::Relaxed);
+            let gp = gp.load(Ordering::SeqCst);
+            let p = p.load(Ordering::SeqCst);
+            let l = l.load(Ordering::SeqCst);
+            let l_other = l_other.load(Ordering::SeqCst);
 
             // dchild CAS
             let _ = self.cas_child(gp, p, l_other);
-
             // dunflag CAS
             if unsafe { gp.as_ref().unwrap() }
                 .update
                 .compare_exchange(
                     tagged(op, UpdateTag::DFLAG.bits()),
                     tagged(op, UpdateTag::CLEAN.bits()),
-                    Ordering::Release,
-                    Ordering::Relaxed,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
                 )
                 .is_ok()
             {
                 unsafe {
-                    (&*p).update.store(
+                    let _ = (&*p).update.store(
                         tagged(ptr::null_mut(), UpdateTag::MARK.bits()),
-                        Ordering::Release,
+                        Ordering::SeqCst,
                     );
+                    retire(untagged(op));
                     retire(p);
                     retire(l);
-                    retire(untagged(op));
                 }
             }
         } else {
@@ -696,27 +777,26 @@ where
             p, new_internal, l, ..
         } = op_ref
         {
-            let p = p.load(Ordering::Relaxed);
-            let new_internal = new_internal.load(Ordering::Relaxed);
-            let l = l.load(Ordering::Relaxed);
+            let p = p.load(Ordering::SeqCst);
+            let new_internal = new_internal.load(Ordering::SeqCst);
+            let l = l.load(Ordering::SeqCst);
 
             // ichild CAS
             let _ = self.cas_child(p, l, new_internal);
-
             // iunflag CAS
             if unsafe { p.as_ref().unwrap() }
                 .update
                 .compare_exchange(
                     tagged(op, UpdateTag::IFLAG.bits()),
                     tagged(op, UpdateTag::CLEAN.bits()),
-                    Ordering::Release,
-                    Ordering::Relaxed,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
                 )
                 .is_ok()
             {
                 unsafe {
-                    retire(l);
                     retire(untagged(op));
+                    retire(l);
                 }
             }
         } else {
@@ -733,6 +813,7 @@ where
     ) -> Result<*mut Node<K, V>, *mut Node<K, V>> {
         // Precondition: parent points to an Internal node and new points to a Node (i.e., neither is ⊥)
         // This routine tries to change one of the child fields of the node that parent points to from old to new.
+        assert!(!new.is_null() && new as usize != 5);
         let new_node = unsafe { new.as_ref().unwrap() };
         let parent_node = unsafe { parent.as_ref().unwrap() };
 
@@ -741,7 +822,7 @@ where
         } else {
             &parent_node.right
         };
-        node_to_cas.compare_exchange(old, new, Ordering::Release, Ordering::Acquire)
+        node_to_cas.compare_exchange(old, new, Ordering::SeqCst, Ordering::SeqCst)
     }
 }
 
