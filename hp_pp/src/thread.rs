@@ -6,8 +6,8 @@ use crate::domain::Domain;
 use crate::domain::EpochBarrier;
 use crate::hazard::ThreadRecord;
 use crate::retire::Retired;
-use crate::{Invalidate, Unlink, GLOBAL_GARBAGE_COUNT};
 use crate::HazardPointer;
+use crate::{Invalidate, Unlink};
 
 pub struct Thread<'domain> {
     pub(crate) domain: &'domain Domain,
@@ -16,9 +16,16 @@ pub struct Thread<'domain> {
     pub(crate) available_indices: Vec<usize>,
     // Used for HP++
     // TODO: only 2 entries required
-    pub(crate) hps: VecDeque<(usize, Vec<HazardPointer<'domain>>)>,
+    pub(crate) epoched_hps: VecDeque<(usize, Vec<HazardPointer<'domain>>)>,
+    // Used for HP++. It's the thread-local `retireds` in the paper.
+    // These should be invalidated and added to retireds.
+    pub(crate) unlinkeds: Vec<(
+        Vec<*mut u8>,
+        unsafe fn(*mut u8),
+        Vec<HazardPointer<'domain>>,
+    )>,
     pub(crate) retired: Vec<Retired>,
-    pub(crate) collect_count: usize,
+    pub(crate) count: usize,
 }
 
 impl<'domain> Thread<'domain> {
@@ -27,16 +34,18 @@ impl<'domain> Thread<'domain> {
         Self {
             domain,
             hazards: thread,
-            available_indices: available_indices,
-            hps: VecDeque::new(),
+            available_indices,
+            epoched_hps: VecDeque::new(),
+            unlinkeds: Vec::new(),
             retired: Vec::new(),
-            collect_count: 0,
+            count: 0,
         }
     }
 }
 
 // stuff related to reclamation
 impl<'domain> Thread<'domain> {
+    const COUNTS_BETWEEN_INVALIDATION: usize = 32;
     const COUNTS_BETWEEN_PUSH: usize = 64;
     const COUNTS_BETWEEN_COLLECT: usize = 128;
 
@@ -45,13 +54,13 @@ impl<'domain> Thread<'domain> {
     pub unsafe fn retire<T>(&mut self, ptr: *mut T) {
         GLOBAL_GARBAGE_COUNT.fetch_add(1, Ordering::AcqRel);
         self.retired.push(Retired::new(ptr));
-        if self.retired.len() > Self::COUNTS_BETWEEN_PUSH {
+        let count = self.count.wrapping_add(1);
+        self.count = count;
+        if count % Self::COUNTS_BETWEEN_PUSH == 0 {
             self.domain.retireds.push(mem::take(&mut self.retired))
         }
-
-        let collect_count = self.collect_count.wrapping_add(1);
-        self.collect_count = collect_count;
-        if collect_count % Self::COUNTS_BETWEEN_COLLECT == 0 {
+        // TODO: collecting right after pushing is kinda weird
+        if count % Self::COUNTS_BETWEEN_COLLECT == 0 {
             self.do_reclamation();
         }
     }
@@ -69,30 +78,55 @@ impl<'domain> Thread<'domain> {
             })
             .collect();
 
-        let epoch = self.domain.barrier.read();
-        while let Some(&(old_epoch, _)) = self.hps.front() {
-            if EpochBarrier::check(old_epoch, epoch) {
-                drop(self.hps.pop_front());
-            } else {
-                break;
+        if let Ok(unlinkdes) = unlink.do_unlink() {
+            unsafe fn invalidate<T: Invalidate>(ptr: *mut u8) {
+                T::invalidate(&*(ptr as *mut T))
             }
-        }
+            self.unlinkeds.push((
+                mem::transmute::<Vec<_>, Vec<*mut u8>>(unlinkdes),
+                invalidate::<T>,
+                hps,
+            ));
 
-        if let Ok(unlinked_nodes) = unlink.do_unlink() {
-            self.hps.push_back((epoch, hps));
-            for &ptr in &unlinked_nodes {
-                // we unlinked them, so no one else can retire them, so we can deref them
-                unsafe { &*ptr }.invalidate();
+            let count = self.count.wrapping_add(1);
+            self.count = count;
+            if count % Self::COUNTS_BETWEEN_INVALIDATION == 0 {
+                self.do_invalidation()
             }
-            // WARNING: These loops must not be merged because stopping of unlinked nodes
-            // must be announced together.
-            for ptr in unlinked_nodes {
-                unsafe { self.retire(ptr) }
+            if count % Self::COUNTS_BETWEEN_COLLECT == 0 {
+                self.do_reclamation();
             }
             true
         } else {
             drop(hps);
             false
+        }
+    }
+
+    pub(crate) fn do_invalidation(&mut self) {
+        let unlinkeds = mem::take(&mut self.unlinkeds);
+        let mut hps = Vec::with_capacity(2 * Self::COUNTS_BETWEEN_INVALIDATION);
+        let mut invalidateds = Vec::with_capacity(2 * Self::COUNTS_BETWEEN_INVALIDATION);
+        for (rs, invalidate, mut h) in unlinkeds {
+            for r in rs {
+                unsafe { invalidate(r) };
+                invalidateds.push(r);
+            }
+            hps.append(&mut h);
+        }
+
+        let epoch = self.domain.barrier.read();
+        while let Some(&(old_epoch, _)) = self.epoched_hps.front() {
+            if EpochBarrier::check(old_epoch, epoch) {
+                drop(self.epoched_hps.pop_front());
+            } else {
+                break;
+            }
+        }
+        self.epoched_hps.push_back((epoch, hps));
+
+        for r in invalidateds {
+            self.retired.push(Retired::new(r));
         }
     }
 
@@ -107,7 +141,7 @@ impl<'domain> Thread<'domain> {
         self.domain.barrier.barrier();
 
         // only for hp++, but this doesn't introduce big cost for plain hp.
-        self.hps.clear();
+        self.epoched_hps.clear();
 
         let guarded_ptrs = self.domain.collect_guarded_ptrs(self);
         let not_freed: Vec<Retired> = retireds
@@ -167,7 +201,7 @@ impl<'domain> Drop for Thread<'domain> {
     fn drop(&mut self) {
         // WARNING: Dropping HazardPointer touches available_indices. So available_indices MUST be
         // dropped after hps. For the same reason, Thread::drop MUST NOT acquire HazardPointer.
-        self.hps.clear();
+        self.epoched_hps.clear();
         self.available_indices.clear();
         self.domain.threads.release(self.hazards);
         self.domain.retireds.push(mem::take(&mut self.retired));
@@ -180,9 +214,9 @@ impl core::fmt::Debug for Thread<'_> {
             .field("domain", &(&self.domain as *const _))
             .field("hazards", &(&self.hazards as *const _))
             .field("available_indices", &self.available_indices.as_ptr())
-            .field("hps", &self.hps)
+            .field("epoched_hps", &self.epoched_hps)
             .field("retired", &format!("[...; {}]", self.retired.len()))
-            .field("collect_count", &self.collect_count)
+            .field("count", &self.count)
             .finish()
     }
 }
