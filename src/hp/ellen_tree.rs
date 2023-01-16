@@ -116,12 +116,16 @@ pub enum Update<K, V> {
         p: *mut Node<K, V>,
         new_internal: *mut Node<K, V>,
         l: *mut Node<K, V>,
+        l_other: *mut Node<K, V>,
+        ptr_to_cas: *const AtomicPtr<Node<K, V>>,
     },
     Delete {
         gp: *mut Node<K, V>,
         p: *mut Node<K, V>,
         l: *mut Node<K, V>,
+        l_other: *mut Node<K, V>,
         pupdate: *mut Update<K, V>,
+        ptr_to_cas: *const AtomicPtr<Node<K, V>>,
     },
 }
 
@@ -148,15 +152,45 @@ impl<K, V> Node<K, V> {
         }
     }
 
+    /// Protect correct `update` of the node.
     #[inline]
-    /// NOTE: Use this function if `curr` is guaranteed to be one of the leaves.
-    pub fn load_opposite(&self, curr: *mut Node<K, V>) -> *mut Node<K, V> {
-        let left = self.left.load(Ordering::Acquire);
-        if left == curr {
-            self.right.load(Ordering::Acquire)
-        } else {
-            left
+    fn protect_update<'domain>(&self, hazptr: &mut HazardPointer<'domain>) -> *mut Update<K, V> {
+        let mut update = self.update.load(Ordering::Acquire);
+        loop {
+            hazptr.protect_raw(untagged(update));
+            light_membarrier();
+            let new_update = self.update.load(Ordering::Acquire);
+            if update == new_update {
+                break;
+            }
+            update = new_update;
         }
+        update
+    }
+
+    #[inline]
+    fn protect_next<'domain>(
+        &self,
+        left_h: &mut HazardPointer<'domain>,
+        right_h: &mut HazardPointer<'domain>,
+    ) -> (*mut Self, *mut Self) {
+        // Load correct next nodes of the leaf.
+        let mut left = self.left.load(Ordering::Acquire);
+        let mut right = self.right.load(Ordering::Acquire);
+        loop {
+            left_h.protect_raw(left);
+            right_h.protect_raw(right);
+            light_membarrier();
+            let new_left = self.left.load(Ordering::Acquire);
+            let new_right = self.right.load(Ordering::Acquire);
+            if left == new_left && right == new_right {
+                break;
+            }
+            // Somebody `inserted an internal` or `deleted (leaf, parent) pair`.
+            left = new_left;
+            right = new_right;
+        }
+        (left, right)
     }
 }
 
@@ -245,9 +279,10 @@ where
     }
 
     #[inline]
-    fn validate_lower<'g>(&'g self) -> Option<(&'g Node<K, V>, &'g Node<K, V>)> {
+    fn validate_lower<'g>(&'g self) -> Option<(&'g Node<K, V>, &'g Node<K, V>, &'g Node<K, V>)> {
         let p_node = unsafe { self.p.as_ref().unwrap() };
         let l_node = unsafe { self.l.as_ref().unwrap() };
+        let l_other_node = unsafe { self.l_other.as_ref().unwrap() };
 
         let left = p_node.left.load(Ordering::Acquire);
         let right = p_node.right.load(Ordering::Acquire);
@@ -256,12 +291,19 @@ where
         if (self.l != left && self.l != right) || (self.l_other != left && self.l_other != right) {
             return None;
         }
-        Some((p_node, l_node))
+        Some((p_node, l_node, l_other_node))
     }
 
     #[inline]
-    fn validate_full<'g>(&'g self) -> Option<(&'g Node<K, V>, &'g Node<K, V>, &'g Node<K, V>)> {
-        let (p_node, l_node) = some_or!(self.validate_lower(), return None);
+    fn validate_full<'g>(
+        &'g self,
+    ) -> Option<(
+        &'g Node<K, V>,
+        &'g Node<K, V>,
+        &'g Node<K, V>,
+        &'g Node<K, V>,
+    )> {
+        let (p_node, l_node, l_other_node) = some_or!(self.validate_lower(), return None);
         let gp_node = unsafe { self.gp.as_ref().unwrap() };
 
         // Is p a child of gp?
@@ -270,7 +312,7 @@ where
         {
             return None;
         }
-        Some((gp_node, p_node, l_node))
+        Some((gp_node, p_node, l_node, l_other_node))
     }
 }
 
@@ -373,76 +415,27 @@ where
             cursor.gpupdate = cursor.pupdate;
             mem::swap(&mut cursor.handle.gpupdate_h, &mut cursor.handle.pupdate_h);
 
-            // Protect correct `update` of the parent node. (currently it is l_node)
-            cursor.pupdate = l_node.update.load(Ordering::Acquire);
-            loop {
-                cursor
-                    .handle
-                    .pupdate_h
-                    .protect_raw(untagged(cursor.pupdate));
-                light_membarrier();
-                let new_pupdate = l_node.update.load(Ordering::Acquire);
-                if cursor.pupdate == new_pupdate {
-                    break;
-                }
-                cursor.pupdate = new_pupdate;
+            cursor.pupdate = l_node.protect_update(&mut cursor.handle.pupdate_h);
+            (cursor.l, cursor.l_other) =
+                l_node.protect_next(&mut cursor.handle.l_h, &mut cursor.handle.l_other_h);
+            if l_node.key.cmp(key) != std::cmp::Ordering::Greater {
+                mem::swap(&mut cursor.l, &mut cursor.l_other);
+                mem::swap(&mut cursor.handle.l_h, &mut cursor.handle.l_other_h);
             }
 
             // Check if the parent node is marked.
-            if tag(cursor.pupdate) == UpdateTag::MARK.bits() {
+            // pupdate must be loaded again here. This is because if the current thread is stopped
+            // after protecting pupdate but before protecting next nodes, and another thread
+            // mark & reclaimed p and l, then protected l must be an invalid memory location.
+            // (and it will pass validation.)
+            let pupdate = l_node.protect_update(&mut cursor.handle.aux_update_h);
+            if tag(pupdate) == UpdateTag::MARK.bits() {
                 // If update is already reclaimed, it will be a null pointer.
                 // Even if the update is null, current searching must be restarted.
-                if !untagged(cursor.pupdate).is_null() {
+                if !untagged(pupdate).is_null() {
                     // Help cleaning marked node on search, and restart.
-                    if let &Update::Delete { gp, p, l, .. } = unsafe { &*untagged(cursor.pupdate) }
-                    {
-                        cursor.handle.gp_h.protect_raw(gp);
-                        cursor.handle.p_h.protect_raw(p);
-                        cursor.handle.l_h.protect_raw(l);
-                        cursor
-                            .handle
-                            .l_other_h
-                            .protect_raw(unsafe { &*p }.load_opposite(l));
-                        light_membarrier();
-                    }
-                    if cursor.pupdate == l_node.update.load(Ordering::Acquire) {
-                        self.help_marked(cursor.pupdate);
-                    }
+                    self.help_marked(pupdate);
                 }
-                return false;
-            }
-            light_membarrier();
-
-            // Load correct next nodes of the leaf.
-            loop {
-                let (l_src, l_other_src) = match l_node.key.cmp(key) {
-                    std::cmp::Ordering::Greater => (&l_node.left, &l_node.right),
-                    _ => (&l_node.right, &l_node.left),
-                };
-                cursor.l = l_src.load(Ordering::Acquire);
-                cursor.handle.l_h.protect_raw(cursor.l);
-                light_membarrier();
-                if cursor.l != l_src.load(Ordering::Acquire) {
-                    // Somebody `inserted an internal` or `deleted (leaf, parent) pair`.
-                    continue;
-                }
-                cursor.l_other = l_other_src.load(Ordering::Acquire);
-                cursor.handle.l_other_h.protect_raw(cursor.l_other);
-                light_membarrier();
-                if cursor.l_other != l_other_src.load(Ordering::Acquire) {
-                    continue;
-                }
-                if cursor.l == l_src.load(Ordering::Acquire)
-                    && cursor.l_other == l_other_src.load(Ordering::Acquire)
-                {
-                    break;
-                }
-            }
-
-            // Double-check whether the parent is marked or changed.
-            // The protected leaves maybe already relclaimed if right after
-            // we checked a tag of cursor.pupdate, other thread retired the parent and its leaves.
-            if unsafe { &*cursor.p }.update.load(Ordering::Acquire) != cursor.pupdate {
                 return false;
             }
         }
@@ -477,12 +470,12 @@ where
         loop {
             let mut cursor = Cursor::new(handle.launder());
             self.search(key, &mut cursor);
-            let (p_node, l_node) = some_or!(cursor.validate_lower(), continue);
+            let (p_node, l_node, _) = some_or!(cursor.validate_lower(), continue);
 
             if l_node.key == *key {
                 return false;
             } else if tag(cursor.pupdate) != UpdateTag::CLEAN.bits() {
-                self.help(cursor.pupdate, &p_node.update, &cursor, handle);
+                self.help(cursor.pupdate, &p_node.update, handle);
             } else {
                 let new = Node::leaf(Key::Fin(key.clone()), Some(value.clone()));
                 let new_sibling = Node::leaf(l_node.key.clone(), l_node.value.clone());
@@ -492,7 +485,7 @@ where
                     _ => (new_sibling, new),
                 };
 
-                let new_internal = Box::into_raw(Box::new(Node::internal(
+                let new_internal = Node::internal(
                     // key field max(k, l → key)
                     right.key.clone(),
                     None,
@@ -500,12 +493,18 @@ where
                     // (the one with the smaller key is the left child)
                     left,
                     right,
-                )));
+                );
+
+                // Original GC-based version tries CAS-CHILD(p, l, new_internal)
+                let ptr_to_cas = unsafe { Self::precalc_ptr_to_cas(p_node, &new_internal) };
+                let new_internal = Box::into_raw(Box::new(new_internal));
 
                 let op = Update::Insert {
                     p: cursor.p,
                     new_internal,
                     l: cursor.l,
+                    l_other: cursor.l_other,
+                    ptr_to_cas,
                 };
 
                 let new_pupdate = tagged(Box::into_raw(Box::new(op)), UpdateTag::IFLAG.bits());
@@ -538,7 +537,7 @@ where
                                 ));
                             }
                         }
-                        self.help(current, &p_node.update, &cursor, handle);
+                        self.help(current, &p_node.update, handle);
                     }
                 }
             }
@@ -558,21 +557,26 @@ where
                 // The tree is empty. There's no more things to do.
                 return None;
             }
-            let (gp_node, p_node, l_node) = some_or!(cursor.validate_full(), continue);
+            let (gp_node, p_node, l_node, l_other_node) =
+                some_or!(cursor.validate_full(), continue);
 
             if l_node.key != Key::Fin(key.clone()) {
                 return None;
             }
             if tag(cursor.gpupdate) != UpdateTag::CLEAN.bits() {
-                self.help(cursor.gpupdate, &gp_node.update, &cursor, handle);
+                self.help(cursor.gpupdate, &gp_node.update, handle);
             } else if tag(cursor.pupdate) != UpdateTag::CLEAN.bits() {
-                self.help(cursor.pupdate, &p_node.update, &cursor, handle);
+                self.help(cursor.pupdate, &p_node.update, handle);
             } else {
+                // Original GC-based version tries CAS-CHILD(gp, p, l_other)
+                let ptr_to_cas = unsafe { Self::precalc_ptr_to_cas(gp_node, l_other_node) };
                 let op = Update::Delete {
                     gp: cursor.gp,
                     p: cursor.p,
                     l: cursor.l,
+                    l_other: cursor.l_other,
                     pupdate: cursor.pupdate,
+                    ptr_to_cas,
                 };
                 let new_update = tagged(Box::into_raw(Box::new(op)), UpdateTag::DFLAG.bits());
                 handle.aux_update_h.protect_raw(untagged(new_update));
@@ -586,14 +590,14 @@ where
                     Ordering::Acquire,
                 ) {
                     Ok(_) => {
-                        if self.help_delete(new_update, &cursor, handle) {
+                        if self.help_delete(new_update, handle) {
                             // SAFETY: dereferencing the value of leaf node is safe until `handle` is dropped.
                             return Some(unsafe { mem::transmute(l_node.value.as_ref().unwrap()) });
                         }
                     }
                     Err(current) => {
                         unsafe { drop(Box::from_raw(untagged(new_update))) };
-                        self.help(current, &gp_node.update, &cursor, handle);
+                        self.help(current, &gp_node.update, handle);
                     }
                 }
             }
@@ -605,7 +609,6 @@ where
         &self,
         op: *mut Update<K, V>,
         op_src: &AtomicPtr<Update<K, V>>,
-        cursor: &Cursor<'domain, 'hp, K, V>,
         handle: &'hp mut Handle<'domain>,
     ) {
         handle.aux_update_h.protect_raw(untagged(op));
@@ -616,45 +619,25 @@ where
         {
             // Protect all nodes in op
             match unsafe { &*untagged(op) } {
-                &Update::Insert { p, l, new_internal } => {
+                &Update::Insert {
+                    p,
+                    l,
+                    l_other,
+                    new_internal,
+                    ..
+                } => {
+                    handle.p_h.protect_raw(p);
+                    handle.l_h.protect_raw(l);
+                    handle.l_other_h.protect_raw(l_other);
                     handle.aux_node_h.protect_raw(new_internal);
-                    if p == cursor.gp {
-                        if l != cursor.p {
-                            handle.l_h.protect_raw(l);
-                        }
-                        handle
-                            .l_other_h
-                            .protect_raw(unsafe { &*p }.load_opposite(l));
-                    } else {
-                        handle.p_h.protect_raw(p);
-                        if l == cursor.l {
-                            handle
-                                .l_other_h
-                                .protect_raw(unsafe { &*p }.load_opposite(l));
-                        } else {
-                            handle.l_h.protect_raw(unsafe { &*p }.load_opposite(l));
-                            handle.l_other_h.protect_raw(l);
-                        }
-                    }
                 }
-                &Update::Delete { gp, p, l, .. } => {
+                &Update::Delete {
+                    gp, p, l, l_other, ..
+                } => {
                     handle.gp_h.protect_raw(gp);
                     handle.p_h.protect_raw(p);
-                    if p == cursor.p {
-                        if l == cursor.l {
-                            handle
-                                .l_other_h
-                                .protect_raw(unsafe { &*p }.load_opposite(l));
-                        } else {
-                            handle.l_h.protect_raw(unsafe { &*p }.load_opposite(l));
-                            handle.l_other_h.protect_raw(l);
-                        }
-                    } else {
-                        handle.l_h.protect_raw(l);
-                        handle
-                            .l_other_h
-                            .protect_raw(unsafe { &*p }.load_opposite(l));
-                    }
+                    handle.l_h.protect_raw(l);
+                    handle.l_other_h.protect_raw(l_other);
                 }
             }
             light_membarrier();
@@ -663,11 +646,11 @@ where
                 return;
             }
 
-            // NOTE: help_marked is also called during `search`.
+            // NOTE: help_marked is called during `search`.
             match UpdateTag::from_bits_truncate(tag(op)) {
                 UpdateTag::IFLAG => self.help_insert(op),
                 UpdateTag::DFLAG => {
-                    let _ = self.help_delete(op, cursor, handle);
+                    let _ = self.help_delete(op, handle);
                 }
                 _ => {}
             }
@@ -677,7 +660,6 @@ where
     fn help_delete<'domain, 'hp>(
         &self,
         op: *mut Update<K, V>,
-        cursor: &Cursor<'domain, 'hp, K, V>,
         handle: &'hp mut Handle<'domain>,
     ) -> bool {
         // Precondition: op points to a DInfo record (i.e., it is not ⊥)
@@ -723,7 +705,7 @@ where
                         {
                             unsafe { retire(untagged(op)) };
                         }
-                        self.help(current, &p_ref.update, cursor, handle);
+                        self.help(current, &p_ref.update, handle);
                         return false;
                     }
                 }
@@ -736,13 +718,21 @@ where
     fn help_marked<'domain, 'hp>(&self, op: *mut Update<K, V>) {
         // Precondition: op points to a DInfo record (i.e., it is not ⊥)
         let op_ref = unsafe { untagged(op).as_ref().unwrap() };
-        if let &Update::Delete { gp, p, l, .. } = op_ref {
-            // Set other to point to the sibling of the node to which op → l points
-            let p_node = unsafe { &*p };
-            let l_other = p_node.load_opposite(l);
+        if let &Update::Delete {
+            gp,
+            p,
+            l,
+            l_other,
+            ptr_to_cas,
+            ..
+        } = op_ref
+        {
+            // On original paper, we set other to point
+            // to the sibling of the node to which op → l points.
+            // But we already have calculated that on DELETE operation.
 
             // dchild CAS
-            let _ = self.cas_child(gp, p, l_other);
+            let _ = Self::cas_child(ptr_to_cas, p, l_other);
             // dunflag CAS
             if unsafe { gp.as_ref().unwrap() }
                 .update
@@ -755,13 +745,13 @@ where
                 .is_ok()
             {
                 unsafe {
-                    let _ = p_node.update.store(
+                    let _ = (&*p).update.store(
                         tagged(ptr::null_mut(), UpdateTag::MARK.bits()),
                         Ordering::Release,
                     );
-                    // retire(untagged(op));
-                    // retire(p);
-                    // retire(l);
+                    retire(untagged(op));
+                    retire(p);
+                    retire(l);
                 }
             }
         } else {
@@ -773,11 +763,15 @@ where
         // Precondition: op points to an IInfo record (i.e., it is not ⊥)
         let op_ref = unsafe { untagged(op).as_ref().unwrap() };
         if let &Update::Insert {
-            p, new_internal, l, ..
+            p,
+            new_internal,
+            l,
+            ptr_to_cas,
+            ..
         } = op_ref
         {
             // ichild CAS
-            let _ = self.cas_child(p, l, new_internal);
+            let _ = Self::cas_child(ptr_to_cas, l, new_internal);
             // iunflag CAS
             if unsafe { p.as_ref().unwrap() }
                 .update
@@ -800,23 +794,26 @@ where
     }
 
     #[inline]
-    fn cas_child<'g>(
-        &'g self,
-        parent: *mut Node<K, V>,
+    unsafe fn precalc_ptr_to_cas(
+        parent: &Node<K, V>,
+        new: &Node<K, V>,
+    ) -> *const AtomicPtr<Node<K, V>> {
+        if new.key < parent.key {
+            &parent.left as *const _
+        } else {
+            &parent.right as *const _
+        }
+    }
+
+    #[inline]
+    fn cas_child(
+        ptr_to_cas: *const AtomicPtr<Node<K, V>>,
         old: *mut Node<K, V>,
         new: *mut Node<K, V>,
     ) -> Result<*mut Node<K, V>, *mut Node<K, V>> {
         // Precondition: parent points to an Internal node and new points to a Node (i.e., neither is ⊥)
         // This routine tries to change one of the child fields of the node that parent points to from old to new.
-        let new_node = unsafe { new.as_ref().unwrap() };
-        let parent_node = unsafe { parent.as_ref().unwrap() };
-
-        let node_to_cas = if new_node.key < parent_node.key {
-            &parent_node.left
-        } else {
-            &parent_node.right
-        };
-        node_to_cas.compare_exchange(old, new, Ordering::Release, Ordering::Acquire)
+        unsafe { &*ptr_to_cas }.compare_exchange(old, new, Ordering::Release, Ordering::Acquire)
     }
 }
 
