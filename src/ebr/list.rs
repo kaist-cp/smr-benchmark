@@ -419,11 +419,11 @@ where
     }
     #[inline]
     fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
-        self.inner.harris_michael_insert(key, value, guard)
+        self.inner.harris_insert(key, value, guard)
     }
     #[inline]
     fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
-        self.inner.harris_michael_remove(key, guard)
+        self.inner.harris_remove(key, guard)
     }
 }
 
