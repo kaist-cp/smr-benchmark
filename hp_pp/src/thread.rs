@@ -202,6 +202,7 @@ impl<'domain> Drop for Thread<'domain> {
         // WARNING: Dropping HazardPointer touches available_indices. So available_indices MUST be
         // dropped after hps. For the same reason, Thread::drop MUST NOT acquire HazardPointer.
         self.epoched_hps.clear();
+        self.unlinkeds.clear();
         self.available_indices.clear();
         self.domain.threads.release(self.hazards);
         self.domain.retireds.push(mem::take(&mut self.retired));
