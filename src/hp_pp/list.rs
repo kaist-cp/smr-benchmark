@@ -2,7 +2,7 @@ use crate::hp::concurrent_map::ConcurrentMap;
 
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::sync::atomic::{AtomicPtr, Ordering};
-use std::{ptr, slice};
+use std::{ptr, slice, mem};
 
 use hp_pp::{decompose_ptr, light_membarrier, tag, tagged, try_unlink, untagged, HazardPointer};
 
@@ -70,7 +70,7 @@ pub struct Cursor<'domain, 'hp, K, V> {
     prev: *mut Node<K, V>, // not &AtomicPtr because we can't construct the cursor out of thin air
     curr: *mut Node<K, V>,
     // `anchor` is used for `find_harris`
-    anchor: *mut Node<K, V>,
+    anchor: Option<(*mut Node<K, V>, *mut Node<K, V>)>,
     handle: &'hp mut Handle<'domain>,
 }
 
@@ -79,7 +79,7 @@ impl<'domain, 'hp, K, V> Cursor<'domain, 'hp, K, V> {
         Self {
             prev: head as *const _ as *mut _,
             curr: head.load(Ordering::Acquire),
-            anchor: head as *const _ as *mut _,
+            anchor: None,
             handle,
         }
     }
@@ -89,6 +89,32 @@ impl<K, V> hp_pp::Invalidate for Node<K, V> {
     fn invalidate(&self) {
         let next = self.next.load(Ordering::Acquire);
         self.next.store(tagged(next, 1 | 2), Ordering::Release);
+    }
+}
+
+struct HarrisUnlink<'c, 'domain, 'hp, K, V> {
+    cursor: &'c Cursor<'domain, 'hp, K, V>,
+}
+
+impl<'r, 'domain, 'hp, K, V> hp_pp::Unlink<Node<K, V>> for HarrisUnlink<'r, 'domain, 'hp, K, V> {
+    fn do_unlink(&self) -> Result<Vec<*mut Node<K, V>>, ()> {
+        let (anchor, anchor_next) = self.cursor.anchor.unwrap();
+        if unsafe { &*anchor }.next.compare_exchange(anchor_next, self.cursor.curr, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+            let mut collected = Vec::with_capacity(16);
+            let mut node = anchor_next;
+            loop {
+                if untagged(node) == self.cursor.curr {
+                    break;
+                }
+                let node_ref = unsafe { node.as_ref() }.unwrap();
+                let next_base = untagged(node_ref.next.load(Ordering::Acquire));
+                collected.push(node);
+                node = next_base;
+            }
+            Ok(collected)
+        } else {
+            Err(())
+        }
     }
 }
 
@@ -123,108 +149,62 @@ where
     /// Clean up a chain of logically removed nodes in each traversal.
     #[inline]
     fn find_harris(&mut self, key: &K) -> Result<bool, ()> {
-        todo!()
-        /*
         // Finding phase
         // - cursor.curr: first unmarked node w/ key >= search key (4)
         // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
         // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
 
-        let mut anchor_next = self.curr;
         let found = loop {
             crate::traverse();
             if self.curr.is_null() {
                 break false;
             }
-
-            // Inlined version of hp++ protection, without duplicate load
-            self.handle.curr_h.protect_raw(self.curr);
-            light_membarrier();
-            let (curr_new_base, curr_new_tag) =
-                decompose_ptr(unsafe { &(*self.prev).next }.load(Ordering::Acquire));
-            if curr_new_tag == 3 {
-                // Stopped. Restart from head.
+            if self.handle.curr_h.try_protect_pp(
+                self.curr,
+                unsafe { &*self.prev },
+                &unsafe { &*self.prev }.next,
+                &|node| node.next.load(Ordering::Acquire) as usize & 2 == 2
+            ).is_err() {
                 crate::restart();
                 return Err(());
-            } else if curr_new_base != self.curr {
-                // If link changed but not stopped, retry protecting the new node.
-                if anchor_next == self.curr {
-                    anchor_next = curr_new_base;
-                }
-                self.curr = curr_new_base;
-                continue;
             }
 
             let curr_node = unsafe { &*self.curr };
             let (next_base, next_tag) = decompose_ptr(curr_node.next.load(Ordering::Acquire));
-            // NOTE: next_base will be protected on next iteration.
-
-            // - finding stage is done if cursor.curr advancement stops
-            // - advance cursor.curr if (.next is marked) || (cursor.curr < key)
-            // - stop cursor.curr if (not marked) && (cursor.curr >= key)
-            // - advance cursor.prev if not marked
             if next_tag == 0 {
-                match curr_node.key.cmp(key) {
-                    Less => {
-                        self.anchor = self.curr;
-                        anchor_next = next_base;
-                        self.prev = self.curr;
-                        self.curr = next_base;
-                        self.handle.anchor_h.reset_protection();
-                        HazardPointer::swap(&mut self.handle.curr_h, &mut self.handle.prev_h);
-                    }
-                    Equal => break true,
-                    Greater => break false,
+                if curr_node.key < *key {
+                    self.prev = self.curr;
+                    self.curr = next_base;
+                    self.anchor = None;
+                } else {
+                    break curr_node.key == *key;
                 }
             } else {
-                // `next_tag` is dirty, if `anchor` is not set, assign `prev`
-                if self.anchor == self.prev {
-                    HazardPointer::swap(&mut self.handle.anchor_h, &mut self.handle.prev_h);
+                if self.anchor.is_none() {
+                    self.anchor = Some((self.prev, self.curr));
+                    mem::swap(&mut self.handle.anchor_h, &mut self.handle.prev_h);
                 }
                 self.prev = self.curr;
                 self.curr = next_base;
-                HazardPointer::swap(&mut self.handle.prev_h, &mut self.handle.curr_h);
-                // `curr_h` will be used for protecting on next iteration.
+                mem::swap(&mut self.handle.prev_h, &mut self.handle.curr_h);
             }
         };
 
-        // If `anchor` and `curr` WERE adjacent, no need to clean up
-        if anchor_next == self.curr {
-            return Ok(found);
-        }
-
-        // cleanup marked nodes between anchor and curr
-        if unsafe {
-            !try_unlink(slice::from_ref(&self.curr), || {
-                if (&*self.anchor)
-                    .next
-                    .compare_exchange(anchor_next, self.curr, Ordering::Release, Ordering::Relaxed)
-                    .is_ok()
-                {
-                    let mut collected = Vec::with_capacity(16);
-                    let mut node = anchor_next;
-                    loop {
-                        if untagged(node) == self.curr {
-                            break;
-                        }
-                        let node_ref = node.as_ref().unwrap();
-                        let next_base = untagged(node_ref.next.load(Ordering::Acquire));
-                        collected.push(node);
-                        node = next_base;
-                    }
-                    Ok(collected)
+        match self.anchor {
+            Some((anchor, _)) => {
+                let unlink = HarrisUnlink {
+                    cursor: &self,
+                };
+                if unsafe { try_unlink(unlink, slice::from_ref(&self.curr)) } {
+                    self.prev = anchor;
+                    Ok(found)
                 } else {
+                    crate::restart();
                     Err(())
                 }
-            })
-        } {
-            crate::restart();
-            return Err(());
+            }
+            None => Ok(found)
         }
-
-        self.prev = self.anchor;
-        Ok(found)
-        */
     }
 
     #[inline]
