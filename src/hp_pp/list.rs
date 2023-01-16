@@ -2,7 +2,7 @@ use crate::hp::concurrent_map::ConcurrentMap;
 
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::sync::atomic::{AtomicPtr, Ordering};
-use std::{ptr, slice, mem};
+use std::{mem, ptr, slice};
 
 use hp_pp::{decompose_ptr, light_membarrier, tag, tagged, try_unlink, untagged, HazardPointer};
 
@@ -99,7 +99,16 @@ struct HarrisUnlink<'c, 'domain, 'hp, K, V> {
 impl<'r, 'domain, 'hp, K, V> hp_pp::Unlink<Node<K, V>> for HarrisUnlink<'r, 'domain, 'hp, K, V> {
     fn do_unlink(&self) -> Result<Vec<*mut Node<K, V>>, ()> {
         let (anchor, anchor_next) = self.cursor.anchor.unwrap();
-        if unsafe { &*anchor }.next.compare_exchange(anchor_next, self.cursor.curr, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+        if unsafe { &*anchor }
+            .next
+            .compare_exchange(
+                anchor_next,
+                self.cursor.curr,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            )
+            .is_ok()
+        {
             let mut collected = Vec::with_capacity(16);
             let mut node = anchor_next;
             loop {
@@ -159,12 +168,17 @@ where
             if self.curr.is_null() {
                 break false;
             }
-            if self.handle.curr_h.try_protect_pp(
-                self.curr,
-                unsafe { &*self.prev },
-                &unsafe { &*self.prev }.next,
-                &|node| node.next.load(Ordering::Acquire) as usize & 2 == 2
-            ).is_err() {
+            if self
+                .handle
+                .curr_h
+                .try_protect_pp(
+                    self.curr,
+                    unsafe { &*self.prev },
+                    &unsafe { &*self.prev }.next,
+                    &|node| node.next.load(Ordering::Acquire) as usize & 2 == 2,
+                )
+                .is_err()
+            {
                 crate::restart();
                 return Err(());
             }
@@ -192,9 +206,7 @@ where
 
         match self.anchor {
             Some((anchor, _)) => {
-                let unlink = HarrisUnlink {
-                    cursor: &self,
-                };
+                let unlink = HarrisUnlink { cursor: &self };
                 if unsafe { try_unlink(unlink, slice::from_ref(&self.curr)) } {
                     self.prev = anchor;
                     Ok(found)
@@ -203,7 +215,7 @@ where
                     Err(())
                 }
             }
-            None => Ok(found)
+            None => Ok(found),
         }
     }
 

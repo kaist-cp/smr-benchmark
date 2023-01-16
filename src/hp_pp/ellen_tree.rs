@@ -21,11 +21,16 @@
 //!   after an unflag or backtrack CAS.
 
 use core::{mem, ptr};
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::{
+    slice,
+    sync::atomic::{AtomicPtr, Ordering},
+};
 
-use hp_pp::{light_membarrier, retire, tag, tagged, untagged, HazardPointer};
+use hp_pp::{
+    light_membarrier, retire, tag, tagged, try_unlink, untagged, HazardPointer, ProtectError,
+};
 
-use super::concurrent_map::ConcurrentMap;
+use crate::hp::concurrent_map::ConcurrentMap;
 
 bitflags! {
     struct UpdateTag: usize {
@@ -113,6 +118,15 @@ pub struct Node<K, V> {
     is_leaf: bool,
 }
 
+impl<K, V> hp_pp::Invalidate for Node<K, V> {
+    fn invalidate(&self) {
+        let left = self.left.load(Ordering::Acquire);
+        self.left.store(tagged(left, 1), Ordering::Release);
+        let right = self.right.load(Ordering::Acquire);
+        self.right.store(tagged(right, 1), Ordering::Release);
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct Update<K, V> {
     gp: *mut Node<K, V>,
@@ -149,11 +163,11 @@ impl<K, V> Node<K, V> {
     #[inline]
     /// NOTE: Use this function if `curr` is guaranteed to be one of the leaves.
     pub fn load_opposite(&self, curr: *mut Node<K, V>) -> *mut Node<K, V> {
-        let left = self.left.load(Ordering::Acquire);
+        let left = untagged(self.left.load(Ordering::Acquire));
         if left == curr {
-            self.right.load(Ordering::Acquire)
+            untagged(self.right.load(Ordering::Acquire))
         } else {
-            left
+            untagged(left)
         }
     }
 
@@ -178,24 +192,37 @@ impl<K, V> Node<K, V> {
         &self,
         left_h: &mut HazardPointer<'domain>,
         right_h: &mut HazardPointer<'domain>,
-    ) -> (*mut Self, *mut Self) {
+    ) -> Result<(*mut Self, *mut Self), ()> {
         // Load correct next nodes of the leaf.
-        let mut left = self.left.load(Ordering::Acquire);
-        let mut right = self.right.load(Ordering::Acquire);
+        let (mut left, mut right) = (
+            self.left.load(Ordering::Acquire),
+            self.right.load(Ordering::Acquire),
+        );
         loop {
-            left_h.protect_raw(left);
-            right_h.protect_raw(right);
-            light_membarrier();
-            let new_left = self.left.load(Ordering::Acquire);
-            let new_right = self.right.load(Ordering::Acquire);
-            if left == new_left && right == new_right {
-                break;
+            match left_h.try_protect_pp(untagged(left), &self, &self.left, &|src| {
+                (tag(src.left.load(Ordering::Acquire)) & 1) > 0
+            }) {
+                Err(ProtectError::Changed(new_left)) => {
+                    left = new_left;
+                    continue;
+                }
+                Err(ProtectError::Stopped) => return Err(()),
+                _ => break,
             }
-            // Somebody `inserted an internal` or `deleted (leaf, parent) pair`.
-            left = new_left;
-            right = new_right;
         }
-        (left, right)
+        loop {
+            match right_h.try_protect_pp(untagged(right), &self, &self.right, &|src| {
+                (tag(src.right.load(Ordering::Acquire)) & 1) > 0
+            }) {
+                Err(ProtectError::Changed(new_right)) => {
+                    right = new_right;
+                    continue;
+                }
+                Err(ProtectError::Stopped) => return Err(()),
+                _ => break,
+            }
+        }
+        Ok((untagged(left), untagged(right)))
     }
 }
 
@@ -338,13 +365,14 @@ where
 impl<K, V> Drop for EFRBTree<K, V> {
     fn drop(&mut self) {
         unsafe {
-            let root = Box::from_raw(self.root.load(Ordering::Relaxed));
+            let root = Box::from_raw(untagged(self.root.load(Ordering::Relaxed)));
             let mut stack = vec![
                 root.left.load(Ordering::Relaxed),
                 root.right.load(Ordering::Relaxed),
             ];
 
             while let Some(node) = stack.pop() {
+                let node = untagged(node);
                 if node.is_null() {
                     continue;
                 }
@@ -402,15 +430,19 @@ where
     ///     - either gp → left has contained p (if k < gp → key) or gp → right has contained p (if k ≥ gp → key)
     ///     - gp → update has contained gpupdate
     #[inline]
-    fn search_inner<'domain, 'hp>(&self, key: &K, cursor: &mut Cursor<'domain, 'hp, K, V>) -> bool {
-        cursor.l = self.root.load(Ordering::Relaxed);
+    fn search_inner<'domain, 'hp>(
+        &self,
+        key: &K,
+        cursor: &mut Cursor<'domain, 'hp, K, V>,
+    ) -> Result<(), ()> {
+        cursor.l = untagged(self.root.load(Ordering::Relaxed));
         cursor.handle.l_h.protect_raw(cursor.l);
         light_membarrier();
 
         loop {
             let l_node = unsafe { cursor.l.as_ref() }.unwrap();
             if l_node.is_leaf {
-                return true;
+                return Ok(());
             }
             cursor.gp = cursor.p;
             cursor.p = cursor.l;
@@ -423,7 +455,7 @@ where
             cursor.pupdate = l_node.protect_update(&mut cursor.handle.pupdate_h);
             light_membarrier();
             (cursor.l, cursor.l_other) =
-                l_node.protect_next(&mut cursor.handle.l_h, &mut cursor.handle.l_other_h);
+                l_node.protect_next(&mut cursor.handle.l_h, &mut cursor.handle.l_other_h)?;
             if l_node.key.cmp(key) != std::cmp::Ordering::Greater {
                 mem::swap(&mut cursor.l, &mut cursor.l_other);
                 mem::swap(&mut cursor.handle.l_h, &mut cursor.handle.l_other_h);
@@ -443,7 +475,7 @@ where
                     // Help cleaning marked node on search, and restart.
                     self.help_marked(pupdate);
                 }
-                return false;
+                return Err(());
             }
         }
     }
@@ -451,9 +483,10 @@ where
     fn search<'domain, 'hp>(&self, key: &K, cursor: &mut Cursor<'domain, 'hp, K, V>) {
         loop {
             cursor.reset();
-            if self.search_inner(key, cursor) {
+            if self.search_inner(key, cursor).is_ok() {
                 break;
             }
+            crate::restart();
         }
     }
 
@@ -703,18 +736,15 @@ where
     fn help_marked<'domain, 'hp>(&self, op: *mut Update<K, V>) {
         // Precondition: op points to a DInfo record (i.e., it is not ⊥)
         let op_ref = unsafe { untagged(op).as_ref().unwrap().clone() };
-        let Update {
-            gp, p, l, l_other, ..
-        } = op_ref;
+        let Update { gp, p, l_other, .. } = op_ref;
         // dchild CAS
-        if self.cas_child(gp, p, l_other).is_ok() {
-            unsafe {
+        let unlink = DChildUnlink { op: op_ref.clone() };
+        unsafe {
+            if try_unlink(unlink, slice::from_ref(&l_other)) {
                 let _ = (&*p).update.store(
                     tagged(op, UpdateTag::MARKED_RETIRED.bits()),
                     Ordering::Release,
                 );
-                retire(p);
-                retire(l);
             }
         }
         // dunflag CAS
@@ -736,11 +766,12 @@ where
         // Precondition: op points to an IInfo record (i.e., it is not ⊥)
         let op_ref = unsafe { untagged(op).as_ref().unwrap().clone() };
         let Update {
-            p, new_internal, l, ..
+            p, new_internal, ..
         } = op_ref;
         // ichild CAS
-        if self.cas_child(p, l, new_internal).is_ok() {
-            unsafe { retire(l) };
+        let unlink = IChildUnlink { op: op_ref.clone() };
+        unsafe {
+            let _ = try_unlink(unlink, slice::from_ref(&new_internal));
         }
         // iunflag CAS
         if unsafe { p.as_ref().unwrap() }
@@ -756,25 +787,69 @@ where
             unsafe { retire(untagged(op)) };
         }
     }
+}
 
-    #[inline]
-    fn cas_child<'g>(
-        &'g self,
-        parent: *mut Node<K, V>,
-        old: *mut Node<K, V>,
-        new: *mut Node<K, V>,
-    ) -> Result<*mut Node<K, V>, *mut Node<K, V>> {
-        // Precondition: parent points to an Internal node and new points to a Node (i.e., neither is ⊥)
-        // This routine tries to change one of the child fields of the node that parent points to from old to new.
-        let new_node = unsafe { new.as_ref().unwrap() };
-        let parent_node = unsafe { parent.as_ref().unwrap() };
+#[inline]
+fn cas_child<K, V>(
+    parent: *mut Node<K, V>,
+    old: *mut Node<K, V>,
+    new: *mut Node<K, V>,
+) -> Result<*mut Node<K, V>, *mut Node<K, V>>
+where
+    K: Ord,
+{
+    // Precondition: parent points to an Internal node and new points to a Node (i.e., neither is ⊥)
+    // This routine tries to change one of the child fields of the node that parent points to from old to new.
+    let new_node = unsafe { new.as_ref().unwrap() };
+    let parent_node = unsafe { parent.as_ref().unwrap() };
 
-        let node_to_cas = if new_node.key < parent_node.key {
-            &parent_node.left
+    let node_to_cas = if new_node.key < parent_node.key {
+        &parent_node.left
+    } else {
+        &parent_node.right
+    };
+    node_to_cas.compare_exchange(old, new, Ordering::Release, Ordering::Acquire)
+}
+
+struct DChildUnlink<K, V> {
+    op: Update<K, V>,
+}
+
+impl<K, V> hp_pp::Unlink<Node<K, V>> for DChildUnlink<K, V>
+where
+    K: Ord + Clone,
+    V: Clone,
+{
+    fn do_unlink(&self) -> Result<Vec<*mut Node<K, V>>, ()> {
+        let Update {
+            gp, p, l, l_other, ..
+        } = self.op;
+        if cas_child(gp, p, l_other).is_ok() {
+            Ok(vec![p, l])
         } else {
-            &parent_node.right
-        };
-        node_to_cas.compare_exchange(old, new, Ordering::Release, Ordering::Acquire)
+            Err(())
+        }
+    }
+}
+
+struct IChildUnlink<K, V> {
+    op: Update<K, V>,
+}
+
+impl<K, V> hp_pp::Unlink<Node<K, V>> for IChildUnlink<K, V>
+where
+    K: Ord + Clone,
+    V: Clone,
+{
+    fn do_unlink(&self) -> Result<Vec<*mut Node<K, V>>, ()> {
+        let Update {
+            p, new_internal, l, ..
+        } = self.op;
+        if cas_child(p, l, new_internal).is_ok() {
+            Ok(vec![l])
+        } else {
+            Err(())
+        }
     }
 }
 
