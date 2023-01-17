@@ -206,13 +206,17 @@ impl<'domain> Thread<'domain> {
 
 impl<'domain> Drop for Thread<'domain> {
     fn drop(&mut self) {
+        self.do_invalidation();
+        self.flush_retireds();
+        self.domain.barrier.barrier();
+        self.epoched_hps.clear();
+        assert!(self.unlinkeds.is_empty());
+        assert!(self.retired.is_empty());
+        assert!(self.epoched_hps.is_empty());
         // WARNING: Dropping HazardPointer touches available_indices. So available_indices MUST be
         // dropped after hps. For the same reason, Thread::drop MUST NOT acquire HazardPointer.
-        self.epoched_hps.clear();
-        self.unlinkeds.clear();
         self.available_indices.clear();
         self.domain.threads.release(self.hazards);
-        self.domain.retireds.push(mem::take(&mut self.retired));
     }
 }
 
