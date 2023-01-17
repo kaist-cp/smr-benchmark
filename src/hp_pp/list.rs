@@ -190,6 +190,7 @@ where
                     self.prev = self.curr;
                     self.curr = next_base;
                     self.anchor = None;
+                    mem::swap(&mut self.handle.curr_h, &mut self.handle.prev_h);
                 } else {
                     break curr_node.key == *key;
                 }
