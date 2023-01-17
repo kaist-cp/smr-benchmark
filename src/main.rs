@@ -7,10 +7,10 @@ extern crate crossbeam_ebr;
 extern crate crossbeam_pebr;
 extern crate pebr_benchmark;
 
+use ::hp_pp::DEFAULT_DOMAIN;
 use clap::{arg_enum, value_t, App, Arg, ArgMatches};
 use crossbeam_utils::thread::scope;
 use csv::Writer;
-use ::hp_pp::GLOBAL_GARBAGE_COUNT;
 use rand::distributions::{Uniform, WeightedIndex};
 use rand::prelude::*;
 use std::cmp::max;
@@ -945,7 +945,7 @@ fn bench_map_hp<M: hp::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>
                         acc += allocated;
                         peak = max(peak, allocated);
 
-                        let garbages = GLOBAL_GARBAGE_COUNT.load(Ordering::Acquire);
+                        let garbages = DEFAULT_DOMAIN.num_garbages();
                         garb_acc += garbages;
                         garb_peak = max(garb_peak, garbages);
 
