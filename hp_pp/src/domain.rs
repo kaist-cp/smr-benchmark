@@ -9,8 +9,8 @@ use crate::thread::Thread;
 
 #[derive(Debug)]
 pub struct Domain {
-    pub(crate) threads: ThreadRecords,
-    pub(crate) barrier: EpochBarrier,
+    pub(crate) threads: CachePadded<ThreadRecords>,
+    pub(crate) barrier: CachePadded<EpochBarrier>,
     pub(crate) retireds: CachePadded<RetiredList>,
     pub(crate) num_garbages: CachePadded<AtomicUsize>,
 }
@@ -18,8 +18,8 @@ pub struct Domain {
 impl Domain {
     pub const fn new() -> Self {
         Self {
-            threads: ThreadRecords::new(),
-            barrier: EpochBarrier(AtomicUsize::new(0)),
+            threads: CachePadded::new(ThreadRecords::new()),
+            barrier: CachePadded::new(EpochBarrier(AtomicUsize::new(0))),
             retireds: CachePadded::new(RetiredList::new()),
             num_garbages: CachePadded::new(AtomicUsize::new(0)),
         }
