@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use crate::domain::Domain;
 use crate::domain::EpochBarrier;
 use crate::hazard::ThreadRecord;
-use crate::retire::Retired;
+use crate::retire::{Retired, Unlinked};
 use crate::HazardPointer;
 use crate::{Invalidate, Unlink};
 
@@ -19,11 +19,7 @@ pub struct Thread<'domain> {
     pub(crate) epoched_hps: VecDeque<(usize, Vec<HazardPointer<'domain>>)>,
     // Used for HP++. It's the thread-local `retireds` in the paper.
     // These should be invalidated and added to retireds.
-    pub(crate) unlinkeds: Vec<(
-        Vec<*mut u8>,
-        unsafe fn(*mut u8),
-        Vec<HazardPointer<'domain>>,
-    )>,
+    pub(crate) unlinkeds: Vec<Unlinked<'domain>>,
     pub(crate) retired: Vec<Retired>,
     pub(crate) count: usize,
 }
@@ -45,12 +41,14 @@ impl<'domain> Thread<'domain> {
 
 // stuff related to reclamation
 impl<'domain> Thread<'domain> {
-    const COUNTS_BETWEEN_INVALIDATION: usize = 32;
-    const COUNTS_BETWEEN_FLUSH: usize = 64;
-    const COUNTS_BETWEEN_COLLECT: usize = 128;
+    const COUNTS_BETWEEN_INVALIDATION: usize = 1;
+    const COUNTS_BETWEEN_FLUSH: usize = 1;
+    const COUNTS_BETWEEN_COLLECT: usize = 1;
 
     fn flush_retireds(&mut self) {
-        self.domain.num_garbages.fetch_add(self.retired.len(), Ordering::AcqRel);
+        self.domain
+            .num_garbages
+            .fetch_add(self.retired.len(), Ordering::AcqRel);
         self.domain.retireds.push(mem::take(&mut self.retired))
     }
 
@@ -82,15 +80,8 @@ impl<'domain> Thread<'domain> {
             })
             .collect();
 
-        if let Ok(unlinkdes) = unlink.do_unlink() {
-            unsafe fn invalidate<T: Invalidate>(ptr: *mut u8) {
-                T::invalidate(&*(ptr as *mut T))
-            }
-            self.unlinkeds.push((
-                mem::transmute::<Vec<_>, Vec<*mut u8>>(unlinkdes),
-                invalidate::<T>,
-                hps,
-            ));
+        if let Ok(unlinkeds) = unlink.do_unlink() {
+            self.unlinkeds.push(Unlinked::new(unlinkeds, hps));
 
             let count = self.count.wrapping_add(1);
             self.count = count;
@@ -114,12 +105,10 @@ impl<'domain> Thread<'domain> {
         let unlinkeds = mem::take(&mut self.unlinkeds);
         let mut hps = Vec::with_capacity(2 * Self::COUNTS_BETWEEN_INVALIDATION);
         let mut invalidateds = Vec::with_capacity(2 * Self::COUNTS_BETWEEN_INVALIDATION);
-        for (rs, invalidate, mut h) in unlinkeds {
-            for r in rs {
-                unsafe { invalidate(r) };
-                invalidateds.push(r);
-            }
-            hps.append(&mut h);
+        for unlinked in unlinkeds {
+            let (mut ptrs, mut hs) = unlinked.do_invalidation();
+            invalidateds.append(&mut ptrs);
+            hps.append(&mut hs);
         }
 
         let epoch = self.domain.barrier.read();
@@ -132,9 +121,7 @@ impl<'domain> Thread<'domain> {
         }
         self.epoched_hps.push_back((epoch, hps));
 
-        for r in invalidateds {
-            self.retired.push(Retired::new(r));
-        }
+        self.retired.append(&mut invalidateds);
     }
 
     #[inline]
@@ -162,7 +149,9 @@ impl<'domain> Thread<'domain> {
                 }
             })
             .collect();
-        self.domain.num_garbages.fetch_sub(retireds_len - not_freed.len(), Ordering::AcqRel);
+        self.domain
+            .num_garbages
+            .fetch_sub(retireds_len - not_freed.len(), Ordering::AcqRel);
         self.domain.retireds.push(not_freed);
     }
 }

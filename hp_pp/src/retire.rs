@@ -1,10 +1,20 @@
 use core::ptr;
 use core::sync::atomic::{AtomicPtr, Ordering};
+use std::mem;
+
+use crate::{HazardPointer, Invalidate};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Retired {
     pub(crate) ptr: *mut u8,
     pub(crate) deleter: unsafe fn(ptr: *mut u8),
+}
+
+pub(crate) struct Unlinked<'domain> {
+    ptrs: Vec<*mut u8>,
+    invalidater: unsafe fn(*mut u8),
+    deleter: unsafe fn(*mut u8),
+    hps: Vec<HazardPointer<'domain>>,
 }
 
 // TODO: require <T: Send> in retire
@@ -19,6 +29,35 @@ impl Retired {
             ptr: ptr as *mut u8,
             deleter: free::<T>,
         }
+    }
+}
+
+impl<'domain> Unlinked<'domain> {
+    pub(crate) fn new<T: Invalidate>(ptrs: Vec<*mut T>, hps: Vec<HazardPointer<'domain>>) -> Self {
+        unsafe fn invalidate<T: Invalidate>(ptr: *mut u8) {
+            T::invalidate(&*(ptr as *mut T))
+        }
+        unsafe fn free<T>(ptr: *mut u8) {
+            drop(Box::from_raw(ptr as *mut T))
+        }
+        Self {
+            ptrs: unsafe { mem::transmute::<Vec<_>, Vec<*mut u8>>(ptrs) },
+            invalidater: invalidate::<T>,
+            deleter: free::<T>,
+            hps,
+        }
+    }
+
+    pub(crate) fn do_invalidation(self) -> (Vec<Retired>, Vec<HazardPointer<'domain>>) {
+        let mut retireds = Vec::with_capacity(self.ptrs.len());
+        for ptr in self.ptrs {
+            unsafe { (self.invalidater)(ptr) };
+            retireds.push(Retired {
+                ptr,
+                deleter: self.deleter,
+            });
+        }
+        (retireds, self.hps)
     }
 }
 
