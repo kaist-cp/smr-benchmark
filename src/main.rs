@@ -10,6 +10,7 @@ extern crate pebr_benchmark;
 use clap::{arg_enum, value_t, App, Arg, ArgMatches};
 use crossbeam_utils::thread::scope;
 use csv::Writer;
+use ::hp_pp::GLOBAL_GARBAGE_COUNT;
 use rand::distributions::{Uniform, WeightedIndex};
 use rand::prelude::*;
 use std::cmp::max;
@@ -19,6 +20,7 @@ use std::io::{stdout, Write};
 use std::mem::ManuallyDrop;
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
+use std::sync::atomic::Ordering;
 use typenum::{Unsigned, U1, U4};
 
 use pebr_benchmark::ebr;
@@ -298,6 +300,8 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
                     "throughput",
                     "peak_mem",
                     "avg_mem",
+                    "peak_garb",
+                    "avg_garb",
                 ])
                 .unwrap();
             output.flush().unwrap();
@@ -340,7 +344,7 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
         "{}: {}, {} threads, n{}, c{}, g{}",
         config.ds, config.mm, config.threads, config.non_coop, config.ops_per_cs, config.get_rate
     );
-    let (ops_per_sec, peak_mem, avg_mem) = match config.mm {
+    let (ops_per_sec, peak_mem, avg_mem, peak_garb, avg_garb) = match config.mm {
         MM::NR => match config.ds {
             DS::HList => {
                 bench_map_nr::<ebr::HList<String, String>>(config, PrefillStrategy::Decreasing)
@@ -470,12 +474,14 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             ops_per_sec.to_string(),
             peak_mem.to_string(),
             avg_mem.to_string(),
+            peak_garb.to_string(),
+            avg_garb.to_string(),
         ])
         .unwrap();
     output.flush().unwrap();
     println!(
-        "ops/s: {}, peak mem: {}, avg_mem: {}",
-        ops_per_sec, peak_mem, avg_mem
+        "ops/s: {}, peak mem: {}, avg_mem: {}, peak garb: {}, avg garb: {}",
+        ops_per_sec, peak_mem, avg_mem, peak_garb, avg_garb
     );
 }
 
@@ -587,7 +593,7 @@ impl PrefillStrategy {
 fn bench_map_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
     config: &Config,
     strategy: PrefillStrategy,
-) -> (u64, usize, usize) {
+) -> (u64, usize, usize, usize, usize) {
     let map = &M::new();
     strategy.prefill_ebr(config, map);
 
@@ -603,6 +609,8 @@ fn bench_map_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
                 let mut samples = 0usize;
                 let mut acc = 0usize;
                 let mut peak = 0usize;
+                let mut garb_acc = 0usize;
+                let mut garb_peak = 0usize;
                 barrier.clone().wait();
 
                 let start = Instant::now();
@@ -612,16 +620,22 @@ fn bench_map_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
                     if now > next_sampling {
                         let allocated = config.mem_sampler.sample();
                         samples += 1;
+
                         acc += allocated;
                         peak = max(peak, allocated);
+
+                        let garbages = crossbeam_ebr::GLOBAL_GARBAGE_COUNT.load(Ordering::Acquire);
+                        garb_acc += garbages;
+                        garb_peak = max(garb_peak, garbages);
+
                         next_sampling = now + config.sampling_period;
                     }
                     std::thread::sleep(config.aux_thread_period);
                 }
-                mem_sender.send((peak, acc / samples)).unwrap();
+                mem_sender.send((peak, acc / samples, garb_peak, garb_acc / samples)).unwrap();
             });
         } else {
-            mem_sender.send((0, 0)).unwrap();
+            mem_sender.send((0, 0, 0, 0)).unwrap();
         }
 
         for _ in 0..config.threads {
@@ -662,14 +676,14 @@ fn bench_map_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
         ops += local_ops;
     }
     let ops_per_sec = ops / config.interval;
-    let (peak_mem, avg_mem) = mem_receiver.recv().unwrap();
-    (ops_per_sec, peak_mem, avg_mem)
+    let (peak_mem, avg_mem, garb_peak, garb_avg) = mem_receiver.recv().unwrap();
+    (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
 }
 
 fn bench_map_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>(
     config: &Config,
     strategy: PrefillStrategy,
-) -> (u64, usize, usize) {
+) -> (u64, usize, usize, usize, usize) {
     let map = &M::new();
     strategy.prefill_ebr(config, map);
 
@@ -687,6 +701,8 @@ fn bench_map_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigne
                 let mut samples = 0usize;
                 let mut acc = 0usize;
                 let mut peak = 0usize;
+                let mut garb_acc = 0usize;
+                let mut garb_peak = 0usize;
                 let handle = collector.register();
                 barrier.clone().wait();
 
@@ -703,8 +719,14 @@ fn bench_map_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigne
                     if now > next_sampling {
                         let allocated = config.mem_sampler.sample();
                         samples += 1;
+
                         acc += allocated;
                         peak = max(peak, allocated);
+
+                        let garbages = crossbeam_ebr::GLOBAL_GARBAGE_COUNT.load(Ordering::Acquire);
+                        garb_acc += garbages;
+                        garb_peak = max(garb_peak, garbages);
+
                         next_sampling = now + config.sampling_period;
                     }
                     if now > next_repin {
@@ -719,13 +741,13 @@ fn bench_map_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigne
                 }
 
                 if config.sampling {
-                    mem_sender.send((peak, acc / samples)).unwrap();
+                    mem_sender.send((peak, acc / samples, garb_peak, garb_acc / samples)).unwrap();
                 } else {
-                    mem_sender.send((0, 0)).unwrap();
+                    mem_sender.send((0, 0, 0, 0)).unwrap();
                 }
             });
         } else {
-            mem_sender.send((0, 0)).unwrap();
+            mem_sender.send((0, 0, 0, 0)).unwrap();
         }
 
         for _ in 0..config.threads {
@@ -772,14 +794,14 @@ fn bench_map_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigne
         ops += local_ops;
     }
     let ops_per_sec = ops / config.interval;
-    let (peak_mem, avg_mem) = mem_receiver.recv().unwrap();
-    (ops_per_sec, peak_mem, avg_mem)
+    let (peak_mem, avg_mem, garb_peak, garb_avg) = mem_receiver.recv().unwrap();
+    (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
 }
 
 /* fn bench_map_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>(
     config: &Config,
     strategy: PrefillStrategy,
-) -> (u64, usize, usize) {
+) -> (u64, usize, usize, usize, usize) {
     let map = &M::new();
     strategy.prefill_pebr(config, map);
 
@@ -890,7 +912,7 @@ fn bench_map_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigne
 fn bench_map_hp<M: hp::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>(
     config: &Config,
     strategy: PrefillStrategy,
-) -> (u64, usize, usize) {
+) -> (u64, usize, usize, usize, usize) {
     let map = &M::new();
     strategy.prefill_hp(config, map);
 
@@ -906,6 +928,8 @@ fn bench_map_hp<M: hp::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>
                 let mut samples = 0usize;
                 let mut acc = 0usize;
                 let mut peak = 0usize;
+                let mut garb_acc = 0usize;
+                let mut garb_peak = 0usize;
                 barrier.clone().wait();
 
                 let start = Instant::now();
@@ -915,21 +939,27 @@ fn bench_map_hp<M: hp::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>
                     if now > next_sampling {
                         let allocated = config.mem_sampler.sample();
                         samples += 1;
+
                         acc += allocated;
                         peak = max(peak, allocated);
+
+                        let garbages = GLOBAL_GARBAGE_COUNT.load(Ordering::Acquire);
+                        garb_acc += garbages;
+                        garb_peak = max(garb_peak, garbages);
+
                         next_sampling = now + config.sampling_period;
                     }
                     std::thread::sleep(config.aux_thread_period);
                 }
 
                 if config.sampling {
-                    mem_sender.send((peak, acc / samples)).unwrap();
+                    mem_sender.send((peak, acc / samples, garb_peak, garb_acc / samples)).unwrap();
                 } else {
-                    mem_sender.send((0, 0)).unwrap();
+                    mem_sender.send((0, 0, 0, 0)).unwrap();
                 }
             });
         } else {
-            mem_sender.send((0, 0)).unwrap();
+            mem_sender.send((0, 0, 0, 0)).unwrap();
         }
 
         for _ in 0..config.threads {
@@ -975,11 +1005,11 @@ fn bench_map_hp<M: hp::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>
         restarts += local_restarts;
     }
     let ops_per_sec = ops / config.interval;
-    let (peak_mem, avg_mem) = mem_receiver.recv().unwrap();
+    let (peak_mem, avg_mem, garb_peak, garb_avg) = mem_receiver.recv().unwrap();
     println!(
         "traversals/op: {:.1}, total restarts: {}",
         traversals as f64 / ops as f64,
         restarts
     );
-    (ops_per_sec, peak_mem, avg_mem)
+    (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
 }

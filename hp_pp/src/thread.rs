@@ -6,7 +6,7 @@ use crate::domain::Domain;
 use crate::domain::EpochBarrier;
 use crate::hazard::ThreadRecord;
 use crate::retire::Retired;
-use crate::{Invalidate, Unlink};
+use crate::{Invalidate, Unlink, GLOBAL_GARBAGE_COUNT};
 use crate::HazardPointer;
 
 pub struct Thread<'domain> {
@@ -43,6 +43,7 @@ impl<'domain> Thread<'domain> {
     // NOTE: T: Send not required because we reclaim only locally.
     #[inline]
     pub unsafe fn retire<T>(&mut self, ptr: *mut T) {
+        GLOBAL_GARBAGE_COUNT.fetch_add(1, Ordering::AcqRel);
         self.retired.push(Retired::new(ptr));
         if self.retired.len() > Self::COUNTS_BETWEEN_PUSH {
             self.domain.retireds.push(mem::take(&mut self.retired))
@@ -98,6 +99,7 @@ impl<'domain> Thread<'domain> {
     #[inline]
     pub(crate) fn do_reclamation(&mut self) {
         let retireds = self.domain.retireds.pop_all();
+        let retireds_len = retireds.len();
         if retireds.is_empty() {
             return;
         }
@@ -108,7 +110,7 @@ impl<'domain> Thread<'domain> {
         self.hps.clear();
 
         let guarded_ptrs = self.domain.collect_guarded_ptrs(self);
-        let not_freed = retireds
+        let not_freed: Vec<Retired> = retireds
             .into_iter()
             .filter_map(|element| {
                 if guarded_ptrs.contains(&element.ptr) {
@@ -119,6 +121,7 @@ impl<'domain> Thread<'domain> {
                 }
             })
             .collect();
+        GLOBAL_GARBAGE_COUNT.fetch_sub(retireds_len-not_freed.len(), Ordering::AcqRel);
         self.domain.retireds.push(not_freed);
     }
 }
