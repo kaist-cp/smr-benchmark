@@ -10,7 +10,6 @@ pub use membarrier::light_membarrier;
 pub use tag::*;
 
 use core::cell::RefCell;
-use std::sync::atomic::AtomicUsize;
 use std::thread_local;
 
 use crate::domain::Domain;

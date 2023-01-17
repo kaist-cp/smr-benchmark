@@ -56,17 +56,13 @@ impl Drop for Domain {
 pub(crate) struct EpochBarrier(AtomicUsize);
 
 impl EpochBarrier {
-    pub(crate) fn barrier(&self) -> usize {
+    pub(crate) fn barrier(&self) {
         let epoch = self.0.load(Ordering::Acquire);
         membarrier::heavy();
         let new_epoch = epoch.wrapping_add(1);
-        match self
+        let _ = self
             .0
-            .compare_exchange(epoch, new_epoch, Ordering::Release, Ordering::Acquire)
-        {
-            Ok(_) => new_epoch,
-            Err(new) => new,
-        }
+            .compare_exchange(epoch, new_epoch, Ordering::Release, Ordering::Acquire);
     }
 
     pub(crate) fn read(&self) -> usize {

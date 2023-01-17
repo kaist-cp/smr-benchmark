@@ -18,9 +18,9 @@ use std::fmt;
 use std::fs::{create_dir_all, File, OpenOptions};
 use std::io::{stdout, Write};
 use std::mem::ManuallyDrop;
+use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
-use std::sync::atomic::Ordering;
 use typenum::{Unsigned, U1, U4};
 
 use pebr_benchmark::ebr;
@@ -477,7 +477,7 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             avg_mem.to_string(),
             peak_garb.to_string(),
             avg_garb.to_string(),
-            (config.prefill*2).to_string()
+            (config.prefill * 2).to_string(),
         ])
         .unwrap();
     output.flush().unwrap();
@@ -634,7 +634,9 @@ fn bench_map_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
                     }
                     std::thread::sleep(config.aux_thread_period);
                 }
-                mem_sender.send((peak, acc / samples, garb_peak, garb_acc / samples)).unwrap();
+                mem_sender
+                    .send((peak, acc / samples, garb_peak, garb_acc / samples))
+                    .unwrap();
             });
         } else {
             mem_sender.send((0, 0, 0, 0)).unwrap();
@@ -743,7 +745,9 @@ fn bench_map_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigne
                 }
 
                 if config.sampling {
-                    mem_sender.send((peak, acc / samples, garb_peak, garb_acc / samples)).unwrap();
+                    mem_sender
+                        .send((peak, acc / samples, garb_peak, garb_acc / samples))
+                        .unwrap();
                 } else {
                     mem_sender.send((0, 0, 0, 0)).unwrap();
                 }
@@ -955,7 +959,9 @@ fn bench_map_hp<M: hp::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>
                 }
 
                 if config.sampling {
-                    mem_sender.send((peak, acc / samples, garb_peak, garb_acc / samples)).unwrap();
+                    mem_sender
+                        .send((peak, acc / samples, garb_peak, garb_acc / samples))
+                        .unwrap();
                 } else {
                     mem_sender.send((0, 0, 0, 0)).unwrap();
                 }
