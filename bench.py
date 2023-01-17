@@ -2,22 +2,15 @@ import subprocess
 import os
 import sys
 
-dss = ['HList', 'HMList', 'HHSList', 'HashMap', 'NMTree', 'BonsaiTree']
-mms = ['EBR', 'PEBR', 'NR']
-ns = [0, 2, 3]
+dss = ['HList', 'HMList', 'HHSList', 'HashMap', 'NMTree', 'EFRBTree']
+mms = ['EBR', 'NR', 'HP', 'HP_PP']
 cs = [1]
-i = 3
+i = 10
 cpu_count = os.cpu_count()
-if not cpu_count or cpu_count <= 24:
-    ts = list(map(str, [1] + list(range(4, 33, 4))))
-elif cpu_count <= 56:
-    ts = list(map(str, [1] + list(range(5, 76, 5))))
-elif cpu_count <= 96:
-    ts = list(map(str, [1] + list(range(8, 121, 8))))
-else:
-    ts = list(map(str, [1] + list(range(10, 151, 10))))
+ts = list(map(str, [1, 2, 3, 4] + list(range(8, 145, 8))))
 gs = [0, 1, 2]
-runs = 3
+krs = [False, True] # Small, Large
+runs = 2
 if len(sys.argv) >= 2 and sys.argv[1] == 'simple':
     ts = list(map(str, [1, 20, 30]))
     gs = [0]
@@ -29,37 +22,62 @@ subprocess.run(['cargo', 'build', '--release'])
 
 run_cmd = ['./target/release/pebr-benchmark', '-i', str(i), '-s1']
 
+def key_range(ds, large):
+    if ds in ["HList", "HMList", "HHSList"]:
+        if large:
+            return "10000"
+        else:
+            return "16"
+    else:
+        if large:
+            return "100000"
+        else:
+            return "128"
 
-def opts(ds, mm, g, n, c, t):
-    r = 10000 if ds in ['HList', 'HMList', 'HHSList'] else 100000
-    return ['-d', ds, '-r', str(r), '-m', mm, '-g', str(g), '-n', str(n), '-c', str(c), '-t', t]
+def opts(ds, mm, g, c, t, kr_str):
+    return ['-d', ds, '-m', mm, '-g', str(g), '-c', str(c), '-t', t, '-r', kr_str]
 
-def invalid(mm, ds, c, n, g):
+def invalid(mm, ds, c, g):
     is_invalid = False
     if mm == 'NR':
-        is_invalid |= n != 0 or c != 1  # meaningless config
+        is_invalid |= c != 1  # meaningless config
     if ds == 'HHSList':
         is_invalid |= g == 0  # HHSList is just HMList with faster get()
+    if mm == 'HP':
+        is_invalid |= ds in ["HList", "HHSList"]
     return is_invalid
 
 
 cmds = []
 
-for ds in dss:
-    for mm in mms:
-        for g in gs:
-            for n in ns:
+for kr in krs:
+    for ds in dss:
+        for mm in mms:
+            for g in gs:
                 for c in cs:
-                    if invalid(mm, ds, c, n, g):
+                    if invalid(mm, ds, c, g):
                         continue
                     for t in ts:
-                        cmd = run_cmd + opts(ds, mm, g, n, c, t)
+                        cmd = run_cmd + opts(ds, mm, g, c, t, key_range(ds, kr))
                         cmds.append(cmd)
 
 print('number of configurations: ', len(cmds))
 print('estimated time: ', (len(cmds) * i * 1.3) // 60, ' min *', runs, 'times')
 
+failed = []
 for run in range(runs):
     for i, cmd in enumerate(cmds):
         print("run {}/{}, bench {}/{}: '{}'".format(run + 1, runs, i + 1, len(cmds), ' '.join(cmd)))
-        subprocess.run(cmd)
+        try:
+            subprocess.run(cmd, timeout=20)
+        except subprocess.TimeoutExpired:
+            print("timeout")
+            failed.append(cmd)
+        except KeyboardInterrupt:
+            exit(0)
+        except:
+            failed.append(cmd)
+
+if len(failed):
+    print("====failed====")
+    print("\n".join(failed))
