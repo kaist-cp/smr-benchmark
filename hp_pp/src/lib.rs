@@ -10,11 +10,13 @@ pub use membarrier::light_membarrier;
 pub use tag::*;
 
 use core::cell::RefCell;
+use std::sync::atomic::AtomicUsize;
 use std::thread_local;
 
 use crate::domain::Domain;
 use crate::thread::Thread;
 
+pub static GLOBAL_GARBAGE_COUNT: AtomicUsize = AtomicUsize::new(0);
 static DEFAULT_DOMAIN: Domain = Domain::new();
 
 // NOTE: MUST NOT take raw pointer to TLS. They randomly move???
