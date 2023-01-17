@@ -2,8 +2,6 @@ use core::marker::PhantomData;
 use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use core::{mem, ptr};
 
-use crossbeam_utils::CachePadded;
-
 use crate::thread::Thread;
 use crate::untagged;
 use crate::DEFAULT_THREAD;
@@ -175,7 +173,7 @@ pub(crate) struct ThreadRecords {
 pub struct ThreadRecord {
     pub(crate) next: *mut ThreadRecord,
     pub(crate) available: AtomicBool,
-    pub(crate) hazptrs: CachePadded<AtomicPtr<HazardArray>>,
+    pub(crate) hazptrs: AtomicPtr<HazardArray>,
 }
 
 type HazardArray = Vec<AtomicPtr<u8>>;
@@ -215,7 +213,7 @@ impl ThreadRecords {
         const HAZARD_ARRAY_INIT_SIZE: usize = 64;
         let array = Vec::from(unsafe { mem::zeroed::<[AtomicPtr<u8>; HAZARD_ARRAY_INIT_SIZE]>() });
         let new = Box::leak(Box::new(ThreadRecord {
-            hazptrs: CachePadded::new(AtomicPtr::new(Box::into_raw(Box::new(array)))),
+            hazptrs: AtomicPtr::new(Box::into_raw(Box::new(array))),
             next: ptr::null_mut(),
             available: AtomicBool::new(false),
         }));
