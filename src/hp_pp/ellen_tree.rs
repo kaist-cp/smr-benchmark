@@ -722,7 +722,7 @@ where
                         )
                         .is_ok()
                     {
-                        unsafe { retire(untagged(op)) };
+                        // unsafe { retire(untagged(op)) };
                     }
                     // The hazard pointers must be preserved,
                     // so backtrack CAS must be called before helping.
@@ -736,9 +736,9 @@ where
     fn help_marked<'domain, 'hp>(&self, op: *mut Update<K, V>) {
         // Precondition: op points to a DInfo record (i.e., it is not ⊥)
         let op_ref = unsafe { untagged(op).as_ref().unwrap().clone() };
-        let Update { gp, p, l_other, .. } = op_ref;
+        let Update { p, l_other, .. } = op_ref;
         // dchild CAS
-        let unlink = DChildUnlink { op: op_ref.clone() };
+        let unlink = DChildUnlink { op: untagged(op) };
         unsafe {
             if try_unlink(unlink, slice::from_ref(&l_other)) {
                 let _ = (&*p).update.store(
@@ -747,44 +747,20 @@ where
                 );
             }
         }
-        // dunflag CAS
-        if unsafe { gp.as_ref().unwrap() }
-            .update
-            .compare_exchange(
-                tagged(op, UpdateTag::DFLAG.bits()),
-                tagged(op, UpdateTag::CLEAN.bits()),
-                Ordering::Release,
-                Ordering::Relaxed,
-            )
-            .is_ok()
-        {
-            unsafe { retire(untagged(op)) };
-        }
     }
 
     fn help_insert<'domain, 'hp>(&self, op: *mut Update<K, V>) {
         // Precondition: op points to an IInfo record (i.e., it is not ⊥)
         let op_ref = unsafe { untagged(op).as_ref().unwrap().clone() };
         let Update {
-            p, new_internal, ..
+            new_internal, ..
         } = op_ref;
         // ichild CAS
-        let unlink = IChildUnlink { op: op_ref.clone() };
+        let unlink = IChildUnlink { op: untagged(op) };
         unsafe {
-            let _ = try_unlink(unlink, slice::from_ref(&new_internal));
-        }
-        // iunflag CAS
-        if unsafe { p.as_ref().unwrap() }
-            .update
-            .compare_exchange(
-                tagged(op, UpdateTag::IFLAG.bits()),
-                tagged(op, UpdateTag::CLEAN.bits()),
-                Ordering::Release,
-                Ordering::Relaxed,
-            )
-            .is_ok()
-        {
-            unsafe { retire(untagged(op)) };
+            if try_unlink(unlink, slice::from_ref(&new_internal)) {
+                retire(untagged(op));
+            }
         }
     }
 }
@@ -812,7 +788,7 @@ where
 }
 
 struct DChildUnlink<K, V> {
-    op: Update<K, V>,
+    op: *mut Update<K, V>,
 }
 
 impl<K, V> hp_pp::Unlink<Node<K, V>> for DChildUnlink<K, V>
@@ -823,8 +799,15 @@ where
     fn do_unlink(&self) -> Result<Vec<*mut Node<K, V>>, ()> {
         let Update {
             gp, p, l, l_other, ..
-        } = self.op;
+        } = unsafe { &*self.op }.clone();
         if cas_child(gp, p, l_other).is_ok() {
+            // dunflag CAS
+            unsafe { gp.as_ref().unwrap() }
+            .update
+            .store(
+                tagged(self.op, UpdateTag::CLEAN.bits()),
+                Ordering::Release
+            );
             Ok(vec![p, l])
         } else {
             Err(())
@@ -833,7 +816,7 @@ where
 }
 
 struct IChildUnlink<K, V> {
-    op: Update<K, V>,
+    op: *mut Update<K, V>,
 }
 
 impl<K, V> hp_pp::Unlink<Node<K, V>> for IChildUnlink<K, V>
@@ -844,8 +827,12 @@ where
     fn do_unlink(&self) -> Result<Vec<*mut Node<K, V>>, ()> {
         let Update {
             p, new_internal, l, ..
-        } = self.op;
+        } = unsafe { &*self.op }.clone();
         if cas_child(p, l, new_internal).is_ok() {
+            // iunflag CAS
+            unsafe { p.as_ref().unwrap() }
+                .update
+                .store(tagged(self.op, UpdateTag::CLEAN.bits()), Ordering::Release);
             Ok(vec![l])
         } else {
             Err(())

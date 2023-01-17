@@ -713,22 +713,38 @@ where
                     tagged(op, UpdateTag::MARKED_RETIRED.bits()),
                     Ordering::Release,
                 );
+                // dunflag CAS
+                if gp
+                    .as_ref()
+                    .unwrap()
+                    .update
+                    .compare_exchange(
+                        tagged(op, UpdateTag::DFLAG.bits()),
+                        tagged(op, UpdateTag::CLEAN.bits()),
+                        Ordering::Release,
+                        Ordering::Relaxed,
+                    )
+                    .is_ok()
+                {
+                    retire(untagged(op));
+                }
                 retire(p);
                 retire(l);
             }
-        }
-        // dunflag CAS
-        if unsafe { gp.as_ref().unwrap() }
-            .update
-            .compare_exchange(
-                tagged(op, UpdateTag::DFLAG.bits()),
-                tagged(op, UpdateTag::CLEAN.bits()),
-                Ordering::Release,
-                Ordering::Relaxed,
-            )
-            .is_ok()
-        {
-            unsafe { retire(untagged(op)) };
+        } else {
+            // dunflag CAS
+            if unsafe { gp.as_ref().unwrap() }
+                .update
+                .compare_exchange(
+                    tagged(op, UpdateTag::DFLAG.bits()),
+                    tagged(op, UpdateTag::CLEAN.bits()),
+                    Ordering::Release,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+            {
+                unsafe { retire(untagged(op)) };
+            }
         }
     }
 
@@ -740,20 +756,38 @@ where
         } = op_ref;
         // ichild CAS
         if self.cas_child(p, l, new_internal).is_ok() {
+            // iunflag CAS
+            if unsafe { p.as_ref().unwrap() }
+                .update
+                .compare_exchange(
+                    tagged(op, UpdateTag::IFLAG.bits()),
+                    tagged(op, UpdateTag::CLEAN.bits()),
+                    Ordering::Release,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+            {
+                unsafe { retire(untagged(op)) };
+            } else {
+                panic!("")
+            }
             unsafe { retire(l) };
-        }
-        // iunflag CAS
-        if unsafe { p.as_ref().unwrap() }
-            .update
-            .compare_exchange(
-                tagged(op, UpdateTag::IFLAG.bits()),
-                tagged(op, UpdateTag::CLEAN.bits()),
-                Ordering::Release,
-                Ordering::Relaxed,
-            )
-            .is_ok()
-        {
-            unsafe { retire(untagged(op)) };
+        } else {
+            // iunflag CAS
+            if unsafe { p.as_ref().unwrap() }
+                .update
+                .compare_exchange(
+                    tagged(op, UpdateTag::IFLAG.bits()),
+                    tagged(op, UpdateTag::CLEAN.bits()),
+                    Ordering::Release,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+            {
+                unsafe { retire(untagged(op)) };
+            } else {
+                panic!()
+            }
         }
     }
 
