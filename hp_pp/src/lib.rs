@@ -17,7 +17,7 @@ use crate::domain::Domain;
 use crate::thread::Thread;
 
 pub static GLOBAL_GARBAGE_COUNT: AtomicUsize = AtomicUsize::new(0);
-static DEFAULT_DOMAIN: Domain = Domain::new();
+pub static DEFAULT_DOMAIN: Domain = Domain::new();
 
 // NOTE: MUST NOT take raw pointer to TLS. They randomly move???
 thread_local! {
