@@ -12,6 +12,7 @@ pub struct Domain {
     pub(crate) threads: ThreadRecords,
     pub(crate) barrier: EpochBarrier,
     pub(crate) retireds: CachePadded<RetiredList>,
+    pub(crate) num_garbages: CachePadded<AtomicUsize>,
 }
 
 impl Domain {
@@ -20,6 +21,7 @@ impl Domain {
             threads: ThreadRecords::new(),
             barrier: EpochBarrier(AtomicUsize::new(0)),
             retireds: CachePadded::new(RetiredList::new()),
+            num_garbages: CachePadded::new(AtomicUsize::new(0)),
         }
     }
 
@@ -31,6 +33,10 @@ impl Domain {
             .iter()
             .flat_map(|thread| thread.iter(reclaimer))
             .collect()
+    }
+
+    pub fn num_garbages(&self) -> usize {
+        self.num_garbages.load(Ordering::Relaxed)
     }
 }
 

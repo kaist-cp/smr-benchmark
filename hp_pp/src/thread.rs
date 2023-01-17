@@ -46,18 +46,22 @@ impl<'domain> Thread<'domain> {
 // stuff related to reclamation
 impl<'domain> Thread<'domain> {
     const COUNTS_BETWEEN_INVALIDATION: usize = 32;
-    const COUNTS_BETWEEN_PUSH: usize = 64;
+    const COUNTS_BETWEEN_FLUSH: usize = 64;
     const COUNTS_BETWEEN_COLLECT: usize = 128;
+
+    fn flush_retireds(&mut self) {
+        self.domain.num_garbages.fetch_add(self.retired.len(), Ordering::AcqRel);
+        self.domain.retireds.push(mem::take(&mut self.retired))
+    }
 
     // NOTE: T: Send not required because we reclaim only locally.
     #[inline]
     pub unsafe fn retire<T>(&mut self, ptr: *mut T) {
-        GLOBAL_GARBAGE_COUNT.fetch_add(1, Ordering::AcqRel);
         self.retired.push(Retired::new(ptr));
         let count = self.count.wrapping_add(1);
         self.count = count;
-        if count % Self::COUNTS_BETWEEN_PUSH == 0 {
-            self.domain.retireds.push(mem::take(&mut self.retired))
+        if count % Self::COUNTS_BETWEEN_FLUSH == 0 {
+            self.flush_retireds();
         }
         // TODO: collecting right after pushing is kinda weird
         if count % Self::COUNTS_BETWEEN_COLLECT == 0 {
@@ -92,6 +96,9 @@ impl<'domain> Thread<'domain> {
             self.count = count;
             if count % Self::COUNTS_BETWEEN_INVALIDATION == 0 {
                 self.do_invalidation()
+            }
+            if count % Self::COUNTS_BETWEEN_FLUSH == 0 {
+                self.flush_retireds();
             }
             if count % Self::COUNTS_BETWEEN_COLLECT == 0 {
                 self.do_reclamation();
@@ -155,7 +162,7 @@ impl<'domain> Thread<'domain> {
                 }
             })
             .collect();
-        GLOBAL_GARBAGE_COUNT.fetch_sub(retireds_len-not_freed.len(), Ordering::AcqRel);
+        self.domain.num_garbages.fetch_sub(retireds_len - not_freed.len(), Ordering::AcqRel);
         self.domain.retireds.push(not_freed);
     }
 }
