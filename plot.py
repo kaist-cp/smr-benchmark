@@ -28,24 +28,23 @@ HHSLIST = "HHSList"
 HASHMAP = "HashMap"
 NMTREE = "NMTree"
 BONSAITREE = "BonsaiTree"
+EFRBTREE = "EFRBTree"
 
 EBR = "EBR"
 PEBR = "PEBR"
 NR = "NR"
-
-N1MS = ', 1ms'
-N10MS = ', 10ms'
-STALLED = ', stalled'
+HP = "HP"
+HP_PP = "HP_PP"
 
 # DS with read-dominated bench & write-only bench
-dss_all   = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, BONSAITREE]
-dss_read  = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, BONSAITREE]
-dss_write = [HLIST, HMLIST,          HASHMAP, NMTREE, BONSAITREE]
+dss_all   = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, EFRBTREE]
+dss_read  = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, EFRBTREE]
+dss_write = [HLIST, HMLIST,          HASHMAP, NMTREE, EFRBTREE]
 
 WRITE, HALF, READ = "write", "half", "read"
 
-SMR_ONLYs = [NR, EBR, PEBR]
-SMR_Is = [NR, EBR, EBR+N10MS, EBR+STALLED, PEBR, PEBR+N10MS, PEBR+STALLED]
+SMR_ONLYs = [NR, EBR, HP, HP_PP]
+SMR_Is = [NR, EBR, HP, HP_PP]
 
 cpu_count = os.cpu_count()
 if not cpu_count or cpu_count <= 24:
@@ -57,36 +56,27 @@ elif cpu_count <= 96:
 else:
     ts = [1] + list(range(10, 151, 10))
 
-n_map = {0: '', 1: N1MS, 2: N10MS, 3: STALLED}
+n_map = {0: ''}
 
 line_shapes = {
     NR: '.',
     EBR: 'o',
-    EBR + N10MS: 'o',
-    EBR + STALLED: 'o',
-    PEBR: 'D',
-    PEBR + N10MS: 'D',
-    PEBR + STALLED: 'D',
+    HP: 'o',
+    HP_PP: 'D'
 }
 
 line_colors = {
     NR: 'k',
     EBR: 'c',
-    EBR + N10MS: 'darkblue',
-    EBR + STALLED: 'g',
-    PEBR: 'hotpink',
-    PEBR + N10MS: 'firebrick',
-    PEBR + STALLED: 'orange',
+    HP: 'hotpink',
+    HP_PP: 'purple',
 }
 
 line_types = {
     NR: '-',
     EBR: '--',
-    EBR + N10MS: '-.',
-    EBR + STALLED: ':',
-    PEBR: '--',
-    PEBR + N10MS: '-.',
-    PEBR + STALLED: ':',
+    HP: '--',
+    HP_PP: '--',
 }
 
 def plot_title(ds, bench):
@@ -130,13 +120,14 @@ def draw(title, name, data, line_name, y_value, y_label=None, y_max=None, legend
     else:
         p += theme(legend_position='none')
 
-    p.save(name, width=8, height=5.5, units="in")
+    p.save(name, width=14, height=8.5, units="in")
 
 def draw_throughput(data, ds, bench):
     data = data[ds].copy()
     data = data[data.non_coop == 0]
+    print(data)
     y_label = 'Throughput (M op/s)' if ds in [HLIST, HASHMAP] else None
-    legend = ds in ([BONSAITREE, HHSLIST] if bench in [READ, HALF] else HMLIST)
+    legend = True
     y_max = data.throughput.max() * 1.05
     draw(plot_title(ds, bench), f'results/{ds}_{bench}_throughput.pdf',
          data, SMR_ONLY, THROUGHPUT, y_label, y_max, legend)
@@ -146,13 +137,31 @@ def draw_mem(data, ds, bench):
     data = data[ds].copy()
     y_label = 'Peak memory usage (MiB)' if ds in [HLIST, HASHMAP] else None
     y_max = None
-    legend = ds in ([BONSAITREE, HHSLIST] if bench in [READ, HALF] else HMLIST)
+    legend = True
     if ds == BONSAITREE:
-        _d = data[~data[SMR_I].isin([NR, EBR + STALLED])]  # exclude NR and EBR stalled
+        _d = data[~data[SMR_I].isin([NR])]  # exclude NR and EBR stalled
         max_threads = _d.threads.max()
         y_max = _d[_d.threads == max_threads].peak_mem.max() * 0.80
     elif ds in [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE]:
-        _d = data[~data[SMR_I].isin([NR, EBR + STALLED])]  # exclude NR and EBR stalled
+        _d = data[~data[SMR_I].isin([NR])]  # exclude NR and EBR stalled
+        y_max = _d[_d.ds == ds].peak_mem.max() * 1.05
+    else:
+        y_max = data.peak_mem.max() * 1.05
+    draw(plot_title(ds, bench), f'results/{ds}_{bench}_peak_mem.pdf',
+         data, SMR_I, PEAK_MEM, y_label, y_max, legend)
+
+
+def draw_mem(data, ds, bench):
+    data = data[ds].copy()
+    y_label = 'Peak memory usage (MiB)' if ds in [HLIST, HASHMAP] else None
+    y_max = None
+    legend = ds in ([BONSAITREE, HHSLIST] if bench in [READ, HALF] else HMLIST)
+    if ds == BONSAITREE:
+        _d = data[~data[SMR_I].isin([NR])]  # exclude NR and EBR stalled
+        max_threads = _d.threads.max()
+        y_max = _d[_d.threads == max_threads].peak_mem.max() * 0.80
+    elif ds in [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE]:
+        _d = data[~data[SMR_I].isin([NR])]  # exclude NR and EBR stalled
         y_max = _d[_d.ds == ds].peak_mem.max() * 1.05
     else:
         y_max = data.peak_mem.max() * 1.05

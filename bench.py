@@ -7,7 +7,14 @@ mms = ['EBR', 'NR', 'HP', 'HP_PP']
 cs = [1]
 i = 10
 cpu_count = os.cpu_count()
-ts = list(map(str, [1, 2, 3, 4] + list(range(8, 145, 8))))
+if not cpu_count or cpu_count <= 24:
+    ts = list(map(str, [1] + list(range(4, 33, 4))))
+elif cpu_count <= 56:
+    ts = list(map(str, [1] + list(range(5, 76, 5))))
+elif cpu_count <= 96:
+    ts = list(map(str, [1] + list(range(8, 121, 8))))
+else:
+    ts = list(map(str, [1] + list(range(10, 151, 10))))
 gs = [0, 1, 2]
 krs = [False, True] # Small, Large
 runs = 2
@@ -74,10 +81,13 @@ for run in range(runs):
             print("timeout")
             failed.append(cmd)
         except KeyboardInterrupt:
+            if len(failed) > 0:
+                print("====failed====")
+                print("\n".join(failed))
             exit(0)
         except:
             failed.append(cmd)
 
-if len(failed):
+if len(failed) > 0:
     print("====failed====")
     print("\n".join(failed))
