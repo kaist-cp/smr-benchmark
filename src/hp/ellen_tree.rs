@@ -768,8 +768,6 @@ where
                 .is_ok()
             {
                 unsafe { retire(untagged(op)) };
-            } else {
-                panic!("")
             }
             unsafe { retire(l) };
         } else {
@@ -785,8 +783,6 @@ where
                 .is_ok()
             {
                 unsafe { retire(untagged(op)) };
-            } else {
-                panic!()
             }
         }
     }
