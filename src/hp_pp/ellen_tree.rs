@@ -721,7 +721,7 @@ where
                         )
                         .is_ok()
                     {
-                        // unsafe { retire(untagged(op)) };
+                        unsafe { retire(untagged(op)) };
                     }
                     // The hazard pointers must be preserved,
                     // so backtrack CAS must be called before helping.
@@ -744,6 +744,7 @@ where
                     tagged(op, UpdateTag::MARKED_RETIRED.bits()),
                     Ordering::Release,
                 );
+                retire(untagged(op));
             }
         }
     }
