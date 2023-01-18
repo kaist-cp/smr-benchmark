@@ -41,9 +41,9 @@ impl<'domain> Thread<'domain> {
 
 // stuff related to reclamation
 impl<'domain> Thread<'domain> {
-    const COUNTS_BETWEEN_INVALIDATION: usize = 1;
-    const COUNTS_BETWEEN_FLUSH: usize = 1;
-    const COUNTS_BETWEEN_COLLECT: usize = 1;
+    const COUNTS_BETWEEN_INVALIDATION: usize = 32;
+    const COUNTS_BETWEEN_FLUSH: usize = 64;
+    const COUNTS_BETWEEN_COLLECT: usize = 128;
 
     fn flush_retireds(&mut self) {
         self.domain
