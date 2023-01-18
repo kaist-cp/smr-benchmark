@@ -23,7 +23,7 @@
 use core::{mem, ptr};
 use std::{
     slice,
-    sync::atomic::{AtomicPtr, Ordering},
+    sync::atomic::{AtomicBool, AtomicPtr, Ordering},
 };
 
 use hp_pp::{
@@ -737,14 +737,21 @@ where
         let op_ref = unsafe { untagged(op).as_ref().unwrap().clone() };
         let Update { p, l_other, .. } = op_ref;
         // dchild CAS
-        let unlink = DChildUnlink { op: untagged(op) };
+        let retire_op = Box::into_raw(Box::new(AtomicBool::new(false)));
+        let unlink = DChildUnlink {
+            op: untagged(op),
+            retire_op,
+        };
         unsafe {
             if try_unlink(unlink, slice::from_ref(&l_other)) {
                 let _ = (&*p).update.store(
                     tagged(op, UpdateTag::MARKED_RETIRED.bits()),
                     Ordering::Release,
                 );
-                retire(untagged(op));
+                if (*retire_op).load(Ordering::Acquire) {
+                    retire(untagged(op));
+                }
+                drop(Box::from_raw(retire_op));
             }
         }
     }
@@ -752,14 +759,19 @@ where
     fn help_insert<'domain, 'hp>(&self, op: *mut Update<K, V>) {
         // Precondition: op points to an IInfo record (i.e., it is not ⊥)
         let op_ref = unsafe { untagged(op).as_ref().unwrap().clone() };
-        let Update {
-            new_internal, ..
-        } = op_ref;
+        let Update { new_internal, .. } = op_ref;
         // ichild CAS
-        let unlink = IChildUnlink { op: untagged(op) };
+        let retire_op = Box::into_raw(Box::new(AtomicBool::new(false)));
+        let unlink = IChildUnlink {
+            op: untagged(op),
+            retire_op,
+        };
         unsafe {
             if try_unlink(unlink, slice::from_ref(&new_internal)) {
-                retire(untagged(op));
+                if (*retire_op).load(Ordering::Acquire) {
+                    retire(untagged(op));
+                }
+                drop(Box::from_raw(retire_op));
             }
         }
     }
@@ -789,6 +801,7 @@ where
 
 struct DChildUnlink<K, V> {
     op: *mut Update<K, V>,
+    retire_op: *mut AtomicBool,
 }
 
 impl<K, V> hp_pp::Unlink<Node<K, V>> for DChildUnlink<K, V>
@@ -802,12 +815,18 @@ where
         } = unsafe { &*self.op }.clone();
         if cas_child(gp, p, l_other).is_ok() {
             // dunflag CAS
-            unsafe { gp.as_ref().unwrap() }
-            .update
-            .store(
-                tagged(self.op, UpdateTag::CLEAN.bits()),
-                Ordering::Release
-            );
+            if unsafe { gp.as_ref().unwrap() }
+                .update
+                .compare_exchange(
+                    tagged(self.op, UpdateTag::DFLAG.bits()),
+                    tagged(self.op, UpdateTag::CLEAN.bits()),
+                    Ordering::Release,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+            {
+                unsafe { (*self.retire_op).store(true, Ordering::Release) };
+            }
             Ok(vec![p, l])
         } else {
             Err(())
@@ -817,6 +836,7 @@ where
 
 struct IChildUnlink<K, V> {
     op: *mut Update<K, V>,
+    retire_op: *mut AtomicBool,
 }
 
 impl<K, V> hp_pp::Unlink<Node<K, V>> for IChildUnlink<K, V>
@@ -830,9 +850,18 @@ where
         } = unsafe { &*self.op }.clone();
         if cas_child(p, l, new_internal).is_ok() {
             // iunflag CAS
-            unsafe { p.as_ref().unwrap() }
+            if unsafe { p.as_ref().unwrap() }
                 .update
-                .store(tagged(self.op, UpdateTag::CLEAN.bits()), Ordering::Release);
+                .compare_exchange(
+                    tagged(self.op, UpdateTag::IFLAG.bits()),
+                    tagged(self.op, UpdateTag::CLEAN.bits()),
+                    Ordering::Release,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+            {
+                unsafe { (*self.retire_op).store(true, Ordering::Release) };
+            }
             Ok(vec![l])
         } else {
             Err(())
