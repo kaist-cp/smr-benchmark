@@ -86,7 +86,6 @@ where
     #[inline]
     fn find_harris_michael(&mut self, key: &K) -> Result<bool, ()> {
         loop {
-            crate::traverse();
             debug_assert_eq!(tag(self.curr), 0);
             if self.curr.is_null() {
                 return Ok(false);
@@ -98,7 +97,6 @@ where
             light_membarrier();
             let (curr_new_base, curr_new_tag) = decompose_ptr(prev.load(Ordering::Acquire));
             if curr_new_tag != 0 {
-                crate::restart();
                 return Err(());
             } else if curr_new_base != self.curr {
                 // In contrary to what HP04 paper does, it's fine to retry protecting the new node
@@ -127,7 +125,6 @@ where
             {
                 unsafe { retire(self.curr) };
             } else {
-                crate::restart();
                 return Err(());
             }
             self.curr = next_base;

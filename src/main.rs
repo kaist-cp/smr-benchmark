@@ -26,7 +26,6 @@ use typenum::{Unsigned, U1, U4};
 use pebr_benchmark::ebr;
 use pebr_benchmark::hp;
 use pebr_benchmark::hp_pp;
-use pebr_benchmark::{restarts, traversals};
 // use pebr_benchmark::pebr;
 
 arg_enum! {
@@ -996,7 +995,7 @@ fn bench_map_hp<M: hp::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>
                     ops += 1;
                 }
 
-                ops_sender.send((ops, traversals(), restarts())).unwrap();
+                ops_sender.send(ops).unwrap();
             });
         }
     })
@@ -1004,20 +1003,11 @@ fn bench_map_hp<M: hp::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>
     println!("end");
 
     let mut ops = 0;
-    let mut traversals = 0;
-    let mut restarts = 0;
     for _ in 0..config.threads {
-        let (local_ops, local_traversals, local_restarts) = ops_receiver.recv().unwrap();
+        let local_ops = ops_receiver.recv().unwrap();
         ops += local_ops;
-        traversals += local_traversals;
-        restarts += local_restarts;
     }
     let ops_per_sec = ops / config.interval;
     let (peak_mem, avg_mem, garb_peak, garb_avg) = mem_receiver.recv().unwrap();
-    println!(
-        "traversals/op: {:.1}, total restarts: {}",
-        traversals as f64 / ops as f64,
-        restarts
-    );
     (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
 }
