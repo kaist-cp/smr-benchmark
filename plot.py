@@ -4,6 +4,7 @@ from plotnine import *
 import warnings
 import os
 import matplotlib
+import math
 
 warnings.filterwarnings("ignore")
 pd.set_option('display.max_rows', None)
@@ -16,7 +17,7 @@ matplotlib.rcParams['ps.fonttype'] = 42
 THREADS = "threads"
 THROUGHPUT = "throughput"
 PEAK_MEM = "peak_mem"
-AVG_MEM = "avg_mem"
+AVG_GARB = "avg_garb"
 
 # legend
 SMR_ONLY = "SMR\n"
@@ -47,14 +48,7 @@ SMR_ONLYs = [NR, EBR, HP, HP_PP]
 SMR_Is = [NR, EBR, HP, HP_PP]
 
 cpu_count = os.cpu_count()
-if not cpu_count or cpu_count <= 24:
-    ts = [1] + list(range(4, 33, 4))
-elif cpu_count <= 56:
-    ts = [1] + list(range(5, 76, 5))
-elif cpu_count <= 96:
-    ts = [1] + list(range(8, 121, 8))
-else:
-    ts = [1] + list(range(10, 151, 10))
+ts = [1, 2, 3, 4] + list(range(8, 145, 8))
 
 n_map = {0: ''}
 
@@ -87,7 +81,7 @@ def plot_title(ds, bench):
     return ds
 
 # line_name: SMR, SMR_I
-def draw(title, name, data, line_name, y_value, y_label=None, y_max=None, legend=False):
+def draw(title, name, data, line_name, y_value, y_label=None, y_max=None, legend=False, y_log=False, y_min=None):
     p = ggplot(
             data,
             aes(x=THREADS, y=y_value,
@@ -99,6 +93,9 @@ def draw(title, name, data, line_name, y_value, y_label=None, y_max=None, legend
         theme_bw() + scale_x_continuous(breaks=ts) + \
         labs(title = title) + theme(plot_title = element_text(size=28))
 
+    if y_log:
+        p += scale_y_continuous(trans='log10')
+
     p += theme(
             axis_title_x=element_text(size=15),
             axis_text_x=element_text(size=14),
@@ -109,8 +106,9 @@ def draw(title, name, data, line_name, y_value, y_label=None, y_max=None, legend
     else:
         p += theme(axis_title_y=element_blank())
 
+    y_min = y_min if y_min != None else 0
     if y_max:
-        p += coord_cartesian(ylim=(0, y_max))
+        p += coord_cartesian(ylim=(y_min, y_max))
     if legend:
         # HACK: `\n` at the end of legend title
         p += theme(legend_title=element_text(size=18, linespacing=1.5))
@@ -120,36 +118,16 @@ def draw(title, name, data, line_name, y_value, y_label=None, y_max=None, legend
     else:
         p += theme(legend_position='none')
 
-    p.save(name, width=14, height=8.5, units="in")
+    p.save(name, width=10, height=7, units="in")
 
 def draw_throughput(data, ds, bench):
     data = data[ds].copy()
     data = data[data.non_coop == 0]
-    print(data)
     y_label = 'Throughput (M op/s)' if ds in [HLIST, HASHMAP] else None
     legend = True
     y_max = data.throughput.max() * 1.05
     draw(plot_title(ds, bench), f'results/{ds}_{bench}_throughput.pdf',
          data, SMR_ONLY, THROUGHPUT, y_label, y_max, legend)
-
-
-def draw_mem(data, ds, bench):
-    data = data[ds].copy()
-    y_label = 'Peak memory usage (MiB)' if ds in [HLIST, HASHMAP] else None
-    y_max = None
-    legend = True
-    if ds == BONSAITREE:
-        _d = data[~data[SMR_I].isin([NR])]  # exclude NR and EBR stalled
-        max_threads = _d.threads.max()
-        y_max = _d[_d.threads == max_threads].peak_mem.max() * 0.80
-    elif ds in [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE]:
-        _d = data[~data[SMR_I].isin([NR])]  # exclude NR and EBR stalled
-        y_max = _d[_d.ds == ds].peak_mem.max() * 1.05
-    else:
-        y_max = data.peak_mem.max() * 1.05
-    draw(plot_title(ds, bench), f'results/{ds}_{bench}_peak_mem.pdf',
-         data, SMR_I, PEAK_MEM, y_label, y_max, legend)
-
 
 def draw_mem(data, ds, bench):
     data = data[ds].copy()
@@ -160,7 +138,7 @@ def draw_mem(data, ds, bench):
         _d = data[~data[SMR_I].isin([NR])]  # exclude NR and EBR stalled
         max_threads = _d.threads.max()
         y_max = _d[_d.threads == max_threads].peak_mem.max() * 0.80
-    elif ds in [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE]:
+    elif ds in [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, EFRBTREE]:
         _d = data[~data[SMR_I].isin([NR])]  # exclude NR and EBR stalled
         y_max = _d[_d.ds == ds].peak_mem.max() * 1.05
     else:
@@ -168,6 +146,29 @@ def draw_mem(data, ds, bench):
     draw(plot_title(ds, bench), f'results/{ds}_{bench}_peak_mem.pdf',
          data, SMR_I, PEAK_MEM, y_label, y_max, legend)
 
+
+def draw_garb_log(data, ds, bench):
+    data = data[ds].copy()
+    data = data[data.mm != "NR"]
+    y_label = 'Avg. Unreclaimed memory blocks'
+    legend = True
+    max_threads = data.threads.max()
+    min_threads = data.threads.min()
+    y_max = data[(data.threads == max_threads)].avg_garb.max()
+    y_min = data[(data.threads == min_threads)].avg_garb.min()
+    draw(plot_title(ds, bench), f'results/{ds}_{bench}_avg_garb_log.pdf',
+         data, SMR_ONLY, AVG_GARB, y_label, math.log10(y_max), legend, True, math.log10(y_min))
+
+
+def draw_garb(data, ds, bench):
+    data = data[ds].copy()
+    data = data[data.mm != "NR"]
+    y_label = 'Avg. Unreclaimed memory blocks'
+    legend = True
+    max_threads = data.threads.max()
+    y_max = data[(data.threads == max_threads) & (data.mm == HP_PP)].avg_garb.max() * 1.2
+    draw(plot_title(ds, bench), f'results/{ds}_{bench}_avg_garb.pdf',
+         data, SMR_ONLY, AVG_GARB, y_label, y_max, legend)
 
 
 raw_data = {}
@@ -177,6 +178,9 @@ avg_data = { WRITE: {}, HALF: {}, READ: {} }
 # preprocess
 for ds in dss_all:
     data = pd.read_csv('results/' + ds + '.csv')
+
+    # for testing
+    data = data[data.threads <= 80]
 
     data.throughput = data.throughput.map(lambda x: x / 1000_000)
     data.peak_mem = data.peak_mem.map(lambda x: x / (2 ** 20))
@@ -206,7 +210,17 @@ for ds in dss_read:
     draw_throughput(avg_data[HALF], ds, HALF)
     draw_throughput(avg_data[READ], ds, READ)
 
-# 2. peak mem graph, 7 lines (SMR_I)
+# 2. avg garbage graph, 7 lines (SMR_ONLY)
+for ds in dss_write:
+    draw_garb(avg_data[WRITE], ds, WRITE)
+    draw_garb_log(avg_data[WRITE], ds, WRITE)
+for ds in dss_read:
+    draw_garb(avg_data[HALF], ds, HALF)
+    draw_garb(avg_data[READ], ds, READ)
+    draw_garb_log(avg_data[HALF], ds, HALF)
+    draw_garb_log(avg_data[READ], ds, READ)
+
+# 3. peak mem graph
 for ds in dss_write:
     draw_mem(avg_data[WRITE], ds, WRITE)
 for ds in dss_read:
