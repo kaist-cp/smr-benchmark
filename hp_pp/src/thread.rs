@@ -102,10 +102,9 @@ impl<'domain> Thread<'domain> {
     }
 
     pub(crate) fn do_invalidation(&mut self) {
-        let unlinkeds = mem::take(&mut self.unlinkeds);
         let mut hps = Vec::with_capacity(2 * Self::COUNTS_BETWEEN_INVALIDATION);
         let mut invalidateds = Vec::with_capacity(2 * Self::COUNTS_BETWEEN_INVALIDATION);
-        for unlinked in unlinkeds {
+        for unlinked in self.unlinkeds.drain(..) {
             let (mut ptrs, mut hs) = unlinked.do_invalidation();
             invalidateds.append(&mut ptrs);
             hps.append(&mut hs);
