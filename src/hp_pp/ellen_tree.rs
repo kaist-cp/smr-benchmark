@@ -486,7 +486,6 @@ where
             if self.search_inner(key, cursor).is_ok() {
                 break;
             }
-            crate::restart();
         }
     }
 

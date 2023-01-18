@@ -164,7 +164,6 @@ where
         // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
 
         let found = loop {
-            crate::traverse();
             if self.curr.is_null() {
                 break false;
             }
@@ -179,7 +178,6 @@ where
                 )
                 .is_err()
             {
-                crate::restart();
                 return Err(());
             }
 
@@ -212,7 +210,6 @@ where
                     self.prev = anchor;
                     Ok(found)
                 } else {
-                    crate::restart();
                     Err(())
                 }
             }
@@ -223,7 +220,6 @@ where
     #[inline]
     fn find_harris_michael(&mut self, key: &K) -> Result<bool, ()> {
         loop {
-            crate::traverse();
             debug_assert_eq!(tag(self.curr), 0);
             if self.curr.is_null() {
                 return Ok(false);
@@ -237,7 +233,6 @@ where
             let (curr_new_base, curr_new_tag) = decompose_ptr(prev.load(Ordering::Acquire));
             if curr_new_tag == 3 {
                 // Stopped. Restart from head.
-                crate::restart();
                 return Err(());
             } else if curr_new_base != self.curr {
                 // If link changed but not stopped, retry protecting the new node.
@@ -266,7 +261,6 @@ where
                     next_base,
                 };
                 if unsafe { !try_unlink(unlink, links) } {
-                    crate::restart();
                     return Err(());
                 }
             }
@@ -277,7 +271,6 @@ where
     #[inline]
     fn find_harris_herlihy_shavit(&mut self, key: &K) -> Result<bool, ()> {
         loop {
-            crate::traverse();
             if self.curr.is_null() {
                 return Ok(false);
             }
@@ -290,7 +283,6 @@ where
             let (curr_new_base, curr_new_tag) = decompose_ptr(prev.load(Ordering::Acquire));
             if curr_new_tag == 3 {
                 // Stopped. Restart from head.
-                crate::restart();
                 return Err(());
             } else if curr_new_base != self.curr {
                 // If link changed but not stopped, retry protecting the new node.

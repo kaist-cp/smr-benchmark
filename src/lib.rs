@@ -40,25 +40,3 @@ thread_local! {
     static TRAVERSE_COUNT: Cell<u64> = Cell::new(0);
     static RESTART_COUNT: Cell<u64> = Cell::new(0);
 }
-
-pub(crate) fn traverse() {
-    TRAVERSE_COUNT.with(|t| {
-        let count = t.get();
-        t.set(count.wrapping_add(1));
-    })
-}
-
-pub(crate) fn restart() {
-    RESTART_COUNT.with(|t| {
-        let count = t.get();
-        t.set(count.wrapping_add(1));
-    })
-}
-
-pub fn traversals() -> u64 {
-    TRAVERSE_COUNT.with(|t| t.get())
-}
-
-pub fn restarts() -> u64 {
-    RESTART_COUNT.with(|t| t.get())
-}
