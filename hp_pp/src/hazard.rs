@@ -39,22 +39,11 @@ impl<'domain> HazardPointer<'domain> {
     }
 
     /// Protect the given address.
-    ///
-    /// You will very rarely want to use this method, and should prefer the other protection
-    /// methods instead, as they guard against races between when the value of a shared pointer was
-    /// read and any changes to the shared pointer address.
-    ///
-    /// Note that protecting a given pointer only has an effect if any thread that may drop the
-    /// pointer does so through the same [`Domain`] as this hazard pointer is associated with.
-    ///
     pub fn protect_raw<T>(&mut self, ptr: *mut T) {
         self.slot().store(ptr as *mut u8, Ordering::Release);
     }
 
     /// Release the protection awarded by this hazard pointer, if any.
-    ///
-    /// If the hazard pointer was protecting an object, that object may now be reclaimed when
-    /// retired (assuming it isn't protected by any _other_ hazard pointers).
     pub fn reset_protection(&mut self) {
         self.slot().store(ptr::null_mut(), Ordering::Release);
     }

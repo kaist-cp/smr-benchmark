@@ -49,14 +49,14 @@ pub unsafe fn retire<T>(ptr: *mut T) {
 /// * TODO
 pub unsafe fn try_unlink<T>(
     unlink: impl Unlink<T>,
-    links: &[*mut T],
+    frontier: &[*mut T],
 ) -> bool
 where
     T: Invalidate,
 {
     DEFAULT_THREAD.with(|t| {
         t.borrow_mut()
-            .try_unlink(unlink, links)
+            .try_unlink(unlink, frontier)
     })
 }
 
