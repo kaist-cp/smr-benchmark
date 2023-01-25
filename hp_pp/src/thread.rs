@@ -176,13 +176,13 @@ impl<'domain> Thread<'domain> {
         for i in 0..size {
             new_array.push(AtomicPtr::new(array[i].load(Ordering::Relaxed)));
         }
-        unsafe { self.retire(array_ptr) };
         for _ in size..new_size {
             new_array.push(AtomicPtr::new(ptr::null_mut()));
         }
         self.hazards
             .hazptrs
             .store(Box::into_raw(new_array), Ordering::Release);
+        unsafe { self.retire(array_ptr) };
         self.available_indices.extend(size..new_size)
     }
 
