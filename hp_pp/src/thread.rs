@@ -67,11 +67,11 @@ impl<'domain> Thread<'domain> {
         }
     }
 
-    pub unsafe fn try_unlink<T>(&mut self, unlink: impl Unlink<T>, links: &[*mut T]) -> bool
+    pub unsafe fn try_unlink<T>(&mut self, unlink: impl Unlink<T>, frontier: &[*mut T]) -> bool
     where
         T: Invalidate,
     {
-        let hps: Vec<_> = links
+        let hps: Vec<_> = frontier
             .iter()
             .map(|&ptr| {
                 let mut hp = HazardPointer::new(self);

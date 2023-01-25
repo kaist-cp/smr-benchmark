@@ -22,9 +22,6 @@ unsafe impl Send for Retired {}
 
 impl Retired {
     pub(crate) fn new<T>(ptr: *mut T) -> Self {
-        unsafe fn free<T>(ptr: *mut u8) {
-            drop(Box::from_raw(ptr as *mut T))
-        }
         Self {
             ptr: ptr as *mut u8,
             deleter: free::<T>,
@@ -34,12 +31,6 @@ impl Retired {
 
 impl<'domain> Unlinked<'domain> {
     pub(crate) fn new<T: Invalidate>(ptrs: Vec<*mut T>, hps: Vec<HazardPointer<'domain>>) -> Self {
-        unsafe fn invalidate<T: Invalidate>(ptr: *mut u8) {
-            T::invalidate(&*(ptr as *mut T))
-        }
-        unsafe fn free<T>(ptr: *mut u8) {
-            drop(Box::from_raw(ptr as *mut T))
-        }
         Self {
             ptrs: unsafe { mem::transmute::<Vec<_>, Vec<*mut u8>>(ptrs) },
             invalidater: invalidate::<T>,
@@ -59,6 +50,14 @@ impl<'domain> Unlinked<'domain> {
         }
         (retireds, self.hps)
     }
+}
+
+unsafe fn free<T>(ptr: *mut u8) {
+    drop(Box::from_raw(ptr as *mut T))
+}
+
+unsafe fn invalidate<T: Invalidate>(ptr: *mut u8) {
+    T::invalidate(&*(ptr as *mut T))
 }
 
 #[derive(Debug)]
