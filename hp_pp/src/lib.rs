@@ -13,7 +13,7 @@ use core::cell::RefCell;
 use std::thread_local;
 
 use crate::domain::Domain;
-use crate::thread::Thread;
+pub use crate::thread::Thread;
 
 pub static DEFAULT_DOMAIN: Domain = Domain::new();
 
