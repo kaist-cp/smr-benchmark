@@ -1,4 +1,5 @@
-use hp_pp::{retire, tag, tagged, untagged, HazardPointer};
+use hp_pp::Thread;
+use hp_pp::{tag, tagged, untagged, HazardPointer, DEFAULT_DOMAIN};
 
 use super::concurrent_map::ConcurrentMap;
 use std::cmp;
@@ -137,6 +138,7 @@ pub struct Handle<'domain> {
     successor_h: HazardPointer<'domain>,
     parent_h: HazardPointer<'domain>,
     leaf_h: HazardPointer<'domain>,
+    thread: Thread<'domain>,
 }
 
 impl Default for Handle<'static> {
@@ -146,6 +148,7 @@ impl Default for Handle<'static> {
             successor_h: HazardPointer::default(),
             parent_h: HazardPointer::default(),
             leaf_h: HazardPointer::default(),
+            thread: Thread::new(&DEFAULT_DOMAIN),
         }
     }
 }
@@ -355,7 +358,7 @@ where
     /// Physically removes node.
     ///
     /// Returns true if it successfully unlinks the flagged node in `record`.
-    fn cleanup(&self, record: &SeekRecord<K, V>) -> bool {
+    fn cleanup(&self, record: &mut SeekRecord<K, V>) -> bool {
         // Identify the node(subtree) that will replace `successor`.
         let leaf_marked = record.leaf_addr().load(Ordering::Acquire);
         let leaf_flag = Marks::from_bits_truncate(tag(leaf_marked)).flag();
@@ -400,8 +403,7 @@ where
 
                     stack.push(node_ref.left.load(Ordering::Relaxed));
                     stack.push(node_ref.right.load(Ordering::Relaxed));
-                    retire(node_addr);
-                    // Domain::global().retire_ptr::<_, Box<_>>(node_addr);
+                    record.handle.thread.retire(node_addr);
                 }
             }
         }
@@ -489,7 +491,7 @@ where
                     // Insertion failed. Help the conflicting remove operation if needed.
                     // NOTE: The paper version checks if any of the mark is set, which is redundant.
                     if untagged(current) == leaf {
-                        self.cleanup(&record);
+                        self.cleanup(record);
                     }
                 }
             }
@@ -543,7 +545,7 @@ where
             ) {
                 Ok(_) => {
                     // Finalize the node to be removed
-                    if self.cleanup(&record) {
+                    if self.cleanup(&mut record) {
                         return Ok(Some(value));
                     }
                     // In-place cleanup failed. Enter the cleanup phase.
@@ -555,7 +557,7 @@ where
                     // case 2. Another thread flagged/tagged the edge to leaf: help and restart
                     // NOTE: The paper version checks if any of the mark is set, which is redundant.
                     if leaf == tagged(current, Marks::empty().bits()) {
-                        self.cleanup(&record);
+                        self.cleanup(&mut record);
                     }
                 }
             }
@@ -572,7 +574,7 @@ where
             }
 
             // leaf is still present in the tree.
-            if self.cleanup(&record) {
+            if self.cleanup(&mut record) {
                 return Ok(Some(value));
             }
         }
