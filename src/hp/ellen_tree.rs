@@ -23,7 +23,9 @@
 use core::{mem, ptr};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
-use hp_pp::{decompose_ptr, light_membarrier, retire, tag, tagged, untagged, HazardPointer};
+use hp_pp::{
+    decompose_ptr, light_membarrier, tag, tagged, untagged, HazardPointer, Thread, DEFAULT_DOMAIN,
+};
 
 use super::concurrent_map::ConcurrentMap;
 
@@ -227,6 +229,7 @@ pub struct Handle<'domain> {
     new_internal_h: HazardPointer<'domain>,
     // Protect an owner of update which is currently being helped.
     help_src_h: HazardPointer<'domain>,
+    thread: Thread<'domain>,
 }
 
 impl Default for Handle<'static> {
@@ -241,6 +244,7 @@ impl Default for Handle<'static> {
             aux_update_h: HazardPointer::default(),
             new_internal_h: HazardPointer::default(),
             help_src_h: HazardPointer::default(),
+            thread: Thread::new(&DEFAULT_DOMAIN),
         }
     }
 }
@@ -476,7 +480,7 @@ where
                         //      (threads which help marked must have a hazard pointer to gp.)
                         if !pupdate_ref.retired.load(Ordering::Acquire) {
                             // Help cleaning marked node on search, and restart.
-                            self.help_marked(pupdate);
+                            self.help_marked(pupdate, cursor.handle);
                         }
                     } else {
                         return Err(2);
@@ -571,7 +575,7 @@ where
                     Ordering::Acquire,
                 ) {
                     Ok(_) => {
-                        self.help_insert(new_pupdate);
+                        self.help_insert(new_pupdate, handle);
                         return true;
                     }
                     Err(current) => {
@@ -693,7 +697,7 @@ where
 
             // NOTE: help_marked is called during `search`.
             match UpdateTag::from_bits_truncate(tag(op)) {
-                UpdateTag::IFLAG => self.help_insert(op),
+                UpdateTag::IFLAG => self.help_insert(op, handle),
                 UpdateTag::DFLAG => {
                     let _ = self.help_delete(op, handle);
                 }
@@ -724,7 +728,7 @@ where
         {
             Ok(_) => {
                 // (prev value) = op → pupdate
-                self.help_marked(new_op);
+                self.help_marked(new_op, handle);
                 return true;
             }
             Err(current) => {
@@ -738,7 +742,7 @@ where
                     return true;
                 } else if current == new_op {
                     // (prev value) = <Mark, op>
-                    self.help_marked(new_op);
+                    self.help_marked(new_op, handle);
                     return true;
                 } else {
                     // backtrack CAS
@@ -754,7 +758,7 @@ where
                         .compare_exchange(false, true, Ordering::Release, Ordering::Relaxed)
                         .is_ok()
                     {
-                        unsafe { retire(untagged(op)) };
+                        unsafe { handle.thread.retire(untagged(op)) };
                     }
 
                     // The hazard pointers must be preserved before dereferencing gp,
@@ -772,7 +776,7 @@ where
     // Precondition:
     // 1. gp and p must be protected by some hazard pointers.
     // 2. op must be protected by aux_update_h.
-    fn help_marked<'domain, 'hp>(&self, op: *mut Update<K, V>) {
+    fn help_marked<'domain, 'hp>(&self, op: *mut Update<K, V>, handle: &'hp mut Handle<'domain>) {
         // Precondition: op points to a DInfo record (i.e., it is not ⊥)
         let op_ref = unsafe { untagged(op).as_ref().unwrap().clone() };
         let Update {
@@ -808,9 +812,9 @@ where
             .is_ok()
         {
             unsafe {
-                retire(*l);
-                retire(*p);
-                retire(untagged(op));
+                handle.thread.retire(*l);
+                handle.thread.retire(*p);
+                handle.thread.retire(untagged(op));
             }
         }
     }
@@ -818,7 +822,7 @@ where
     // Precondition:
     // 1. p must be protected by a hazard pointer.
     // 2. op must be protected by aux_update_h.
-    fn help_insert<'domain, 'hp>(&self, op: *mut Update<K, V>) {
+    fn help_insert<'domain, 'hp>(&self, op: *mut Update<K, V>, handle: &'hp mut Handle<'domain>) {
         // Precondition: op points to an IInfo record (i.e., it is not ⊥)
         let op_ref = unsafe { untagged(op).as_ref().unwrap() };
         let Update {
@@ -853,8 +857,8 @@ where
             .is_ok()
         {
             unsafe {
-                retire(*l);
-                retire(untagged(op));
+                handle.thread.retire(*l);
+                handle.thread.retire(untagged(op));
             }
         }
     }

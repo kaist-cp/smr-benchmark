@@ -4,7 +4,9 @@ use std::cmp::Ordering::{Equal, Greater, Less};
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
-use hp_pp::{decompose_ptr, light_membarrier, retire, tag, untagged, HazardPointer};
+use hp_pp::{
+    decompose_ptr, light_membarrier, tag, untagged, HazardPointer, Thread, DEFAULT_DOMAIN,
+};
 
 #[derive(Debug)]
 pub struct Node<K, V> {
@@ -44,6 +46,7 @@ impl<K, V> Drop for List<K, V> {
 pub struct Handle<'domain> {
     prev_h: HazardPointer<'domain>,
     curr_h: HazardPointer<'domain>,
+    thread: Thread<'domain>,
 }
 
 impl Default for Handle<'static> {
@@ -51,6 +54,7 @@ impl Default for Handle<'static> {
         Self {
             prev_h: HazardPointer::default(),
             curr_h: HazardPointer::default(),
+            thread: Thread::new(&DEFAULT_DOMAIN),
         }
     }
 }
@@ -123,7 +127,7 @@ where
                 .compare_exchange(self.curr, next_base, Ordering::Release, Ordering::Relaxed)
                 .is_ok()
             {
-                unsafe { retire(self.curr) };
+                unsafe { self.handle.thread.retire(self.curr) };
             } else {
                 return Err(());
             }
@@ -245,7 +249,7 @@ where
                 .compare_exchange(cursor.curr, next, Ordering::Release, Ordering::Relaxed)
                 .is_ok()
             {
-                unsafe { retire(cursor.curr) };
+                unsafe { cursor.handle.thread.retire(cursor.curr) };
             }
 
             return Ok(Some(&curr_node.value));
