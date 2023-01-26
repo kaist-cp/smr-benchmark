@@ -21,7 +21,7 @@
 //!   after an unflag or backtrack CAS.
 
 use core::{mem, ptr};
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicUsize, AtomicBool, AtomicPtr, Ordering};
 
 use hp_pp::{
     decompose_ptr, light_membarrier, tag, tagged, untagged, HazardPointer, Thread, DEFAULT_DOMAIN,
@@ -336,6 +336,15 @@ where
 
 pub struct EFRBTree<K, V> {
     root: AtomicPtr<Node<K, V>>,
+    // When CASing an update block with CLEAN,
+    // attach a CLEAN tag to this timestamp.
+    // This guarantees that CLEANed Update's addresses
+    // are all unique. so iflag CAS and dflag CAS will succeed
+    // if and only if the parent's child nodes remain same.
+    // 
+    // NOTE: CASing with <op, CLEAN> like original paper is dangerous
+    // in real life because `malloc` can reuse freeed memory address!
+    timestamp: AtomicUsize,
 }
 
 impl<K, V> Default for EFRBTree<K, V>
@@ -393,6 +402,7 @@ where
                 Node::leaf(Key::Inf1, None),
                 Node::leaf(Key::Inf2, None),
             )))),
+            timestamp: AtomicUsize::new(0),
         }
     }
 
@@ -433,7 +443,6 @@ where
             HazardPointer::swap(&mut cursor.handle.gpupdate_h, &mut cursor.handle.pupdate_h);
 
             cursor.pupdate = l_node.protect_update(&mut cursor.handle.pupdate_h);
-            light_membarrier();
             (cursor.l, cursor.l_other) =
                 l_node.protect_next(&mut cursor.handle.l_h, &mut cursor.handle.l_other_h);
             if l_node.key.cmp(key) != std::cmp::Ordering::Greater {
@@ -443,7 +452,6 @@ where
             } else {
                 cursor.p_l_dir = Direction::L;
             }
-            light_membarrier();
 
             // Check if the parent node is marked.
             // pupdate must be loaded again here. This is because if the current thread is stopped
@@ -613,7 +621,7 @@ where
             }
             let (gp_node, p_node, l_node, _) = some_or!(cursor.validate_full(), continue);
 
-            if l_node.key != Key::Fin(key.clone()) {
+            if l_node.key != *key {
                 return None;
             }
             if tag(cursor.gpupdate) != UpdateTag::CLEAN.bits() {
@@ -748,7 +756,7 @@ where
                     // backtrack CAS
                     let _ = gp_ref.update.compare_exchange(
                         tagged(op, UpdateTag::DFLAG.bits()),
-                        tagged(op, UpdateTag::CLEAN.bits()),
+                        tagged(self.timestamp.fetch_add(8, Ordering::SeqCst) as *mut _, UpdateTag::CLEAN.bits()),
                         Ordering::Release,
                         Ordering::Relaxed,
                     );
@@ -801,7 +809,7 @@ where
         // dunflag CAS
         let _ = gp_node.update.compare_exchange(
             tagged(op, UpdateTag::DFLAG.bits()),
-            tagged(op, UpdateTag::CLEAN.bits()),
+            tagged(self.timestamp.fetch_add(8, Ordering::SeqCst) as *mut _, UpdateTag::CLEAN.bits()),
             Ordering::Release,
             Ordering::Relaxed,
         );
@@ -846,7 +854,7 @@ where
         // iunflag CAS
         let _ = p_node.update.compare_exchange(
             tagged(op, UpdateTag::IFLAG.bits()),
-            tagged(op, UpdateTag::CLEAN.bits()),
+            tagged(self.timestamp.fetch_add(8, Ordering::SeqCst) as *mut _, UpdateTag::CLEAN.bits()),
             Ordering::Release,
             Ordering::Relaxed,
         );
