@@ -24,7 +24,8 @@ use core::{mem, ptr, slice};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 use hp_pp::{
-    decompose_ptr, light_membarrier, tag, tagged, try_unlink, untagged, HazardPointer, ProtectError,
+    decompose_ptr, light_membarrier, tag, tagged, untagged, HazardPointer, ProtectError, Thread,
+    DEFAULT_DOMAIN,
 };
 
 use crate::hp::concurrent_map::ConcurrentMap;
@@ -238,6 +239,7 @@ pub struct Handle<'domain> {
     new_internal_h: HazardPointer<'domain>,
     // Protect an owner of update which is currently being helped.
     help_src_h: HazardPointer<'domain>,
+    thread: Thread<'domain>,
 }
 
 impl Default for Handle<'static> {
@@ -252,6 +254,7 @@ impl Default for Handle<'static> {
             aux_update_h: HazardPointer::default(),
             new_internal_h: HazardPointer::default(),
             help_src_h: HazardPointer::default(),
+            thread: Thread::new(&DEFAULT_DOMAIN),
         }
     }
 }
@@ -375,13 +378,13 @@ impl<K, V> Drop for EFRBTree<K, V> {
                 stack.push(node_ref.left.load(Ordering::Relaxed));
                 stack.push(node_ref.right.load(Ordering::Relaxed));
                 let update = node_ref.update.load(Ordering::Relaxed);
-                if !untagged(update).is_null() && tag(update) != UpdateTag::CLEAN.bits() {
+                if !untagged(update).is_null() {
                     drop(Box::from_raw(update));
                 }
                 drop(Box::from_raw(node));
             }
             let update = root.update.load(Ordering::Relaxed);
-            if !untagged(update).is_null() && tag(update) != UpdateTag::CLEAN.bits() {
+            if !untagged(update).is_null() {
                 drop(Box::from_raw(update));
             }
         }
@@ -441,7 +444,6 @@ where
             HazardPointer::swap(&mut cursor.handle.gpupdate_h, &mut cursor.handle.pupdate_h);
 
             cursor.pupdate = l_node.protect_update(&mut cursor.handle.pupdate_h);
-            light_membarrier();
             (cursor.l, cursor.l_other) =
                 l_node.protect_next(&mut cursor.handle.l_h, &mut cursor.handle.l_other_h)?;
             if l_node.key.cmp(key) != std::cmp::Ordering::Greater {
@@ -451,7 +453,6 @@ where
             } else {
                 cursor.p_l_dir = Direction::L;
             }
-            light_membarrier();
 
             // Check if the parent node is marked.
             // pupdate must be loaded again here. This is because if the current thread is stopped
@@ -467,31 +468,26 @@ where
                 // - If it is unreachable, dchild CAS has finished,
                 //   and current l is no longer valid, also dereferencing
                 //   pupdate may be dangerous.
-                //  (Even if the update is reclaimed, current searching must be restarted.)
+                //   (Even if the update is reclaimed, current searching must be restarted.)
                 //
                 // NOTE: cursor.gp might be different with pupdate.gp, and even marked & retired!
                 //       To avoid this situation, we must check whether current gp's update is <pupdate, DFLAG>
-                if cursor.p == unsafe { &*cursor.gp }.load_child(cursor.gp_p_dir) {
-                    if tagged(pupdate, UpdateTag::DFLAG.bits())
+                if cursor.p == unsafe { &*cursor.gp }.load_child(cursor.gp_p_dir)
+                    && tagged(pupdate, UpdateTag::DFLAG.bits())
                         == unsafe { &*cursor.gp }.update.load(Ordering::Acquire)
-                    {
-                        let pupdate_ref = unsafe { &*pupdate_base };
-                        cursor.handle.gp_h.protect_raw(pupdate_ref.gp);
-                        cursor.handle.p_h.protect_raw(pupdate_ref.p);
-                        light_membarrier();
+                {
+                    let pupdate_ref = unsafe { &*pupdate_base };
+                    cursor.handle.gp_h.protect_raw(pupdate_ref.gp);
+                    cursor.handle.p_h.protect_raw(pupdate_ref.p);
+                    light_membarrier();
 
-                        // If `retired` is not true,
-                        // 1. the members(especially p and l) of pupdate are not retired.
-                        // 2. pupdate.gp is safe to deref.
-                        //    - Even though gp may be retired, there will be a hazard pointer
-                        //      by another thread in help_marked.
-                        //      (threads which help marked must have a hazard pointer to gp.)
-                        if !pupdate_ref.retired.load(Ordering::Acquire) {
-                            // Help cleaning marked node on search, and restart.
-                            self.help_marked(pupdate);
-                        }
-                    } else {
-                        return Err(());
+                    // If `retired` is not true, pupdate.gp is safe to deref.
+                    // - Even though gp may be retired, there will be a hazard pointer
+                    //   by another thread in help_marked.
+                    //   (threads which help marked must have a hazard pointer to gp.)
+                    if !pupdate_ref.retired.load(Ordering::Acquire) {
+                        // Help cleaning marked node on search, and restart.
+                        self.help_marked(pupdate, cursor.handle);
                     }
                 }
                 return Err(());
@@ -502,9 +498,8 @@ where
     fn search<'domain, 'hp>(&self, key: &K, cursor: &mut Cursor<'domain, 'hp, K, V>) {
         loop {
             cursor.reset();
-            match self.search_inner(key, cursor) {
-                Ok(_) => return,
-                Err(_) => continue,
+            if self.search_inner(key, cursor).is_ok() {
+                return;
             }
         }
     }
@@ -583,7 +578,18 @@ where
                     Ordering::Acquire,
                 ) {
                     Ok(_) => {
-                        self.help_insert(new_pupdate);
+                        if !cursor.pupdate.is_null() {
+                            unsafe {
+                                let removed = untagged(cursor.pupdate);
+                                removed
+                                    .as_ref()
+                                    .unwrap()
+                                    .retired
+                                    .store(true, Ordering::Release);
+                                handle.thread.retire(removed);
+                            }
+                        }
+                        self.help_insert(new_pupdate, handle);
                         return true;
                     }
                     Err(current) => {
@@ -654,6 +660,17 @@ where
                     Ordering::Acquire,
                 ) {
                     Ok(_) => {
+                        if !cursor.gpupdate.is_null() {
+                            unsafe {
+                                let removed = untagged(cursor.gpupdate);
+                                removed
+                                    .as_ref()
+                                    .unwrap()
+                                    .retired
+                                    .store(true, Ordering::Release);
+                                handle.thread.retire(removed);
+                            }
+                        }
                         if self.help_delete(new_update, handle) {
                             // SAFETY: dereferencing the value of leaf node is safe until `handle` is dropped.
                             return Some(unsafe { mem::transmute(l_node.value.as_ref().unwrap()) });
@@ -705,7 +722,7 @@ where
 
             // NOTE: help_marked is called during `search`.
             match UpdateTag::from_bits_truncate(tag(op)) {
-                UpdateTag::IFLAG => self.help_insert(op),
+                UpdateTag::IFLAG => self.help_insert(op, handle),
                 UpdateTag::DFLAG => {
                     let _ = self.help_delete(op, handle);
                 }
@@ -736,7 +753,18 @@ where
         {
             Ok(_) => {
                 // (prev value) = op → pupdate
-                self.help_marked(new_op);
+                if !pupdate.is_null() {
+                    unsafe {
+                        let removed = untagged(*pupdate);
+                        removed
+                            .as_ref()
+                            .unwrap()
+                            .retired
+                            .store(true, Ordering::Release);
+                        handle.thread.retire(removed);
+                    }
+                }
+                self.help_marked(new_op, handle);
                 return true;
             }
             Err(current) => {
@@ -750,19 +778,16 @@ where
                     return true;
                 } else if current == new_op {
                     // (prev value) = <Mark, op>
-                    self.help_marked(new_op);
+                    self.help_marked(new_op, handle);
                     return true;
                 } else {
                     // backtrack CAS
-                    unsafe {
-                        try_unlink(
-                            DUnflagUnlink {
-                                gpupdate_src: &gp_ref.update,
-                                op,
-                            },
-                            &[],
-                        )
-                    };
+                    let _ = gp_ref.update.compare_exchange(
+                        tagged(op, UpdateTag::DFLAG.bits()),
+                        tagged(op, UpdateTag::CLEAN.bits()),
+                        Ordering::Release,
+                        Ordering::Relaxed,
+                    );
 
                     // The hazard pointers must be preserved before dereferencing gp,
                     // so backtrack CAS must be called before helping.
@@ -779,19 +804,23 @@ where
     // Precondition:
     // 1. gp and p must be protected by some hazard pointers.
     // 2. op must be protected by aux_update_h.
-    fn help_marked<'domain, 'hp>(&self, op: *mut Update<K, V>) {
+    fn help_marked<'domain, 'hp>(&self, op: *mut Update<K, V>, handle: &'hp mut Handle<'domain>) {
         // Precondition: op points to a DInfo record (i.e., it is not ⊥)
         let op_ref = unsafe { untagged(op).as_ref().unwrap().clone() };
         let Update { gp, l_other, .. } = op_ref;
+        let gp_node = unsafe { gp.as_ref().unwrap() };
 
         unsafe {
-            try_unlink(DChildUnlink { op }, slice::from_ref(l_other));
-            try_unlink(
-                DUnflagUnlink {
-                    gpupdate_src: &gp.as_ref().unwrap().update,
-                    op,
-                },
-                &[],
+            // dchild CAS
+            handle
+                .thread
+                .try_unlink(DChildUnlink { op }, slice::from_ref(l_other));
+            // dunflag CAS
+            let _ = gp_node.update.compare_exchange(
+                tagged(op, UpdateTag::DFLAG.bits()),
+                tagged(op, UpdateTag::CLEAN.bits()),
+                Ordering::Release,
+                Ordering::Relaxed,
             );
         }
     }
@@ -799,19 +828,25 @@ where
     // Precondition:
     // 1. p must be protected by a hazard pointer.
     // 2. op must be protected by aux_update_h.
-    fn help_insert<'domain, 'hp>(&self, op: *mut Update<K, V>) {
+    fn help_insert<'domain, 'hp>(&self, op: *mut Update<K, V>, handle: &'hp mut Handle<'domain>) {
         // Precondition: op points to an IInfo record (i.e., it is not ⊥)
         let op_ref = unsafe { untagged(op).as_ref().unwrap().clone() };
-        let Update { p, new_internal, .. } = op_ref;
+        let Update {
+            p, new_internal, ..
+        } = op_ref;
+        let p_node = unsafe { p.as_ref().unwrap() };
 
         unsafe {
-            try_unlink(IChildUnlink { op }, slice::from_ref(new_internal));
-            try_unlink(
-                IUnflagUnlink {
-                    pupdate_src: &p.as_ref().unwrap().update,
-                    op,
-                },
-                &[],
+            // ichild CAS
+            handle
+                .thread
+                .try_unlink(IChildUnlink { op }, slice::from_ref(new_internal));
+            // iunflag CAS
+            let _ = p_node.update.compare_exchange(
+                tagged(op, UpdateTag::IFLAG.bits()),
+                tagged(op, UpdateTag::CLEAN.bits()),
+                Ordering::Release,
+                Ordering::Relaxed,
             );
         }
     }
@@ -891,72 +926,6 @@ where
             .is_ok()
         {
             Ok(vec![*l])
-        } else {
-            Err(())
-        }
-    }
-}
-
-struct DUnflagUnlink<'g, K, V> {
-    gpupdate_src: &'g AtomicPtr<Update<K, V>>,
-    op: *mut Update<K, V>,
-}
-
-impl<'g, K, V> hp_pp::Unlink<Update<K, V>> for DUnflagUnlink<'g, K, V>
-where
-    K: Ord + Clone,
-    V: Clone,
-{
-    fn do_unlink(&self) -> Result<Vec<*mut Update<K, V>>, ()> {
-        // dunflag CAS
-        if self
-            .gpupdate_src
-            .compare_exchange(
-                tagged(self.op, UpdateTag::DFLAG.bits()),
-                tagged(self.op, UpdateTag::CLEAN.bits()),
-                Ordering::Release,
-                Ordering::Relaxed,
-            )
-            .is_ok()
-        {
-            let _ = unsafe { untagged(self.op).as_ref().unwrap() }
-                .retired
-                .compare_exchange(false, true, Ordering::Release, Ordering::Relaxed);
-
-            Ok(vec![untagged(self.op)])
-        } else {
-            Err(())
-        }
-    }
-}
-
-struct IUnflagUnlink<'g, K, V> {
-    pupdate_src: &'g AtomicPtr<Update<K, V>>,
-    op: *mut Update<K, V>,
-}
-
-impl<'g, K, V> hp_pp::Unlink<Update<K, V>> for IUnflagUnlink<'g, K, V>
-where
-    K: Ord + Clone,
-    V: Clone,
-{
-    fn do_unlink(&self) -> Result<Vec<*mut Update<K, V>>, ()> {
-        // iunflag CAS
-        if self
-            .pupdate_src
-            .compare_exchange(
-                tagged(self.op, UpdateTag::IFLAG.bits()),
-                tagged(self.op, UpdateTag::CLEAN.bits()),
-                Ordering::Release,
-                Ordering::Relaxed,
-            )
-            .is_ok()
-        {
-            let _ = unsafe { untagged(self.op).as_ref().unwrap() }
-                .retired
-                .compare_exchange(false, true, Ordering::Release, Ordering::Relaxed);
-
-            Ok(vec![untagged(self.op)])
         } else {
             Err(())
         }
