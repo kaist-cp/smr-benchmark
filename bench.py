@@ -3,7 +3,7 @@ import os
 import sys
 
 dss = ['HList', 'HMList', 'HHSList', 'HashMap', 'NMTree', 'EFRBTree']
-mms = ['EBR', 'NR', 'HP', 'HP_PP']
+mms = ['EBR', 'NR', 'HP', 'HP_PP', 'PEBR']
 cs = [1]
 i = 10
 cpu_count = os.cpu_count()
@@ -79,14 +79,14 @@ for run in range(runs):
             subprocess.run(cmd, timeout=20)
         except subprocess.TimeoutExpired:
             print("timeout")
-            failed.append(cmd)
+            failed.append(' '.join(cmd))
         except KeyboardInterrupt:
             if len(failed) > 0:
                 print("====failed====")
                 print("\n".join(failed))
             exit(0)
         except:
-            failed.append(cmd)
+            failed.append(' '.join(cmd))
 
 if len(failed) > 0:
     print("====failed====")

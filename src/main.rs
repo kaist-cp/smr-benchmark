@@ -26,7 +26,7 @@ use typenum::{Unsigned, U1, U4};
 use pebr_benchmark::ebr;
 use pebr_benchmark::hp;
 use pebr_benchmark::hp_pp;
-// use pebr_benchmark::pebr;
+use pebr_benchmark::pebr;
 
 arg_enum! {
     #[derive(PartialEq, Debug)]
@@ -390,12 +390,11 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 config,
                 PrefillStrategy::Random,
             ),
-            DS::EFRBTree => bench_map_ebr::<ebr::EFRBTree<String, String>, N>(
-                config,
-                PrefillStrategy::Random,
-            ),
+            DS::EFRBTree => {
+                bench_map_ebr::<ebr::EFRBTree<String, String>, N>(config, PrefillStrategy::Random)
+            }
         },
-        MM::PEBR =>  unimplemented!() /* match config.ds {
+        MM::PEBR => match config.ds {
             DS::HList => bench_map_pebr::<pebr::HList<String, String>, N>(
                 config,
                 PrefillStrategy::Decreasing,
@@ -420,7 +419,10 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 config,
                 PrefillStrategy::Random,
             ),
-        } */,
+            DS::EFRBTree => {
+                bench_map_pebr::<pebr::EFRBTree<String, String>, N>(config, PrefillStrategy::Random)
+            }
+        },
         MM::HP => match config.ds {
             DS::HMList => {
                 bench_map_hp::<hp::HMList<String, String>, N>(config, PrefillStrategy::Decreasing)
@@ -437,10 +439,9 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             _ => panic!("Unsupported data structure for HP"),
         },
         MM::HP_PP => match config.ds {
-            DS::HList => bench_map_hp::<hp_pp::HList<String, String>, N>(
-                config,
-                PrefillStrategy::Decreasing,
-            ),
+            DS::HList => {
+                bench_map_hp::<hp_pp::HList<String, String>, N>(config, PrefillStrategy::Decreasing)
+            }
             DS::HMList => bench_map_hp::<hp_pp::HMList<String, String>, N>(
                 config,
                 PrefillStrategy::Decreasing,
@@ -449,9 +450,10 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 config,
                 PrefillStrategy::Decreasing,
             ),
-            DS::HashMap => {
-                bench_map_hp::<hp_pp::HashMap<String, String>, N>(config, PrefillStrategy::Decreasing)
-            }
+            DS::HashMap => bench_map_hp::<hp_pp::HashMap<String, String>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
             DS::NMTree => {
                 bench_map_hp::<hp_pp::NMTreeMap<String, String>, N>(config, PrefillStrategy::Random)
             }
@@ -525,7 +527,7 @@ impl PrefillStrategy {
         stdout().flush().unwrap();
     }
 
-    /* fn prefill_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(
+    fn prefill_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(
         self,
         config: &Config,
         map: &M,
@@ -556,7 +558,7 @@ impl PrefillStrategy {
         }
         print!("prefilled... ");
         stdout().flush().unwrap();
-    } */
+    }
 
     fn prefill_hp<M: hp::ConcurrentMap<String, String> + Send + Sync>(
         self,
@@ -803,7 +805,7 @@ fn bench_map_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigne
     (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
 }
 
-/* fn bench_map_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>(
+fn bench_map_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
@@ -824,6 +826,8 @@ fn bench_map_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigne
                 let mut samples = 0usize;
                 let mut acc = 0usize;
                 let mut peak = 0usize;
+                let mut garb_acc = 0usize;
+                let mut garb_peak = 0usize;
                 let handle = collector.register();
                 barrier.clone().wait();
 
@@ -840,8 +844,14 @@ fn bench_map_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigne
                     if now > next_sampling {
                         let allocated = config.mem_sampler.sample();
                         samples += 1;
+
                         acc += allocated;
                         peak = max(peak, allocated);
+
+                        let garbages = crossbeam_pebr::GLOBAL_GARBAGE_COUNT.load(Ordering::Acquire);
+                        garb_acc += garbages;
+                        garb_peak = max(garb_peak, garbages);
+
                         next_sampling = now + config.sampling_period;
                     }
                     if now > next_repin {
@@ -856,13 +866,15 @@ fn bench_map_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigne
                 }
 
                 if config.sampling {
-                    mem_sender.send((peak, acc / samples)).unwrap();
+                    mem_sender
+                        .send((peak, acc / samples, garb_peak, garb_acc / samples))
+                        .unwrap();
                 } else {
-                    mem_sender.send((0, 0)).unwrap();
+                    mem_sender.send((0, 0, 0, 0)).unwrap();
                 }
             });
         } else {
-            mem_sender.send((0, 0)).unwrap();
+            mem_sender.send((0, 0, 0, 0)).unwrap();
         }
 
         for _ in 0..config.threads {
@@ -910,9 +922,9 @@ fn bench_map_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigne
         ops += local_ops;
     }
     let ops_per_sec = ops / config.interval;
-    let (peak_mem, avg_mem) = mem_receiver.recv().unwrap();
-    (ops_per_sec, peak_mem, avg_mem)
-} */
+    let (peak_mem, avg_mem, garb_peak, garb_avg) = mem_receiver.recv().unwrap();
+    (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
+}
 
 fn bench_map_hp<M: hp::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>(
     config: &Config,
