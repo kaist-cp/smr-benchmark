@@ -144,7 +144,7 @@ def draw_throughput(data, ds, bench):
     if ds == NMTREE:
         data = data[data.mm != HP]
     y_label = 'Throughput (M op/s)' if ds in [HLIST, HASHMAP] else None
-    legend = False
+    legend = True
     y_max = data.throughput.max() * 1.05
     draw(plot_title(ds, bench), f'{RESULTS_PATH}/{ds}_{bench}_throughput.pdf',
          data, SMR_ONLY, THROUGHPUT, y_label, y_max, legend)
@@ -156,7 +156,7 @@ def draw_mem(data, ds, bench):
         data = data[data.mm != HP]
     y_label = 'Peak memory usage (MiB)' if ds in [HLIST, HASHMAP] else None
     y_max = None
-    legend = False
+    legend = True
     if ds == BONSAITREE:
         _d = data[~data[SMR_I].isin([NR])]  # exclude NR and EBR stalled
         max_threads = _d.threads.max()
@@ -170,23 +170,6 @@ def draw_mem(data, ds, bench):
          data, SMR_I, PEAK_MEM, y_label, y_max, legend)
 
 
-def draw_garb_log(data, ds, bench):
-    data = data[ds].copy()
-    data = data[data.key_range == key_range(ds, True)]
-    data = data[data.mm != "NR"]
-    if ds == NMTREE:
-        data = data[data.mm != HP]
-    
-    y_label = 'Avg. Unreclaimed memory blocks' if ds in [HLIST, HASHMAP] else None
-    legend = False
-    max_threads = data.threads.max()
-    min_threads = data.threads.min()
-    y_max = data[(data.threads == max_threads)].avg_garb.max()
-    y_min = data[(data.threads == min_threads)].avg_garb.min()
-    draw(plot_title(ds, bench), f'{RESULTS_PATH}/{ds}_{bench}_avg_garb_log.pdf',
-         data, SMR_ONLY, AVG_GARB, y_label, math.log10(y_max), legend, True, math.log10(y_min))
-
-
 def draw_garb(data, ds, bench):
     data = data[ds].copy()
     data = data[data.key_range == key_range(ds, True)]
@@ -194,27 +177,11 @@ def draw_garb(data, ds, bench):
     if ds == NMTREE:
         data = data[data.mm != HP]
     y_label = 'Avg. Unreclaimed memory blocks'
-    legend = False
+    legend = True
     max_threads = data.threads.max()
     y_max = data[(data.threads == max_threads) & (data.mm == HP_PP)].avg_garb.max() * 1.7
     draw(plot_title(ds, bench), f'{RESULTS_PATH}/{ds}_{bench}_avg_garb.pdf',
          data, SMR_ONLY, AVG_GARB, y_label, y_max, legend)
-
-
-def draw_peak_garb_log(data, ds, bench):
-    data = data[ds].copy()
-    data = data[data.key_range == key_range(ds, True)]
-    data = data[data.mm != "NR"]
-    if ds == NMTREE:
-        data = data[data.mm != HP]
-    y_label = 'Peak unreclaimed memory blocks' if ds in [HLIST, HASHMAP] else None
-    legend = False
-    max_threads = data.threads.max()
-    min_threads = data.threads.min()
-    y_max = data[(data.threads == max_threads)].peak_garb.max()
-    y_min = data[(data.threads == min_threads)].peak_garb.min()
-    draw(plot_title(ds, bench), f'{RESULTS_PATH}/{ds}_{bench}_peak_garb_log.pdf',
-         data, SMR_ONLY, PEAK_GARB, y_label, math.log10(y_max), legend, True, math.log10(y_min))
 
 
 def draw_peak_garb(data, ds, bench):
@@ -224,7 +191,7 @@ def draw_peak_garb(data, ds, bench):
     if ds == NMTREE:
         data = data[data.mm != HP]
     y_label = 'Peak unreclaimed memory blocks'
-    legend = False
+    legend = True
     max_threads = data.threads.max()
     y_max = data[(data.threads == max_threads) & (data.mm == HP_PP)].peak_garb.max() * 2
     draw(plot_title(ds, bench), f'{RESULTS_PATH}/{ds}_{bench}_peak_garb.pdf',
@@ -263,23 +230,6 @@ for ds in dss_all:
     for i, bench in enumerate([WRITE, HALF, READ]):
         avg_data[bench][ds] = avg[avg.get_rate == i]
 
-
-# for ds in dss_all:
-#     data = avg_data[HALF][ds].copy()
-#     data = data[data.threads == 64]
-#     hp = data[data.mm == "HP"]
-#     hp_pp = data[data.mm == "HP_PP"]
-#     ebr = data[data.mm == "EBR"]
-#     print(ds)
-#     hp = hp.mean().throughput
-#     hp_pp = hp_pp.mean().throughput
-#     ebr = ebr.mean().throughput
-#     print(f"hp: {hp}, hp++: {hp_pp}, ebr: {ebr}")
-#     print(f"((hp++) - (hp)) / (hp++) = {(hp_pp-hp) / hp_pp}")
-#     print(f"((hp++) - (ebr)) / (hp++) = {(hp_pp-ebr) / hp_pp}")
-#     print()
-# exit(0)
-
 # 1. throughput graphs, 3 lines (SMR_ONLY) each.
 for ds in dss_write:
     draw_throughput(avg_data[WRITE], ds, WRITE)
@@ -290,12 +240,9 @@ for ds in dss_read:
 # 2. avg garbage graph, 7 lines (SMR_ONLY)
 for ds in dss_write:
     draw_garb(avg_data[WRITE], ds, WRITE)
-    draw_garb_log(avg_data[WRITE], ds, WRITE)
 for ds in dss_read:
     draw_garb(avg_data[HALF], ds, HALF)
     draw_garb(avg_data[READ], ds, READ)
-    draw_garb_log(avg_data[HALF], ds, HALF)
-    draw_garb_log(avg_data[READ], ds, READ)
 
 # 3. peak mem graph
 for ds in dss_write:
@@ -307,9 +254,6 @@ for ds in dss_read:
 # 4. peak garbage graph
 for ds in dss_write:
     draw_peak_garb(avg_data[WRITE], ds, WRITE)
-    draw_peak_garb_log(avg_data[WRITE], ds, WRITE)
 for ds in dss_read:
     draw_peak_garb(avg_data[HALF], ds, HALF)
     draw_peak_garb(avg_data[READ], ds, READ)
-    draw_peak_garb_log(avg_data[HALF], ds, HALF)
-    draw_peak_garb_log(avg_data[READ], ds, READ)
