@@ -1,9 +1,7 @@
-use std::sync::atomic::Ordering;
 use std::mem;
+use std::sync::atomic::Ordering;
 
-use crossbeam_pebr::{
-    unprotected, Atomic, Guard, Owned, Shared, Shield, ShieldError,
-};
+use crossbeam_pebr::{unprotected, Atomic, Guard, Owned, Shared, Shield, ShieldError};
 
 use super::concurrent_map::ConcurrentMap;
 
@@ -130,7 +128,11 @@ impl<K, V> Node<K, V> {
 
     /// Protect `update` of the node.
     #[inline]
-    fn protect_update<'g>(&'g self, hazptr: &mut Shield<Update<K, V>>, guard: &'g Guard) -> Result<Shared<'g, Update<K, V>>, ShieldError> {
+    fn protect_update<'g>(
+        &'g self,
+        hazptr: &mut Shield<Update<K, V>>,
+        guard: &'g Guard,
+    ) -> Result<Shared<'g, Update<K, V>>, ShieldError> {
         let update = self.update.load(Ordering::Acquire, guard);
         hazptr.defend(update, guard)?;
         Ok(update)
@@ -318,7 +320,13 @@ where
     ///     - either gp → left has contained p (if k < gp → key) or gp → right has contained p (if k ≥ gp → key)
     ///     - gp → update has contained gpupdate
     #[inline]
-    fn search<'g>(&self, key: &'g K, cursor: &mut Cursor<'g, K, V>, handle: &'g mut Handle<K, V>, guard: &'g Guard) -> Result<(), ShieldError> {
+    fn search<'g>(
+        &self,
+        key: &'g K,
+        cursor: &mut Cursor<'g, K, V>,
+        handle: &'g mut Handle<K, V>,
+        guard: &'g Guard,
+    ) -> Result<(), ShieldError> {
         cursor.l = self.root.load(Ordering::Relaxed, guard);
         handle.l_h.defend(cursor.l, guard)?;
 
@@ -349,7 +357,12 @@ where
         }
     }
 
-    pub fn find_inner<'g>(&'g self, key: &'g K, handle: &'g mut Handle<K, V>, guard: &'g Guard) -> Result<Option<&'g V>, ShieldError> {
+    pub fn find_inner<'g>(
+        &'g self,
+        key: &'g K,
+        handle: &'g mut Handle<K, V>,
+        guard: &'g Guard,
+    ) -> Result<Option<&'g V>, ShieldError> {
         let mut cursor = Cursor::new();
         match self.search(key, &mut cursor, handle, guard) {
             Ok(_) => {
@@ -360,13 +373,20 @@ where
                     return Ok(None);
                 }
             }
-            Err(_) => Err(ShieldError::Ejected)
+            Err(_) => Err(ShieldError::Ejected),
         }
     }
 
-    pub fn find<'g>(&'g self, key: &'g K, handle: &'g mut Handle<K, V>, guard: &'g mut Guard) -> Option<&'g V> {
+    pub fn find<'g>(
+        &'g self,
+        key: &'g K,
+        handle: &'g mut Handle<K, V>,
+        guard: &'g mut Guard,
+    ) -> Option<&'g V> {
         loop {
-            match self.find_inner(key, handle.launder(), unsafe { &mut *(guard as *mut Guard) }) {
+            match self.find_inner(key, handle.launder(), unsafe {
+                &mut *(guard as *mut Guard)
+            }) {
                 Ok(found) => return found,
                 Err(_) => guard.repin(),
             }
@@ -409,7 +429,8 @@ where
                     // (the one with the smaller key is the left child)
                     left,
                     right,
-                )).into_shared(unsafe { unprotected() });
+                ))
+                .into_shared(unsafe { unprotected() });
 
                 if let Err(e) = handle.new_internal_h.defend(new_internal, guard) {
                     unsafe {
@@ -429,7 +450,9 @@ where
                     p_l_dir: cursor.p_l_dir,
                     pupdate: Atomic::null(),
                     new_internal: Atomic::from(new_internal),
-                }).into_shared(unsafe { unprotected() }).with_tag(UpdateTag::IFLAG.bits());
+                })
+                .into_shared(unsafe { unprotected() })
+                .with_tag(UpdateTag::IFLAG.bits());
 
                 if let Err(e) = handle.aux_update_h.defend(new_pupdate, guard) {
                     unsafe {
@@ -458,7 +481,8 @@ where
                     Err(e) => {
                         unsafe {
                             let new_pupdate_failed = new_pupdate.into_owned().into_box();
-                            let new_internal_failed = new_pupdate_failed.new_internal.into_owned().into_box();
+                            let new_internal_failed =
+                                new_pupdate_failed.new_internal.into_owned().into_box();
                             drop(new_internal_failed.left.into_owned());
                             drop(new_internal_failed.right.into_owned());
                         }
@@ -470,13 +494,7 @@ where
         }
     }
 
-    pub fn insert(
-        &self,
-        key: &K,
-        value: V,
-        handle: &mut Handle<K, V>,
-        guard: &mut Guard,
-    ) -> bool {
+    pub fn insert(&self, key: &K, value: V, handle: &mut Handle<K, V>, guard: &mut Guard) -> bool {
         loop {
             match self.insert_inner(key, &value, handle, guard) {
                 Ok(succ) => return succ,
@@ -522,7 +540,9 @@ where
                     p_l_dir: cursor.p_l_dir,
                     pupdate: Atomic::from(cursor.pupdate),
                     new_internal: Atomic::null(),
-                }).into_shared(unsafe { unprotected() }).with_tag(UpdateTag::DFLAG.bits());
+                })
+                .into_shared(unsafe { unprotected() })
+                .with_tag(UpdateTag::DFLAG.bits());
 
                 if let Err(e) = handle.aux_update_h.defend(new_update, guard) {
                     unsafe { drop(new_update.into_owned()) };
@@ -534,7 +554,7 @@ where
                     cursor.gpupdate,
                     new_update,
                     Ordering::Release,
-                    guard
+                    guard,
                 ) {
                     Ok(_) => {
                         if !cursor.gpupdate.is_null() {
@@ -555,12 +575,7 @@ where
         }
     }
 
-    fn delete(
-        &self,
-        key: &K,
-        handle: &mut Handle<K, V>,
-        guard: &mut Guard,
-    ) -> Option<V> {
+    fn delete(&self, key: &K, handle: &mut Handle<K, V>, guard: &mut Guard) -> Option<V> {
         loop {
             handle.reset();
             match self.delete_inner(key, handle, guard) {
@@ -586,11 +601,36 @@ where
         ok_or!(handle.aux_update_h.defend(op, guard), return);
         // Protect all nodes in op
         let op_ref = unsafe { op.as_ref().unwrap() };
-        ok_or!(handle.gp_h.defend(op_ref.gp.load(Ordering::Relaxed, guard), guard), return);
-        ok_or!(handle.p_h.defend(op_ref.p.load(Ordering::Relaxed, guard), guard), return);
-        ok_or!(handle.l_h.defend(op_ref.l.load(Ordering::Relaxed, guard), guard), return);
-        ok_or!(handle.l_other_h.defend(op_ref.l_other.load(Ordering::Relaxed, guard), guard), return);
-        ok_or!(handle.new_internal_h.defend(op_ref.new_internal.load(Ordering::Relaxed, guard), guard), return);
+        ok_or!(
+            handle
+                .gp_h
+                .defend(op_ref.gp.load(Ordering::Relaxed, guard), guard),
+            return
+        );
+        ok_or!(
+            handle
+                .p_h
+                .defend(op_ref.p.load(Ordering::Relaxed, guard), guard),
+            return
+        );
+        ok_or!(
+            handle
+                .l_h
+                .defend(op_ref.l.load(Ordering::Relaxed, guard), guard),
+            return
+        );
+        ok_or!(
+            handle
+                .l_other_h
+                .defend(op_ref.l_other.load(Ordering::Relaxed, guard), guard),
+            return
+        );
+        ok_or!(
+            handle
+                .new_internal_h
+                .defend(op_ref.new_internal.load(Ordering::Relaxed, guard), guard),
+            return
+        );
 
         match UpdateTag::from_bits_truncate(op.tag()) {
             UpdateTag::IFLAG => self.help_insert(op, guard),
@@ -646,7 +686,7 @@ where
                         op.with_tag(UpdateTag::DFLAG.bits()),
                         op.with_tag(UpdateTag::CLEAN.bits()),
                         Ordering::Release,
-                        guard
+                        guard,
                     );
 
                     // The hazard pointers must be preserved before dereferencing gp,
@@ -700,7 +740,7 @@ where
             op.with_tag(UpdateTag::DFLAG.bits()),
             op.with_tag(UpdateTag::CLEAN.bits()),
             Ordering::Release,
-            guard
+            guard,
         );
     }
 
@@ -737,7 +777,7 @@ where
             op.with_tag(UpdateTag::IFLAG.bits()),
             op.with_tag(UpdateTag::CLEAN.bits()),
             Ordering::Release,
-            guard
+            guard,
         );
     }
 }
