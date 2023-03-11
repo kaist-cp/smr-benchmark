@@ -38,6 +38,7 @@ arg_enum! {
         NMTree,
         BonsaiTree,
         EFRBTree,
+        SkipList,
     }
 }
 
@@ -367,6 +368,9 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             DS::EFRBTree => {
                 bench_map_nr::<ebr::EFRBTree<String, String>>(config, PrefillStrategy::Random)
             }
+            DS::SkipList => {
+                bench_map_nr::<ebr::SkipList<String, String>>(config, PrefillStrategy::Random)
+            }
         },
         MM::EBR => match config.ds {
             DS::HList => {
@@ -392,6 +396,9 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             ),
             DS::EFRBTree => {
                 bench_map_ebr::<ebr::EFRBTree<String, String>, N>(config, PrefillStrategy::Random)
+            }
+            DS::SkipList => {
+                bench_map_ebr::<ebr::SkipList<String, String>, N>(config, PrefillStrategy::Random)
             }
         },
         MM::PEBR => match config.ds {
@@ -422,6 +429,7 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             DS::EFRBTree => {
                 bench_map_pebr::<pebr::EFRBTree<String, String>, N>(config, PrefillStrategy::Random)
             }
+            _ => panic!("Unsupported data structure for PEBR"),
         },
         MM::HP => match config.ds {
             DS::HMList => {
