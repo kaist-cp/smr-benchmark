@@ -444,6 +444,9 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             DS::EFRBTree => {
                 bench_map_hp::<hp::EFRBTree<String, String>, N>(config, PrefillStrategy::Random)
             }
+            DS::SkipList => {
+                bench_map_hp::<hp::SkipList<String, String>, N>(config, PrefillStrategy::Random)
+            }
             _ => panic!("Unsupported data structure for HP"),
         },
         MM::HP_PP => match config.ds {
@@ -467,6 +470,9 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             }
             DS::EFRBTree => {
                 bench_map_hp::<hp_pp::EFRBTree<String, String>, N>(config, PrefillStrategy::Random)
+            }
+            DS::SkipList => {
+                bench_map_hp::<hp_pp::SkipList<String, String>, N>(config, PrefillStrategy::Random)
             }
             _ => panic!("Unsupported data structure for HP++"),
         },
