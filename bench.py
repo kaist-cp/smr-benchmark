@@ -2,7 +2,7 @@ import subprocess
 import os
 import sys
 
-dss = ['HList', 'HMList', 'HHSList', 'HashMap', 'NMTree', 'EFRBTree']
+dss = ['HList', 'HMList', 'HHSList', 'HashMap', 'NMTree', 'EFRBTree', 'SkipList']
 mms = ['EBR', 'NR', 'HP', 'HP_PP', 'PEBR']
 cs = [1]
 i = 10

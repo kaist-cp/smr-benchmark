@@ -33,6 +33,7 @@ HASHMAP = "HashMap"
 NMTREE = "NMTree"
 BONSAITREE = "BonsaiTree"
 EFRBTREE = "EFRBTree"
+SKIPLIST = "SkipList"
 
 EBR = "EBR"
 PEBR = "PEBR"
@@ -41,14 +42,14 @@ HP = "HP"
 HP_PP = "HP_PP"
 
 # DS with read-dominated bench & write-only bench
-dss_all   = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, EFRBTREE]
-dss_read  = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, EFRBTREE]
-dss_write = [HLIST, HMLIST,          HASHMAP, NMTREE, EFRBTREE]
+dss_all   = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, EFRBTREE, SKIPLIST]
+dss_read  = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, EFRBTREE, SKIPLIST]
+dss_write = [HLIST, HMLIST,          HASHMAP, NMTREE, EFRBTREE, SKIPLIST]
 
 WRITE, HALF, READ = "write", "half", "read"
 
-SMR_ONLYs = [NR, EBR, HP, HP_PP]
-SMR_Is = [NR, EBR, HP, HP_PP]
+SMR_ONLYs = [NR, EBR, HP, HP_PP, PEBR]
+SMR_Is = [NR, EBR, HP, HP_PP, PEBR]
 
 cpu_count = os.cpu_count()
 ts = [1] + list(range(8, 145, 8))
