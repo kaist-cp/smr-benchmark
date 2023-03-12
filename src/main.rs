@@ -429,7 +429,9 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             DS::EFRBTree => {
                 bench_map_pebr::<pebr::EFRBTree<String, String>, N>(config, PrefillStrategy::Random)
             }
-            _ => panic!("Unsupported data structure for PEBR"),
+            DS::SkipList => {
+                bench_map_pebr::<pebr::SkipList<String, String>, N>(config, PrefillStrategy::Random)
+            }
         },
         MM::HP => match config.ds {
             DS::HMList => {
