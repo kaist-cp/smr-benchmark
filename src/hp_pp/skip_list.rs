@@ -91,7 +91,7 @@ impl<K, V> Node<K, V> {
 pub struct Handle<'g> {
     preds_h: [HazardPointer<'g>; MAX_HEIGHT],
     succs_h: [HazardPointer<'g>; MAX_HEIGHT],
-    new_node_h: HazardPointer<'g>,
+    removed_h: HazardPointer<'g>,
     thread: Thread<'g>,
 }
 
@@ -100,7 +100,7 @@ impl Default for Handle<'static> {
         Self {
             preds_h: Default::default(),
             succs_h: Default::default(),
-            new_node_h: Default::default(),
+            removed_h: Default::default(),
             thread: Thread::new(&DEFAULT_DOMAIN),
         }
     }
@@ -239,8 +239,6 @@ where
         let new_node = Box::into_raw(Box::new(Node::new(key, value, 2)));
         let new_node_ref = unsafe { &*new_node };
         let height = new_node_ref.height;
-        handle.new_node_h.protect_raw(new_node);
-        light_membarrier();
 
         loop {
             new_node_ref.next[0].store(cursor.succs[0], Ordering::Relaxed);
@@ -326,6 +324,10 @@ where
         loop {
             let cursor = self.find(key, handle);
             let node = cursor.found(key)?;
+            handle
+                .removed_h
+                .protect_raw(node as *const _ as *mut Node<K, V>);
+            light_membarrier();
 
             // Try removing the node by marking its tower.
             if node.mark_tower() {
