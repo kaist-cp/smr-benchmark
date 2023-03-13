@@ -168,43 +168,46 @@ where
                 level -= 1;
             }
 
-            let mut pred = unsafe { Shared::from_usize(&self.head as *const _ as usize) };
-            let mut curr;
-
+            let mut pred = unsafe { Shared::<Node<K, V>>::from_usize(&self.head as *const _ as usize) };
             while level >= 1 {
                 level -= 1;
                 handle.preds_h[level].defend(pred, guard)?;
-                loop {
-                    let pred_ref = unsafe { pred.deref() };
-                    curr = pred_ref.next[level].load(Ordering::Acquire, guard);
+                let mut curr = unsafe { pred.deref() }.next[level].load_consume(guard);
+                // If `curr` is marked, that means `pred` is removed and we have to restart the
+                // search.
+                if curr.tag() == 1 {
+                    continue 'search;
+                }
+
+                while let Some(curr_ref) = unsafe { curr.as_ref() } {
                     handle.succs_h[level].defend(curr, guard)?;
-
-                    if curr.tag() == 1 {
-                        continue 'search;
-                    }
-                    if curr.is_null() {
-                        break;
-                    }
-
-                    let curr_ref = unsafe { curr.deref() };
-                    let succ = curr_ref.next[level].load(Ordering::Acquire, guard);
-
-                    if pred_ref.next[level].load(Ordering::Acquire, guard) != curr {
-                        continue 'search;
-                    }
+                    let succ = curr_ref.next[level].load_consume(guard);
 
                     if succ.tag() == 1 {
-                        self.help_unlink(&pred_ref.next[level], curr, succ, guard);
-                        continue 'search;
+                        if self.help_unlink(&unsafe { pred.deref() }.next[level], curr, succ, guard) {
+                            curr = succ.with_tag(0);
+                            continue;
+                        } else {
+                            // On failure, we cannot do anything reasonable to continue
+                            // searching from the current position. Restart the search.
+                            continue 'search;
+                        }
                     }
 
+                    // If `curr` contains a key that is greater than or equal to `key`, we're
+                    // done with this level.
                     match curr_ref.key.cmp(key) {
-                        std::cmp::Ordering::Less => {
-                            pred = curr;
-                            mem::swap(&mut handle.preds_h[level], &mut handle.succs_h[level]);
+                        std::cmp::Ordering::Greater |
+                        std::cmp::Ordering::Equal => {
+                            break;
                         }
-                        _ => break,
+                        std::cmp::Ordering::Less => {}
                     }
+
+                    // Move one step forward.
+                    pred = curr;
+                    curr = succ;
+                    mem::swap(&mut handle.preds_h[level], &mut handle.succs_h[level]);
                 }
 
                 cursor.preds[level] = pred;
