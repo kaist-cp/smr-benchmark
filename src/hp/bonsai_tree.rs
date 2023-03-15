@@ -99,14 +99,6 @@ where
         }
         (left, right)
     }
-
-    pub fn left_link(&self) -> *mut AtomicPtr<Node<K, V>> {
-        &self.left as *const _ as _
-    }
-
-    pub fn right_link(&self) -> *mut AtomicPtr<Node<K, V>> {
-        &self.right as *const _ as _
-    }
 }
 
 /// Each op creates a new local state and tries to update (CAS) the tree with it.
@@ -117,7 +109,7 @@ pub struct State<'domain, K, V> {
     removed_h: HazardPointer<'domain>,
     /// Nodes that current op wants to remove from the tree. Should be retired if CAS succeeds.
     /// (`retire`). If not, ignore.
-    retired_nodes: Vec<(*mut Node<K, V>, *mut AtomicPtr<Node<K, V>>)>,
+    retired_nodes: Vec<*mut Node<K, V>>,
     /// Nodes newly constructed by the op. Should be destroyed if CAS fails. (`destroy`)
     new_nodes: Vec<*mut Node<K, V>>,
     thread: Thread<'domain>,
@@ -165,12 +157,8 @@ where
         self.root_h.reset_protection();
         self.new_nodes.clear();
 
-        for (node, link) in self.retired_nodes.drain(..) {
+        for node in self.retired_nodes.drain(..) {
             unsafe {
-                if let Some(link_ref) = link.as_ref() {
-                    link_ref.fetch_or(Retired::RETIRED.bits(), Ordering::Release);
-                }
-
                 let node_ref = &*untagged(node);
                 node_ref.left.store(Node::retired_node(), Ordering::Release);
                 node_ref
@@ -181,8 +169,8 @@ where
         }
     }
 
-    fn retire_node(&mut self, node: *mut Node<K, V>, link: *mut AtomicPtr<Node<K, V>>) {
-        self.retired_nodes.push((node, link));
+    fn retire_node(&mut self, node: *mut Node<K, V>) {
+        self.retired_nodes.push(node);
     }
 
     fn add_new_node(&mut self, node: *mut Node<K, V>) {
@@ -218,7 +206,6 @@ where
     fn mk_balanced(
         &mut self,
         cur: *mut Node<K, V>,
-        cur_link: *mut AtomicPtr<Node<K, V>>,
         left: *mut Node<K, V>,
         right: *mut Node<K, V>,
     ) -> Result<*mut Node<K, V>, ()> {
@@ -244,7 +231,7 @@ where
         } else {
             Ok(self.mk_node(left, right, key, value))
         };
-        self.retire_node(cur, cur_link);
+        self.retire_node(cur);
         res
     }
 
@@ -271,27 +258,11 @@ where
 
         if Node::node_size(right_left) < Node::node_size(right_right) {
             // single left rotation
-            return Ok(self.single_left(
-                left,
-                right,
-                right_left,
-                right_right,
-                right_ref.right_link(),
-                key,
-                value,
-            ));
+            return Ok(self.single_left(left, right, right_left, right_right, key, value));
         }
 
         // double left rotation
-        return self.double_left(
-            left,
-            right,
-            right_left,
-            right_right,
-            right_ref.right_link(),
-            key,
-            value,
-        );
+        return self.double_left(left, right, right_left, right_right, key, value);
     }
 
     #[inline]
@@ -301,7 +272,6 @@ where
         right: *mut Node<K, V>,
         right_left: *mut Node<K, V>,
         right_right: *mut Node<K, V>,
-        right_link: *mut AtomicPtr<Node<K, V>>,
         key: K,
         value: V,
     ) -> *mut Node<K, V> {
@@ -313,7 +283,7 @@ where
             right_ref.key.clone(),
             right_ref.value.clone(),
         );
-        self.retire_node(right, right_link);
+        self.retire_node(right);
         return res;
     }
 
@@ -324,7 +294,6 @@ where
         right: *mut Node<K, V>,
         right_left: *mut Node<K, V>,
         right_right: *mut Node<K, V>,
-        right_link: *mut AtomicPtr<Node<K, V>>,
         key: K,
         value: V,
     ) -> Result<*mut Node<K, V>, ()> {
@@ -355,8 +324,8 @@ where
             right_left_ref.key.clone(),
             right_left_ref.value.clone(),
         );
-        self.retire_node(right_left, right_ref.left_link());
-        self.retire_node(right, right_link);
+        self.retire_node(right_left);
+        self.retire_node(right);
         Ok(res)
     }
 
@@ -382,26 +351,10 @@ where
 
         if Node::node_size(left_right) < Node::node_size(left_left) {
             // single right rotation (fig 3)
-            return Ok(self.single_right(
-                left,
-                right,
-                left_right,
-                left_left,
-                left_ref.left_link(),
-                key,
-                value,
-            ));
+            return Ok(self.single_right(left, right, left_right, left_left, key, value));
         }
         // double right rotation
-        return self.double_right(
-            left,
-            right,
-            left_right,
-            left_left,
-            left_ref.left_link(),
-            key,
-            value,
-        );
+        return self.double_right(left, right, left_right, left_left, key, value);
     }
 
     #[inline]
@@ -411,7 +364,6 @@ where
         right: *mut Node<K, V>,
         left_right: *mut Node<K, V>,
         left_left: *mut Node<K, V>,
-        left_link: *mut AtomicPtr<Node<K, V>>,
         key: K,
         value: V,
     ) -> *mut Node<K, V> {
@@ -423,7 +375,7 @@ where
             left_ref.key.clone(),
             left_ref.value.clone(),
         );
-        self.retire_node(left, left_link);
+        self.retire_node(left);
         return res;
     }
 
@@ -434,7 +386,6 @@ where
         right: *mut Node<K, V>,
         left_right: *mut Node<K, V>,
         left_left: *mut Node<K, V>,
-        left_link: *mut AtomicPtr<Node<K, V>>,
         key: K,
         value: V,
     ) -> Result<*mut Node<K, V>, ()> {
@@ -465,8 +416,8 @@ where
             left_right_ref.key.clone(),
             left_right_ref.value.clone(),
         );
-        self.retire_node(left_right, left_ref.right_link());
-        self.retire_node(left, left_link);
+        self.retire_node(left_right);
+        self.retire_node(left);
         Ok(res)
     }
 
@@ -474,7 +425,6 @@ where
     fn do_insert(
         &mut self,
         node: *mut Node<K, V>,
-        node_link: *mut AtomicPtr<Node<K, V>>,
         key: &K,
         value: &V,
     ) -> Result<(*mut Node<K, V>, bool), ()> {
@@ -504,20 +454,12 @@ where
         match node_ref.key.cmp(key) {
             cmp::Ordering::Equal => Ok((node, false)),
             cmp::Ordering::Less => {
-                let (new_right, inserted) =
-                    self.do_insert(right, node_ref.right_link(), key, value)?;
-                Ok((
-                    self.mk_balanced(node, node_link, left, new_right)?,
-                    inserted,
-                ))
+                let (new_right, inserted) = self.do_insert(right, key, value)?;
+                Ok((self.mk_balanced(node, left, new_right)?, inserted))
             }
             cmp::Ordering::Greater => {
-                let (new_left, inserted) =
-                    self.do_insert(left, node_ref.left_link(), key, value)?;
-                Ok((
-                    self.mk_balanced(node, node_link, new_left, right)?,
-                    inserted,
-                ))
+                let (new_left, inserted) = self.do_insert(left, key, value)?;
+                Ok((self.mk_balanced(node, new_left, right)?, inserted))
             }
         }
     }
@@ -526,7 +468,6 @@ where
     fn do_remove<'hp>(
         &'hp mut self,
         node: *mut Node<K, V>,
-        node_link: *mut AtomicPtr<Node<K, V>>,
         key: &K,
     ) -> Result<(*mut Node<K, V>, Option<&'hp V>), ()> {
         if Node::is_retired_spot(node) {
@@ -555,40 +496,25 @@ where
                 light_membarrier();
 
                 let value = Some(&node_ref.value);
-                self.retire_node(node, node_link);
+                self.retire_node(node);
                 if node_ref.size == 1 {
                     return Ok((ptr::null_mut(), value));
                 }
 
                 if !left.is_null() {
-                    let (new_left, succ) = self.pull_rightmost(left, node_ref.left_link())?;
-                    let mut new_left_h = HazardPointer::new(&mut self.thread);
-                    new_left_h.protect_raw(new_left);
-                    light_membarrier();
-                    return Ok((
-                        self.mk_balanced(succ, ptr::null_mut(), new_left, right)?,
-                        value,
-                    ));
+                    let (new_left, succ, _new_left_h) = self.pull_rightmost(left)?;
+                    return Ok((self.mk_balanced(succ, new_left, right)?, value));
                 }
-                let (new_right, succ) = self.pull_leftmost(right, node_ref.right_link())?;
-                let mut new_right_h = HazardPointer::new(&mut self.thread);
-                new_right_h.protect_raw(new_right);
-                light_membarrier();
-                Ok((
-                    self.mk_balanced(succ, ptr::null_mut(), left, new_right)?,
-                    value,
-                ))
+                let (new_right, succ, _new_right_h) = self.pull_leftmost(right)?;
+                Ok((self.mk_balanced(succ, left, new_right)?, value))
             }
             cmp::Ordering::Less => {
-                let (new_right, value) =
-                    self.launder()
-                        .do_remove(right, node_ref.right_link(), key)?;
-                Ok((self.mk_balanced(node, node_link, left, new_right)?, value))
+                let (new_right, value) = self.launder().do_remove(right, key)?;
+                Ok((self.mk_balanced(node, left, new_right)?, value))
             }
             cmp::Ordering::Greater => {
-                let (new_left, value) =
-                    self.launder().do_remove(left, node_ref.left_link(), key)?;
-                Ok((self.mk_balanced(node, node_link, new_left, right)?, value))
+                let (new_left, value) = self.launder().do_remove(left, key)?;
+                Ok((self.mk_balanced(node, new_left, right)?, value))
             }
         }
     }
@@ -596,10 +522,16 @@ where
     fn pull_leftmost(
         &mut self,
         node: *mut Node<K, V>,
-        node_link: *mut AtomicPtr<Node<K, V>>,
-    ) -> Result<(*mut Node<K, V>, *mut Node<K, V>), ()> {
+    ) -> Result<
+        (
+            *mut Node<K, V>,
+            *mut Node<K, V>,
+            Option<HazardPointer<'domain>>,
+        ),
+        (),
+    > {
         if Node::is_retired_spot(node) {
-            return Ok((Node::retired_node(), Node::retired_node()));
+            return Ok((Node::retired_node(), Node::retired_node(), None));
         }
 
         let node_ref = unsafe { &*untagged(node) };
@@ -611,15 +543,12 @@ where
         self.check_root()?;
 
         if Node::is_retired_spot(left) || Node::is_retired_spot(right) {
-            return Ok((Node::retired_node(), Node::retired_node()));
+            return Ok((Node::retired_node(), Node::retired_node(), None));
         }
 
         if !left.is_null() {
-            let (new_left, succ) = self.pull_leftmost(left, node_ref.left_link())?;
-            let mut new_left_h = HazardPointer::new(&mut self.thread);
-            new_left_h.protect_raw(new_left);
-            light_membarrier();
-            return Ok((self.mk_balanced(node, node_link, new_left, right)?, succ));
+            let (new_left, succ, _new_left_h) = self.pull_leftmost(left)?;
+            return Ok((self.mk_balanced(node, new_left, right)?, succ, None));
         }
         // node is the leftmost
         let succ = self.mk_node(
@@ -628,17 +557,23 @@ where
             node_ref.key.clone(),
             node_ref.value.clone(),
         );
-        self.retire_node(node, node_link);
-        return Ok((right, succ));
+        self.retire_node(node);
+        return Ok((right, succ, Some(right_h)));
     }
 
     fn pull_rightmost(
         &mut self,
         node: *mut Node<K, V>,
-        node_link: *mut AtomicPtr<Node<K, V>>,
-    ) -> Result<(*mut Node<K, V>, *mut Node<K, V>), ()> {
+    ) -> Result<
+        (
+            *mut Node<K, V>,
+            *mut Node<K, V>,
+            Option<HazardPointer<'domain>>,
+        ),
+        (),
+    > {
         if Node::is_retired_spot(node) {
-            return Ok((Node::retired_node(), Node::retired_node()));
+            return Ok((Node::retired_node(), Node::retired_node(), None));
         }
 
         let node_ref = unsafe { &*untagged(node) };
@@ -650,15 +585,12 @@ where
         self.check_root()?;
 
         if Node::is_retired_spot(left) || Node::is_retired_spot(right) {
-            return Ok((Node::retired_node(), Node::retired_node()));
+            return Ok((Node::retired_node(), Node::retired_node(), None));
         }
 
         if !right.is_null() {
-            let (new_right, succ) = self.pull_rightmost(right, node_ref.right_link())?;
-            let mut new_right_h = HazardPointer::new(&mut self.thread);
-            new_right_h.protect_raw(new_right);
-            light_membarrier();
-            return Ok((self.mk_balanced(node, node_link, left, new_right)?, succ));
+            let (new_right, succ, _new_right_h) = self.pull_rightmost(right)?;
+            return Ok((self.mk_balanced(node, left, new_right)?, succ, None));
         }
         // node is the rightmost
         let succ = self.mk_node(
@@ -667,8 +599,8 @@ where
             node_ref.key.clone(),
             node_ref.value.clone(),
         );
-        self.retire_node(node, node_link);
-        return Ok((left, succ));
+        self.retire_node(node);
+        return Ok((left, succ, Some(left_h)));
     }
 
     pub fn check_root(&self) -> Result<(), ()> {
@@ -754,11 +686,10 @@ where
             self.protect_root(state);
             state.root_link = &self.root;
             let old_root = state.curr_root;
-            let (new_root, inserted) =
-                ok_or!(state.do_insert(old_root, ptr::null_mut(), &key, &value), {
-                    state.abort();
-                    continue;
-                });
+            let (new_root, inserted) = ok_or!(state.do_insert(old_root, &key, &value), {
+                state.abort();
+                continue;
+            });
             if Node::is_retired(new_root) {
                 state.abort();
                 continue;
@@ -786,11 +717,10 @@ where
             self.protect_root(state);
             state.root_link = &self.root;
             let old_root = state.curr_root;
-            let (new_root, value) =
-                ok_or!(state.launder().do_remove(old_root, ptr::null_mut(), key), {
-                    state.abort();
-                    continue;
-                });
+            let (new_root, value) = ok_or!(state.launder().do_remove(old_root, key), {
+                state.abort();
+                continue;
+            });
             if Node::is_retired(new_root) {
                 state.abort();
                 continue;
