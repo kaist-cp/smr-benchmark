@@ -449,6 +449,10 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             DS::SkipList => {
                 bench_map_hp::<hp::SkipList<String, String>, N>(config, PrefillStrategy::Random)
             }
+            DS::BonsaiTree => bench_map_hp::<hp::BonsaiTreeMap<String, String>, N>(
+                config,
+                PrefillStrategy::Random,
+            ),
             _ => panic!("Unsupported data structure for HP"),
         },
         MM::HP_PP => match config.ds {
