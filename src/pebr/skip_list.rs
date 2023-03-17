@@ -168,7 +168,8 @@ where
                 level -= 1;
             }
 
-            let mut pred = unsafe { Shared::<Node<K, V>>::from_usize(&self.head as *const _ as usize) };
+            let mut pred =
+                unsafe { Shared::<Node<K, V>>::from_usize(&self.head as *const _ as usize) };
             while level >= 1 {
                 level -= 1;
                 handle.preds_h[level].defend(pred, guard)?;
@@ -184,7 +185,8 @@ where
                     let succ = curr_ref.next[level].load_consume(guard);
 
                     if succ.tag() == 1 {
-                        if self.help_unlink(&unsafe { pred.deref() }.next[level], curr, succ, guard) {
+                        if self.help_unlink(&unsafe { pred.deref() }.next[level], curr, succ, guard)
+                        {
                             curr = succ.with_tag(0);
                             continue;
                         } else {
@@ -197,8 +199,7 @@ where
                     // If `curr` contains a key that is greater than or equal to `key`, we're
                     // done with this level.
                     match curr_ref.key.cmp(key) {
-                        std::cmp::Ordering::Greater |
-                        std::cmp::Ordering::Equal => {
+                        std::cmp::Ordering::Greater | std::cmp::Ordering::Equal => {
                             break;
                         }
                         std::cmp::Ordering::Less => {}
