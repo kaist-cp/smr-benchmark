@@ -81,7 +81,9 @@ where
 ///
 /// Since BonsaiTreeMap.curr_state is Atomic<State<_>>, *const Node<_> can't be used here.
 #[derive(Debug)]
-struct State<K, V> {
+struct State<'g, K, V> {
+    root_link: &'g Atomic<Node<K, V>>,
+    curr_root: Shared<'g, Node<K, V>>,
     /// Nodes that current op wants to remove from the tree. Should be retired if CAS succeeds.
     /// (`retire`). If not, ignore.
     retired_nodes: Vec<Atomic<Node<K, V>>>,
@@ -89,16 +91,22 @@ struct State<K, V> {
     new_nodes: Vec<Atomic<Node<K, V>>>,
 }
 
-impl<K, V> State<K, V>
+impl<'g, K, V> State<'g, K, V>
 where
     K: Ord + Clone,
     V: Clone,
 {
-    fn new<'g>() -> Self {
+    fn new(root_link: &'g Atomic<Node<K, V>>) -> Self {
         Self {
+            root_link,
+            curr_root: Shared::null(),
             retired_nodes: Vec::new(),
             new_nodes: Vec::new(),
         }
+    }
+
+    fn load_root(&mut self, guard: &'g Guard) {
+        self.curr_root = self.root_link.load(Ordering::Acquire, guard);
     }
 
     /// Destroy the newly created state (self) that lost the race (reclaim_state)
@@ -137,7 +145,7 @@ where
     }
 
     // TODO get ref of K, V and clone here
-    fn mk_node<'g>(
+    fn mk_node(
         &mut self,
         left: Shared<'g, Node<K, V>>,
         right: Shared<'g, Node<K, V>>,
@@ -164,7 +172,7 @@ where
     }
 
     /// Make a new balanced tree from cur (the root of a subtree) and newly constructed left and right subtree
-    fn mk_balanced<'g>(
+    fn mk_balanced(
         &mut self,
         cur: Shared<'g, Node<K, V>>,
         left: Shared<'g, Node<K, V>>,
@@ -200,7 +208,7 @@ where
     }
 
     #[inline]
-    fn mk_balanced_left<'g>(
+    fn mk_balanced_left(
         &mut self,
         left: Shared<'g, Node<K, V>>,
         right: Shared<'g, Node<K, V>>,
@@ -212,7 +220,10 @@ where
         let right_left = right_ref.left.load(Ordering::Acquire, guard);
         let right_right = right_ref.right.load(Ordering::Acquire, guard);
 
-        if Node::is_retired_spot(right_left, guard) || Node::is_retired_spot(right_right, guard) {
+        if !self.check_root(guard)
+            || Node::is_retired_spot(right_left, guard)
+            || Node::is_retired_spot(right_right, guard)
+        {
             return Node::retired_node();
         }
 
@@ -226,7 +237,7 @@ where
     }
 
     #[inline]
-    fn single_left<'g>(
+    fn single_left(
         &mut self,
         left: Shared<'g, Node<K, V>>,
         right: Shared<'g, Node<K, V>>,
@@ -250,7 +261,7 @@ where
     }
 
     #[inline]
-    fn double_left<'g>(
+    fn double_left(
         &mut self,
         left: Shared<'g, Node<K, V>>,
         right: Shared<'g, Node<K, V>>,
@@ -265,7 +276,8 @@ where
         let right_left_left = right_left_ref.left.load(Ordering::Acquire, guard);
         let right_left_right = right_left_ref.right.load(Ordering::Acquire, guard);
 
-        if Node::is_retired_spot(right_left_left, guard)
+        if !self.check_root(guard)
+            || Node::is_retired_spot(right_left_left, guard)
             || Node::is_retired_spot(right_left_right, guard)
         {
             return Node::retired_node();
@@ -292,7 +304,7 @@ where
     }
 
     #[inline]
-    fn mk_balanced_right<'g>(
+    fn mk_balanced_right(
         &mut self,
         left: Shared<'g, Node<K, V>>,
         right: Shared<'g, Node<K, V>>,
@@ -304,7 +316,10 @@ where
         let left_right = left_ref.right.load(Ordering::Acquire, guard);
         let left_left = left_ref.left.load(Ordering::Acquire, guard);
 
-        if Node::is_retired_spot(left_right, guard) || Node::is_retired_spot(left_left, guard) {
+        if !self.check_root(guard)
+            || Node::is_retired_spot(left_right, guard)
+            || Node::is_retired_spot(left_left, guard)
+        {
             return Node::retired_node();
         }
 
@@ -317,7 +332,7 @@ where
     }
 
     #[inline]
-    fn single_right<'g>(
+    fn single_right(
         &mut self,
         left: Shared<'g, Node<K, V>>,
         right: Shared<'g, Node<K, V>>,
@@ -341,7 +356,7 @@ where
     }
 
     #[inline]
-    fn double_right<'g>(
+    fn double_right(
         &mut self,
         left: Shared<'g, Node<K, V>>,
         right: Shared<'g, Node<K, V>>,
@@ -356,7 +371,8 @@ where
         let left_right_left = left_right_ref.left.load(Ordering::Acquire, guard);
         let left_right_right = left_right_ref.right.load(Ordering::Acquire, guard);
 
-        if Node::is_retired_spot(left_right_left, guard)
+        if !self.check_root(guard)
+            || Node::is_retired_spot(left_right_left, guard)
             || Node::is_retired_spot(left_right_right, guard)
         {
             return Node::retired_node();
@@ -383,7 +399,7 @@ where
     }
 
     #[inline]
-    fn do_insert<'g>(
+    fn do_insert(
         &mut self,
         node: Shared<'g, Node<K, V>>,
         key: &K,
@@ -411,7 +427,10 @@ where
         let left = node_ref.left.load(Ordering::Acquire, guard);
         let right = node_ref.right.load(Ordering::Acquire, guard);
 
-        if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
+        if !self.check_root(guard)
+            || Node::is_retired_spot(left, guard)
+            || Node::is_retired_spot(right, guard)
+        {
             return (Node::retired_node(), false);
         }
 
@@ -429,7 +448,7 @@ where
     }
 
     #[inline]
-    fn do_remove<'g>(
+    fn do_remove(
         &mut self,
         node: Shared<'g, Node<K, V>>,
         key: &K,
@@ -447,7 +466,10 @@ where
         let left = node_ref.left.load(Ordering::Acquire, guard);
         let right = node_ref.right.load(Ordering::Acquire, guard);
 
-        if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
+        if !self.check_root(guard)
+            || Node::is_retired_spot(left, guard)
+            || Node::is_retired_spot(right, guard)
+        {
             return (Node::retired_node(), None);
         }
 
@@ -477,7 +499,7 @@ where
         }
     }
 
-    fn pull_leftmost<'g>(
+    fn pull_leftmost(
         &mut self,
         node: Shared<'g, Node<K, V>>,
         guard: &'g Guard,
@@ -490,7 +512,10 @@ where
         let left = node_ref.left.load(Ordering::Acquire, guard);
         let right = node_ref.right.load(Ordering::Acquire, guard);
 
-        if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
+        if !self.check_root(guard)
+            || Node::is_retired_spot(left, guard)
+            || Node::is_retired_spot(right, guard)
+        {
             return (Node::retired_node(), Node::retired_node());
         }
 
@@ -510,7 +535,7 @@ where
         return (right, succ);
     }
 
-    fn pull_rightmost<'g>(
+    fn pull_rightmost(
         &mut self,
         node: Shared<'g, Node<K, V>>,
         guard: &'g Guard,
@@ -523,7 +548,10 @@ where
         let left = node_ref.left.load(Ordering::Acquire, guard);
         let right = node_ref.right.load(Ordering::Acquire, guard);
 
-        if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
+        if !self.check_root(guard)
+            || Node::is_retired_spot(left, guard)
+            || Node::is_retired_spot(right, guard)
+        {
             return (Node::retired_node(), Node::retired_node());
         }
 
@@ -541,6 +569,14 @@ where
         );
         self.retire_node(node);
         return (left, succ);
+    }
+
+    pub fn check_root(&self, guard: &Guard) -> bool {
+        if self.curr_root == self.root_link.load(Ordering::Acquire, guard) {
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -585,9 +621,10 @@ where
     }
 
     pub fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
-        let mut state = State::new();
+        let mut state = State::new(&self.root);
         loop {
-            let old_root = self.root.load(Ordering::Acquire, guard);
+            state.load_root(guard);
+            let old_root = state.curr_root;
             let (new_root, inserted) = state.do_insert(old_root, &key, &value, guard);
 
             if Node::is_retired(new_root) {
@@ -615,9 +652,10 @@ where
     }
 
     pub fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
-        let mut state = State::new();
+        let mut state = State::new(&self.root);
         loop {
-            let old_root = self.root.load(Ordering::Acquire, guard);
+            state.load_root(guard);
+            let old_root = state.curr_root;
             let (new_root, value) = state.do_remove(old_root, key, guard);
 
             if Node::is_retired(new_root) {
