@@ -4,6 +4,7 @@ use super::concurrent_map::ConcurrentMap;
 use super::shield_pool::ShieldPool;
 
 use std::cmp;
+use std::ptr;
 use std::sync::atomic::Ordering;
 
 static WEIGHT: usize = 2;
@@ -83,6 +84,7 @@ where
 /// Since BonsaiTreeMap.curr_state is Atomic<State<_>>, *const Node<_> can't be used here.
 #[derive(Debug)]
 pub struct State<K, V> {
+    root_link: *const Atomic<Node<K, V>>,
     root_shield: Shield<Node<K, V>>,
     shields: ShieldPool<Node<K, V>>,
     /// Nodes that current op wants to remove from the tree. Should be retired if CAS succeeds.
@@ -99,6 +101,7 @@ where
 {
     fn new<'g>(guard: &'g Guard) -> Self {
         Self {
+            root_link: ptr::null_mut(),
             root_shield: Shield::null(guard),
             shields: ShieldPool::new(),
             retired_nodes: Vec::new(),
@@ -221,7 +224,10 @@ where
         let _right_left_shield = self.shields.defend(right_left, guard)?;
         let _right_right_shield = self.shields.defend(right_right, guard)?;
 
-        if Node::is_retired_spot(right_left, guard) || Node::is_retired_spot(right_right, guard) {
+        if !self.check_root(guard)
+            || Node::is_retired_spot(right_left, guard)
+            || Node::is_retired_spot(right_right, guard)
+        {
             return Ok(Node::retired_node());
         }
 
@@ -276,7 +282,8 @@ where
         let _right_left_left_shield = self.shields.defend(right_left_left, guard)?;
         let _right_left_right_shield = self.shields.defend(right_left_right, guard)?;
 
-        if Node::is_retired_spot(right_left_left, guard)
+        if !self.check_root(guard)
+            || Node::is_retired_spot(right_left_left, guard)
             || Node::is_retired_spot(right_left_right, guard)
         {
             return Ok(Node::retired_node());
@@ -317,7 +324,10 @@ where
         let _left_left_shield = self.shields.defend(left_left, guard)?;
         let _left_right_shield = self.shields.defend(left_right, guard)?;
 
-        if Node::is_retired_spot(left_right, guard) || Node::is_retired_spot(left_left, guard) {
+        if !self.check_root(guard)
+            || Node::is_retired_spot(left_right, guard)
+            || Node::is_retired_spot(left_left, guard)
+        {
             return Ok(Node::retired_node());
         }
 
@@ -371,7 +381,8 @@ where
         let _left_right_left_shield = self.shields.defend(left_right_left, guard)?;
         let _left_right_right_shield = self.shields.defend(left_right_right, guard)?;
 
-        if Node::is_retired_spot(left_right_left, guard)
+        if !self.check_root(guard)
+            || Node::is_retired_spot(left_right_left, guard)
             || Node::is_retired_spot(left_right_right, guard)
         {
             return Ok(Node::retired_node());
@@ -428,7 +439,10 @@ where
         let _left_shield = self.shields.defend(left, guard)?;
         let _right_shield = self.shields.defend(right, guard)?;
 
-        if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
+        if !self.check_root(guard)
+            || Node::is_retired_spot(left, guard)
+            || Node::is_retired_spot(right, guard)
+        {
             return Ok((Node::retired_node(), false));
         }
 
@@ -466,7 +480,10 @@ where
         let _left_shield = self.shields.defend(left, guard)?;
         let _right_shield = self.shields.defend(right, guard)?;
 
-        if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
+        if !self.check_root(guard)
+            || Node::is_retired_spot(left, guard)
+            || Node::is_retired_spot(right, guard)
+        {
             return Ok((Node::retired_node(), None));
         }
 
@@ -513,7 +530,10 @@ where
         let _left_shield = self.shields.defend(left, guard)?;
         let _right_shield = self.shields.defend(right, guard)?;
 
-        if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
+        if !self.check_root(guard)
+            || Node::is_retired_spot(left, guard)
+            || Node::is_retired_spot(right, guard)
+        {
             return Ok((Node::retired_node(), Node::retired_node()));
         }
 
@@ -549,7 +569,10 @@ where
         let _left_shield = self.shields.defend(left, guard)?;
         let _right_shield = self.shields.defend(right, guard)?;
 
-        if Node::is_retired_spot(left, guard) || Node::is_retired_spot(right, guard) {
+        if !self.check_root(guard)
+            || Node::is_retired_spot(left, guard)
+            || Node::is_retired_spot(right, guard)
+        {
             return Ok((Node::retired_node(), Node::retired_node()));
         }
 
@@ -568,6 +591,14 @@ where
         );
         self.retire_node(node);
         return Ok((left, succ));
+    }
+
+    pub fn check_root(&self, guard: &Guard) -> bool {
+        if self.root_shield.shared() == unsafe { &*self.root_link }.load(Ordering::Acquire, guard) {
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -641,6 +672,7 @@ where
     }
 
     pub fn insert(&self, key: K, value: V, state: &mut State<K, V>, guard: &mut Guard) -> bool {
+        state.root_link = &self.root;
         loop {
             let old_root = self.root.load(Ordering::Acquire, guard);
             match state
@@ -674,6 +706,7 @@ where
     }
 
     pub fn remove(&self, key: &K, state: &mut State<K, V>, guard: &mut Guard) -> Option<V> {
+        state.root_link = &self.root;
         loop {
             let old_root = self.root.load(Ordering::Acquire, guard);
             match state
