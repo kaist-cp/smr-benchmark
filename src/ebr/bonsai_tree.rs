@@ -572,11 +572,7 @@ where
     }
 
     pub fn check_root(&self, guard: &Guard) -> bool {
-        if self.curr_root == self.root_link.load(Ordering::Acquire, guard) {
-            true
-        } else {
-            false
-        }
+        self.curr_root == self.root_link.load(Ordering::Acquire, guard)
     }
 }
 

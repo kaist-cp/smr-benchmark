@@ -594,11 +594,7 @@ where
     }
 
     pub fn check_root(&self, guard: &Guard) -> bool {
-        if self.root_shield.shared() == unsafe { &*self.root_link }.load(Ordering::Acquire, guard) {
-            true
-        } else {
-            false
-        }
+        self.root_shield.shared() == unsafe { &*self.root_link }.load(Ordering::Acquire, guard)
     }
 }
 
