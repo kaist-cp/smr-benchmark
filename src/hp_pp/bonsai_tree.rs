@@ -78,15 +78,12 @@ impl<K, V> Node<K, V> {
         &self,
         left_h: &mut HazardPointer<'g>,
         right_h: &mut HazardPointer<'g>,
-        root_link: *const AtomicPtr<Node<K, V>>,
-        curr_root: *mut Node<K, V>,
     ) -> Result<(*mut Self, *mut Self), ()> {
-        let root_link = unsafe { &*root_link };
         let mut left = self.left.load(Ordering::Relaxed);
         let mut right = self.right.load(Ordering::Relaxed);
         loop {
-            match left_h.try_protect_pp(left, root_link, &self.left, &|root_link| {
-                root_link.load(Ordering::Acquire) != curr_root
+            match left_h.try_protect_pp(left, &self.left, &self.left, &|child_link| {
+                Self::is_retired(child_link.load(Ordering::Acquire))
             }) {
                 Ok(_) => {}
                 Err(ProtectError::Changed(new_left)) => {
@@ -95,8 +92,8 @@ impl<K, V> Node<K, V> {
                 }
                 Err(ProtectError::Stopped) => return Err(()),
             }
-            match right_h.try_protect_pp(right, root_link, &self.right, &|root_link| {
-                root_link.load(Ordering::Acquire) != curr_root
+            match right_h.try_protect_pp(right, &self.right, &self.right, &|child_link| {
+                Self::is_retired(child_link.load(Ordering::Acquire))
             }) {
                 Ok(_) => {}
                 Err(ProtectError::Changed(new_right)) => {
@@ -248,14 +245,13 @@ where
             HazardPointer::new(&mut self.thread),
             HazardPointer::new(&mut self.thread),
         );
-        let (right_left, right_right) = right_ref.protect_next(
-            &mut right_left_h,
-            &mut right_right_h,
-            self.root_link,
-            self.curr_root,
-        )?;
+        let (right_left, right_right) =
+            right_ref.protect_next(&mut right_left_h, &mut right_right_h)?;
 
-        if Node::is_retired_spot(right_left) || Node::is_retired_spot(right_right) {
+        if !self.check_root()
+            || Node::is_retired_spot(right_left)
+            || Node::is_retired_spot(right_right)
+        {
             return Ok(Node::retired_node());
         }
 
@@ -306,14 +302,13 @@ where
             HazardPointer::new(&mut self.thread),
             HazardPointer::new(&mut self.thread),
         );
-        let (right_left_left, right_left_right) = right_left_ref.protect_next(
-            &mut right_left_left_h,
-            &mut right_left_right_h,
-            self.root_link,
-            self.curr_root,
-        )?;
+        let (right_left_left, right_left_right) =
+            right_left_ref.protect_next(&mut right_left_left_h, &mut right_left_right_h)?;
 
-        if Node::is_retired_spot(right_left_left) || Node::is_retired_spot(right_left_right) {
+        if !self.check_root()
+            || Node::is_retired_spot(right_left_left)
+            || Node::is_retired_spot(right_left_right)
+        {
             return Ok(Node::retired_node());
         }
 
@@ -348,14 +343,12 @@ where
             HazardPointer::new(&mut self.thread),
             HazardPointer::new(&mut self.thread),
         );
-        let (left_left, left_right) = left_ref.protect_next(
-            &mut left_left_h,
-            &mut left_right_h,
-            self.root_link,
-            self.curr_root,
-        )?;
+        let (left_left, left_right) = left_ref.protect_next(&mut left_left_h, &mut left_right_h)?;
 
-        if Node::is_retired_spot(left_right) || Node::is_retired_spot(left_left) {
+        if !self.check_root()
+            || Node::is_retired_spot(left_right)
+            || Node::is_retired_spot(left_left)
+        {
             return Ok(Node::retired_node());
         }
 
@@ -405,14 +398,13 @@ where
             HazardPointer::new(&mut self.thread),
             HazardPointer::new(&mut self.thread),
         );
-        let (left_right_left, left_right_right) = left_right_ref.protect_next(
-            &mut left_right_left_h,
-            &mut left_right_right_h,
-            self.root_link,
-            self.curr_root,
-        )?;
+        let (left_right_left, left_right_right) =
+            left_right_ref.protect_next(&mut left_right_left_h, &mut left_right_right_h)?;
 
-        if Node::is_retired_spot(left_right_left) || Node::is_retired_spot(left_right_right) {
+        if !self.check_root()
+            || Node::is_retired_spot(left_right_left)
+            || Node::is_retired_spot(left_right_right)
+        {
             return Ok(Node::retired_node());
         }
 
@@ -457,10 +449,9 @@ where
             HazardPointer::new(&mut self.thread),
             HazardPointer::new(&mut self.thread),
         );
-        let (left, right) =
-            node_ref.protect_next(&mut left_h, &mut right_h, self.root_link, self.curr_root)?;
+        let (left, right) = node_ref.protect_next(&mut left_h, &mut right_h)?;
 
-        if Node::is_retired_spot(left) || Node::is_retired_spot(right) {
+        if !self.check_root() || Node::is_retired_spot(left) || Node::is_retired_spot(right) {
             return Ok((Node::retired_node(), false));
         }
 
@@ -496,10 +487,9 @@ where
             HazardPointer::new(&mut self.thread),
             HazardPointer::new(&mut self.thread),
         );
-        let (left, right) =
-            node_ref.protect_next(&mut left_h, &mut right_h, self.root_link, self.curr_root)?;
+        let (left, right) = node_ref.protect_next(&mut left_h, &mut right_h)?;
 
-        if Node::is_retired_spot(left) || Node::is_retired_spot(right) {
+        if !self.check_root() || Node::is_retired_spot(left) || Node::is_retired_spot(right) {
             return Ok((Node::retired_node(), None));
         }
 
@@ -552,10 +542,9 @@ where
             HazardPointer::new(&mut self.thread),
             HazardPointer::new(&mut self.thread),
         );
-        let (left, right) =
-            node_ref.protect_next(&mut left_h, &mut right_h, self.root_link, self.curr_root)?;
+        let (left, right) = node_ref.protect_next(&mut left_h, &mut right_h)?;
 
-        if Node::is_retired_spot(left) || Node::is_retired_spot(right) {
+        if !self.check_root() || Node::is_retired_spot(left) || Node::is_retired_spot(right) {
             return Ok((Node::retired_node(), Node::retired_node(), None));
         }
 
@@ -594,10 +583,9 @@ where
             HazardPointer::new(&mut self.thread),
             HazardPointer::new(&mut self.thread),
         );
-        let (left, right) =
-            node_ref.protect_next(&mut left_h, &mut right_h, self.root_link, self.curr_root)?;
+        let (left, right) = node_ref.protect_next(&mut left_h, &mut right_h)?;
 
-        if Node::is_retired_spot(left) || Node::is_retired_spot(right) {
+        if !self.check_root() || Node::is_retired_spot(left) || Node::is_retired_spot(right) {
             return Ok((Node::retired_node(), Node::retired_node(), None));
         }
 
@@ -614,6 +602,18 @@ where
         );
         self.retire_node(node);
         return Ok((left, succ, Some(left_h)));
+    }
+
+    pub fn check_root(&self) -> bool {
+        if let Some(root_link) = unsafe { self.root_link.as_ref() } {
+            if self.curr_root == root_link.load(Ordering::Acquire) {
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
     }
 }
 
@@ -638,7 +638,10 @@ where
     }
 
     #[inline]
-    pub fn protect_link<'domain, 'hp>(link: &AtomicPtr<Node<K, V>>, hazptr: &'hp mut HazardPointer<'domain>) -> *mut Node<K, V> {
+    pub fn protect_link<'domain, 'hp>(
+        link: &AtomicPtr<Node<K, V>>,
+        hazptr: &'hp mut HazardPointer<'domain>,
+    ) -> *mut Node<K, V> {
         let mut node = link.load(Ordering::Relaxed);
         loop {
             hazptr.protect_raw(untagged(node));
@@ -664,8 +667,12 @@ where
                 let node_ref = unsafe { &*node };
                 match key.cmp(&node_ref.key) {
                     cmp::Ordering::Equal => break,
-                    cmp::Ordering::Less => node = Self::protect_link(&node_ref.left, &mut state.succ_h),
-                    cmp::Ordering::Greater => node = Self::protect_link(&node_ref.right, &mut state.succ_h),
+                    cmp::Ordering::Less => {
+                        node = Self::protect_link(&node_ref.left, &mut state.succ_h)
+                    }
+                    cmp::Ordering::Greater => {
+                        node = Self::protect_link(&node_ref.right, &mut state.succ_h)
+                    }
                 }
                 HazardPointer::swap(&mut state.succ_h, &mut state.root_h);
             }

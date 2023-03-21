@@ -639,7 +639,10 @@ where
     }
 
     #[inline]
-    pub fn protect_link<'domain, 'hp>(link: &AtomicPtr<Node<K, V>>, hazptr: &'hp mut HazardPointer<'domain>) -> *mut Node<K, V> {
+    pub fn protect_link<'domain, 'hp>(
+        link: &AtomicPtr<Node<K, V>>,
+        hazptr: &'hp mut HazardPointer<'domain>,
+    ) -> *mut Node<K, V> {
         let mut node = link.load(Ordering::Relaxed);
         loop {
             hazptr.protect_raw(untagged(node));
@@ -665,8 +668,12 @@ where
                 let node_ref = unsafe { &*node };
                 match key.cmp(&node_ref.key) {
                     cmp::Ordering::Equal => break,
-                    cmp::Ordering::Less => node = Self::protect_link(&node_ref.left, &mut state.succ_h),
-                    cmp::Ordering::Greater => node = Self::protect_link(&node_ref.right, &mut state.succ_h),
+                    cmp::Ordering::Less => {
+                        node = Self::protect_link(&node_ref.left, &mut state.succ_h)
+                    }
+                    cmp::Ordering::Greater => {
+                        node = Self::protect_link(&node_ref.right, &mut state.succ_h)
+                    }
                 }
                 HazardPointer::swap(&mut state.succ_h, &mut state.root_h);
             }
