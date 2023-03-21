@@ -106,6 +106,7 @@ pub struct State<'domain, K, V> {
     root_link: *const AtomicPtr<Node<K, V>>,
     curr_root: *mut Node<K, V>,
     root_h: HazardPointer<'domain>,
+    succ_h: HazardPointer<'domain>, // Used for traversing in get
     removed_h: HazardPointer<'domain>,
     /// Nodes that current op wants to remove from the tree. Should be retired if CAS succeeds.
     /// (`retire`). If not, ignore.
@@ -121,6 +122,7 @@ impl<K, V> Default for State<'static, K, V> {
             root_link: ptr::null(),
             curr_root: ptr::null_mut(),
             root_h: Default::default(),
+            succ_h: Default::default(),
             removed_h: Default::default(),
             retired_nodes: vec![],
             new_nodes: vec![],
@@ -631,17 +633,24 @@ where
         }
     }
 
+    #[inline]
     pub fn protect_root<'domain, 'hp>(&self, state: &'hp mut State<'domain, K, V>) {
-        state.curr_root = self.root.load(Ordering::Relaxed);
+        state.curr_root = Self::protect_link(&self.root, &mut state.root_h);
+    }
+
+    #[inline]
+    pub fn protect_link<'domain, 'hp>(link: &AtomicPtr<Node<K, V>>, hazptr: &'hp mut HazardPointer<'domain>) -> *mut Node<K, V> {
+        let mut node = link.load(Ordering::Relaxed);
         loop {
-            state.root_h.protect_raw(state.curr_root);
+            hazptr.protect_raw(untagged(node));
             light_membarrier();
-            let new_root_ptr = self.root.load(Ordering::Acquire);
-            if state.curr_root == new_root_ptr {
+            let new_node = link.load(Ordering::Acquire);
+            if node == new_node {
                 break;
             }
-            state.curr_root = new_root_ptr;
+            node = new_node;
         }
+        node
     }
 
     pub fn get<'domain, 'hp>(
@@ -651,17 +660,15 @@ where
     ) -> Option<&'hp V> {
         loop {
             self.protect_root(state);
-            state.root_link = &self.root;
             let mut node = state.curr_root;
             while !node.is_null() && !Node::is_retired(node) {
-                state.root_h.protect_raw(node);
-                light_membarrier();
                 let node_ref = unsafe { &*node };
                 match key.cmp(&node_ref.key) {
                     cmp::Ordering::Equal => break,
-                    cmp::Ordering::Less => node = node_ref.left.load(Ordering::Acquire),
-                    cmp::Ordering::Greater => node = node_ref.right.load(Ordering::Acquire),
+                    cmp::Ordering::Less => node = Self::protect_link(&node_ref.left, &mut state.succ_h),
+                    cmp::Ordering::Greater => node = Self::protect_link(&node_ref.right, &mut state.succ_h),
                 }
+                HazardPointer::swap(&mut state.succ_h, &mut state.root_h);
             }
 
             if Node::is_retired_spot(node) {
