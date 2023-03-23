@@ -26,7 +26,7 @@ def draw_throughput_by_thread(key_range: int, get_rate: int):
     plt.plot(d1.index, d1.values, marker='D', linestyle="--", color="purple", label="HP++ NMTree", markersize=13)
     plt.plot(d2.index, d2.values, marker="v", linestyle="--", color="hotpink", label="HP EFRBTree", markersize=13)
     plt.xlabel("Threads")
-    plt.ylabel("Throughput (op/s)")
+    plt.ylabel("Throughput (M op/s)")
     plt.grid()
     plt.axvspan(64, 80, facecolor='gray', alpha=0.1, hatch='///')
     plt.savefig(f"./results/NMTree-EFRBTree-Throughput-{key_range}-{get_rate}.pdf", format="pdf")
