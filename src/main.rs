@@ -26,8 +26,8 @@ use typenum::{Unsigned, U1, U4};
 use pebr_benchmark::ebr;
 use pebr_benchmark::hp;
 use pebr_benchmark::hp_pp;
-use pebr_benchmark::pebr;
 use pebr_benchmark::nbr;
+use pebr_benchmark::pebr;
 
 arg_enum! {
     #[derive(PartialEq, Debug)]
@@ -492,8 +492,11 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             DS::HList => {
                 bench_map_nbr::<nbr::HList<String, String>, N>(config, PrefillStrategy::Decreasing)
             }
+            DS::HMList => {
+                bench_map_nbr::<nbr::HMList<String, String>, N>(config, PrefillStrategy::Decreasing)
+            }
             _ => panic!("Unsupported data structure for NBR"),
-        }
+        },
     };
     output
         .write_record(&[
