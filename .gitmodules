@@ -4,3 +4,6 @@
 [submodule "crossbeam-pebr"]
 	path = crossbeam-pebr
 	url = https://github.com/kaist-cp/crossbeam
+[submodule "nbr-rs"]
+	path = nbr-rs
+	url = https://github.com/powergee/nbr-rs.git
