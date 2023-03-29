@@ -191,6 +191,37 @@ where
         }
     }
 
+    /// Gotta go fast. Doesn't fail.
+    fn find_harris_herlihy_shavit(&self, key: &K, guard: &Guard) -> Cursor<K, V> {
+        let mut cursor = Cursor {
+            prev: ptr::null_mut(),
+            curr: ptr::null_mut(),
+            found: false,
+        };
+
+        loop {
+            read_phase!(guard; [untagged(cursor.prev), untagged(cursor.curr)] => {
+                cursor.prev = &self.head as *const _ as *mut Node<K, V>;
+                cursor.curr = self.head.load(Ordering::Acquire);
+
+                cursor.found = loop {
+                    let curr_node = some_or!(unsafe { untagged(cursor.curr).as_ref() }, break false);
+                    let next = curr_node.next.load(Ordering::Acquire);
+
+                    match curr_node.key.cmp(key) {
+                        Less => {
+                            cursor.prev = cursor.curr;
+                            cursor.curr = next;
+                        }
+                        Equal => break tag(next) == 0,
+                        Greater => break false,
+                    }
+                };
+            });
+            return cursor;
+        }
+    }
+
     pub fn get<'g, F>(&'g self, key: &K, find: F, guard: &'g Guard) -> Option<&'g V>
     where
         F: Fn(&List<K, V>, &K, &Guard) -> Cursor<K, V>,
@@ -286,6 +317,11 @@ where
     pub fn harris_michael_remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         self.remove(key, Self::find_harris_michael, guard)
     }
+
+    /// Omitted
+    pub fn harris_herlihy_shavit_get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        self.get(key, Self::find_harris_herlihy_shavit, guard)
+    }
 }
 
 pub struct HList<K, V> {
@@ -340,9 +376,35 @@ where
     }
 }
 
+pub struct HHSList<K, V> {
+    inner: List<K, V>,
+}
+
+impl<K, V> ConcurrentMap<K, V> for HHSList<K, V>
+where
+    K: Ord,
+{
+    fn new() -> Self {
+        HHSList { inner: List::new() }
+    }
+
+    #[inline]
+    fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        self.inner.harris_herlihy_shavit_get(key, guard)
+    }
+    #[inline]
+    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
+        self.inner.harris_insert(key, value, guard)
+    }
+    #[inline]
+    fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        self.inner.harris_remove(key, guard)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{HList, HMList};
+    use super::{HHSList, HList, HMList};
     use crate::nbr::concurrent_map;
 
     #[test]
@@ -353,5 +415,10 @@ mod tests {
     #[test]
     fn smoke_hm_list() {
         concurrent_map::tests::smoke::<HMList<i32, String>>();
+    }
+
+    #[test]
+    fn smoke_hhs_list() {
+        concurrent_map::tests::smoke::<HHSList<i32, String>>();
     }
 }
