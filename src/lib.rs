@@ -32,8 +32,8 @@ mod utils;
 pub mod ebr;
 pub mod hp;
 pub mod hp_pp;
-pub mod pebr;
 pub mod nbr;
+pub mod pebr;
 
 use core::cell::Cell;
 

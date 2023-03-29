@@ -1,10 +1,10 @@
 use super::concurrent_map::ConcurrentMap;
 use nbr_rs::{read_phase, Guard};
 
-use hp_pp::{untagged, tag, tagged};
+use hp_pp::{tag, tagged, untagged};
 use std::cmp::Ordering::{Equal, Greater, Less};
-use std::sync::atomic::{AtomicPtr, Ordering};
 use std::ptr;
+use std::sync::atomic::{AtomicPtr, Ordering};
 
 #[derive(Debug)]
 struct Node<K, V> {
@@ -66,8 +66,8 @@ where
         };
         let mut prev_next;
 
-        'search_loop: loop {
-            read_phase!(guard; [untagged(cursor.prev), untagged(cursor.curr)] => {
+        loop {
+            read_phase!(guard; [cursor.prev, cursor.curr] => {
                 // Finding phase
                 // - cursor.curr: first unmarked node w/ key >= search key (4)
                 // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
@@ -109,13 +109,13 @@ where
             }
 
             // cleanup marked nodes between prev and curr
-            let prev_ref = unsafe { &*untagged(cursor.prev) };
+            let prev_ref = unsafe { &*cursor.prev };
             if prev_ref
                 .next
                 .compare_exchange(prev_next, cursor.curr, Ordering::Release, Ordering::Relaxed)
                 .is_err()
             {
-                continue 'search_loop;
+                continue;
             }
 
             // retire from cursor.prev.load() to cursor.curr (exclusive)
@@ -124,6 +124,67 @@ where
                 let next = unsafe { &*untagged(node) }.next.load(Ordering::Acquire);
                 unsafe { guard.retire(untagged(node)) };
                 node = next;
+            }
+
+            return cursor;
+        }
+    }
+
+    fn find_harris_michael(&self, key: &K, guard: &Guard) -> Cursor<K, V> {
+        let mut cursor = Cursor {
+            prev: ptr::null_mut(),
+            curr: ptr::null_mut(),
+            found: false,
+        };
+        let mut removed_next;
+
+        loop {
+            read_phase!(guard; [cursor.prev, cursor.curr] => {
+                cursor.prev = &self.head as *const _ as *mut Node<K, V>;
+                cursor.curr = self.head.load(Ordering::Acquire);
+                removed_next = ptr::null_mut();
+
+                cursor.found = loop {
+                    let curr_node = some_or!(unsafe { cursor.curr.as_ref() }, break false);
+                    let next = curr_node.next.load(Ordering::Acquire);
+
+                    // NOTE: original version aborts here if self.prev is tagged
+
+                    if tag(next) != 0 {
+                        // Found a logically removed node.
+                        // As it cannot be physically removed in read phase,
+                        // save it at a local variable and remove it
+                        // in write phase.
+                        removed_next = untagged(next);
+                        break false;
+                    }
+
+                    match curr_node.key.cmp(key) {
+                        Less => {
+                            cursor.prev = cursor.curr;
+                            cursor.curr = next;
+                        }
+                        Equal => break true,
+                        Greater => break false,
+                    }
+                };
+            });
+
+            if !removed_next.is_null() {
+                let prev_ref = unsafe { &*cursor.prev };
+                if prev_ref
+                    .next
+                    .compare_exchange(
+                        cursor.curr,
+                        removed_next,
+                        Ordering::Release,
+                        Ordering::Relaxed,
+                    )
+                    .is_ok()
+                {
+                    unsafe { guard.retire(cursor.curr) };
+                }
+                continue;
             }
 
             return cursor;
@@ -210,6 +271,21 @@ where
     pub fn harris_remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         self.remove(key, Self::find_harris, guard)
     }
+
+    /// Omitted
+    pub fn harris_michael_get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        self.get(key, Self::find_harris_michael, guard)
+    }
+
+    /// Omitted
+    pub fn harris_michael_insert(&self, key: K, value: V, guard: &Guard) -> bool {
+        self.insert(key, value, Self::find_harris_michael, guard)
+    }
+
+    /// Omitted
+    pub fn harris_michael_remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        self.remove(key, Self::find_harris_michael, guard)
+    }
 }
 
 pub struct HList<K, V> {
@@ -238,13 +314,44 @@ where
     }
 }
 
+pub struct HMList<K, V> {
+    inner: List<K, V>,
+}
+
+impl<K, V> ConcurrentMap<K, V> for HMList<K, V>
+where
+    K: Ord,
+{
+    fn new() -> Self {
+        HMList { inner: List::new() }
+    }
+
+    #[inline]
+    fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        self.inner.harris_michael_get(key, guard)
+    }
+    #[inline]
+    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
+        self.inner.harris_michael_insert(key, value, guard)
+    }
+    #[inline]
+    fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        self.inner.harris_michael_remove(key, guard)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::HList;
+    use super::{HList, HMList};
     use crate::nbr::concurrent_map;
 
     #[test]
     fn smoke_h_list() {
         concurrent_map::tests::smoke::<HList<i32, String>>();
+    }
+
+    #[test]
+    fn smoke_hm_list() {
+        concurrent_map::tests::smoke::<HMList<i32, String>>();
     }
 }

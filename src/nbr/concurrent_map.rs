@@ -11,10 +11,10 @@ pub trait ConcurrentMap<K, V> {
 pub mod tests {
     extern crate rand;
     use super::ConcurrentMap;
-    use nbr_rs::Collector;
-    use std::sync::Arc;
     use crossbeam_utils::thread;
+    use nbr_rs::Collector;
     use rand::prelude::*;
+    use std::sync::Arc;
 
     const THREADS: i32 = 30;
     const ELEMENTS_PER_THREADS: i32 = 1000;
