@@ -33,6 +33,7 @@ pub mod ebr;
 pub mod hp;
 pub mod hp_pp;
 pub mod pebr;
+pub mod nbr;
 
 use core::cell::Cell;
 
