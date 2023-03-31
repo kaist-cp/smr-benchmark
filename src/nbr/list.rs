@@ -199,8 +199,20 @@ where
             found: false,
         };
 
+        // HACK: "Why a loop and `black_box` are used?"
+        //
+        // It is not needed in normal builds, but
+        // when sanitizing, the address sanitizer often gives
+        // a false positive by recognizing `longjmp` as
+        // stack buffer overflow (or stack corruption).
+        //
+        // However, awkwardly, if it wrapped by a loop block,
+        // it seems that the sanitizer recognizes `longjmp` as
+        // normal `continue` operation and totally satisfies with it.
+        //
+        // So, they are for avoiding false positives of the sanitizer.
         loop {
-            read_phase!(guard; [untagged(cursor.prev), untagged(cursor.curr)] => {
+            read_phase!(guard; [cursor.prev, cursor.curr] => {
                 cursor.prev = &self.head as *const _ as *mut Node<K, V>;
                 cursor.curr = self.head.load(Ordering::Acquire);
 
@@ -217,8 +229,15 @@ where
                         Greater => break false,
                     }
                 };
+                cursor.curr = untagged(cursor.curr);
+                cursor.prev = untagged(cursor.prev);
             });
-            return cursor;
+
+            if core::intrinsics::black_box(false) {
+                continue;
+            } else {
+                return cursor;
+            }
         }
     }
 
