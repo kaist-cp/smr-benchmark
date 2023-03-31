@@ -5,6 +5,7 @@
 // Enabled unsable feature to use
 // unstable functions of AtomicPtr (AtomicPtr::fetch_or)
 #![feature(strict_provenance_atomic_ptr, strict_provenance)]
+#![feature(core_intrinsics)]
 
 #[macro_use]
 extern crate cfg_if;
