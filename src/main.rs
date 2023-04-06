@@ -499,6 +499,10 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 config,
                 PrefillStrategy::Decreasing,
             ),
+            DS::HashMap => bench_map_nbr::<nbr::HashMap<String, String>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
             _ => panic!("Unsupported data structure for NBR"),
         },
     };
