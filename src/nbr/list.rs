@@ -199,46 +199,28 @@ where
             found: false,
         };
 
-        // HACK: "Why a loop and `black_box` are used?"
-        //
-        // It is not needed in normal builds, but
-        // when sanitizing, the address sanitizer often gives
-        // a false positive by recognizing `longjmp` as
-        // stack buffer overflow (or stack corruption).
-        //
-        // However, awkwardly, if it wrapped by a loop block,
-        // it seems that the sanitizer recognizes `longjmp` as
-        // normal `continue` operation and totally satisfies with it.
-        //
-        // So, they are for avoiding false positives of the sanitizer.
-        loop {
-            read_phase!(guard; [cursor.prev, cursor.curr] => {
-                cursor.prev = &self.head as *const _ as *mut Node<K, V>;
-                cursor.curr = self.head.load(Ordering::Acquire);
+        read_phase!(guard; [cursor.prev, cursor.curr] => {
+            cursor.prev = &self.head as *const _ as *mut Node<K, V>;
+            cursor.curr = self.head.load(Ordering::Acquire);
 
-                cursor.found = loop {
-                    let curr_node = some_or!(unsafe { untagged(cursor.curr).as_ref() }, break false);
-                    let next = curr_node.next.load(Ordering::Acquire);
+            cursor.found = loop {
+                let curr_node = some_or!(unsafe { untagged(cursor.curr).as_ref() }, break false);
+                let next = curr_node.next.load(Ordering::Acquire);
 
-                    match curr_node.key.cmp(key) {
-                        Less => {
-                            cursor.prev = cursor.curr;
-                            cursor.curr = next;
-                        }
-                        Equal => break tag(next) == 0,
-                        Greater => break false,
+                match curr_node.key.cmp(key) {
+                    Less => {
+                        cursor.prev = cursor.curr;
+                        cursor.curr = next;
                     }
-                };
-                cursor.curr = untagged(cursor.curr);
-                cursor.prev = untagged(cursor.prev);
-            });
+                    Equal => break tag(next) == 0,
+                    Greater => break false,
+                }
+            };
+            cursor.curr = untagged(cursor.curr);
+            cursor.prev = untagged(cursor.prev);
+        });
 
-            if core::intrinsics::black_box(false) {
-                continue;
-            } else {
-                return cursor;
-            }
-        }
+        return cursor;
     }
 
     pub fn get<'g, F>(&'g self, key: &K, find: F, guard: &'g Guard) -> Option<&'g V>
