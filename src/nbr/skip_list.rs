@@ -6,7 +6,7 @@ use std::ptr;
 
 use super::concurrent_map::ConcurrentMap;
 
-const MAX_HEIGHT: usize = 32;
+pub const MAX_HEIGHT: usize = 32;
 
 type Tower<K, V> = [AtomicPtr<Node<K, V>>; MAX_HEIGHT];
 
@@ -105,10 +105,12 @@ where
         }
     }
 
-    fn find<'g>(&'g self, key: &K, guard: &'g Guard) -> Cursor<K, V> {
+    fn find_inner<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<Cursor<K, V>> {
         let mut cursor;
+        let mut unlink_params;
         read_phase!(guard => {
             'search: loop {
+                unlink_params = None;
                 cursor = Cursor::new(&self.head);
 
                 let mut level = MAX_HEIGHT;
@@ -131,14 +133,8 @@ where
                         let pred_next = &unsafe { &*pred }.next;
 
                         if tag(succ) == 1 {
-                            if self.help_unlink(&pred_next[level], curr, succ, guard) {
-                                curr = untagged(succ);
-                                continue;
-                            } else {
-                                // On failure, we cannot do anything reasonable to continue
-                                // searching from the current position. Restart the search.
-                                continue 'search;
-                            }
+                            unlink_params = Some((&pred_next[level], curr, succ));
+                            break 'search;
                         }
 
                         // If `curr` contains a key that is greater than or equal to `key`, we're
@@ -164,17 +160,33 @@ where
                 break;
             }
 
-            // Manually protect all pointers before exiting `read_phase`.
-            if let Some(found) = cursor.found {
-                guard.protect(found);
-            }
-            for i in 0..MAX_HEIGHT {
-                guard.protect(cursor.preds[i]);
-                guard.protect(cursor.succs[i]);
+            if unlink_params.is_none() {
+                // Manually protect all pointers before exiting `read_phase`.
+                if let Some(found) = cursor.found {
+                    guard.protect(found);
+                }
+                for i in 0..MAX_HEIGHT {
+                    guard.protect(cursor.preds[i]);
+                    guard.protect(cursor.succs[i]);
+                }
             }
         });
 
-        return cursor;
+        if let Some((pred_next, curr, succ)) = unlink_params {
+            self.help_unlink(pred_next, curr, succ, guard);
+            return None;
+        }
+
+        Some(cursor)
+    }
+
+    fn find<'g>(&'g self, key: &K, guard: &'g Guard) -> Cursor<K, V> {
+        loop {
+            let cursor = self.find_inner(key, guard);
+            if let Some(cursor) = cursor {
+                return cursor;
+            }
+        }
     }
 
     fn help_unlink(
@@ -183,7 +195,7 @@ where
         curr: *mut Node<K, V>,
         succ: *mut Node<K, V>,
         guard: &Guard,
-    ) -> bool {
+    ) {
         let success = pred
             .compare_exchange(
                 untagged(curr),
@@ -196,7 +208,6 @@ where
         if success {
             unsafe { (*untagged(curr)).decrement(guard) };
         }
-        success
     }
 
     pub fn insert(&self, key: K, value: V, guard: &Guard) -> bool {

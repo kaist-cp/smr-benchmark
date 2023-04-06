@@ -490,23 +490,30 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
         },
         MM::NBR => match config.ds {
             DS::HList => {
-                bench_map_nbr::<nbr::HList<String, String>, N>(config, PrefillStrategy::Decreasing)
+                bench_map_nbr::<nbr::HList<String, String>, N>(config, PrefillStrategy::Decreasing, 2)
             }
             DS::HMList => {
-                bench_map_nbr::<nbr::HMList<String, String>, N>(config, PrefillStrategy::Decreasing)
+                bench_map_nbr::<nbr::HMList<String, String>, N>(config, PrefillStrategy::Decreasing, 2)
             }
             DS::HHSList => bench_map_nbr::<nbr::HHSList<String, String>, N>(
                 config,
                 PrefillStrategy::Decreasing,
+                2,
             ),
             DS::HashMap => bench_map_nbr::<nbr::HashMap<String, String>, N>(
                 config,
                 PrefillStrategy::Decreasing,
+                2,
             ),
-            DS::NMTree => bench_map_nbr::<nbr::NMTreeMap<String, String>, N>(
-                config,
-                PrefillStrategy::Decreasing,
-            ),
+            DS::NMTree => {
+                bench_map_nbr::<nbr::NMTreeMap<String, String>, N>(config, PrefillStrategy::Random, 4)
+            }
+            DS::SkipList => {
+                bench_map_nbr::<nbr::SkipList<String, String>, N>(config, PrefillStrategy::Random, nbr::skip_list::MAX_HEIGHT * 2 + 1)
+            }
+            DS::EFRBTree => {
+                bench_map_nbr::<nbr::EFRBTree<String, String>, N>(config, PrefillStrategy::Random, 11)
+            }
             _ => panic!("Unsupported data structure for NBR"),
         },
     };
@@ -1106,11 +1113,12 @@ fn bench_map_hp<M: hp::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>
 fn bench_map_nbr<M: nbr::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>(
     config: &Config,
     strategy: PrefillStrategy,
+    max_hazptr_per_thread: usize,
 ) -> (u64, usize, usize, usize, usize) {
     let map = &M::new();
     strategy.prefill_nbr(config, map);
 
-    let collector = &nbr_rs::Collector::new(config.threads, 8);
+    let collector = &nbr_rs::Collector::new(config.threads, max_hazptr_per_thread);
 
     let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
     let (ops_sender, ops_receiver) = mpsc::channel();
