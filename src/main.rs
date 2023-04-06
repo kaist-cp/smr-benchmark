@@ -503,6 +503,10 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 config,
                 PrefillStrategy::Decreasing,
             ),
+            DS::NMTree => bench_map_nbr::<nbr::NMTreeMap<String, String>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
             _ => panic!("Unsupported data structure for NBR"),
         },
     };
@@ -1134,7 +1138,7 @@ fn bench_map_nbr<M: nbr::ConcurrentMap<String, String> + Send + Sync, N: Unsigne
 
                         acc += allocated;
                         peak = max(peak, allocated);
-                        
+
                         let garbages = nbr_rs::count_garbages();
                         garb_acc += garbages;
                         garb_peak = max(garb_peak, garbages);

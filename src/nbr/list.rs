@@ -410,16 +410,16 @@ mod tests {
 
     #[test]
     fn smoke_h_list() {
-        concurrent_map::tests::smoke::<HList<i32, String>>();
+        concurrent_map::tests::smoke::<HList<i32, String>>(2);
     }
 
     #[test]
     fn smoke_hm_list() {
-        concurrent_map::tests::smoke::<HMList<i32, String>>();
+        concurrent_map::tests::smoke::<HMList<i32, String>>(2);
     }
 
     #[test]
     fn smoke_hhs_list() {
-        concurrent_map::tests::smoke::<HHSList<i32, String>>();
+        concurrent_map::tests::smoke::<HHSList<i32, String>>(2);
     }
 }
