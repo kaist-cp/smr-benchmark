@@ -4,16 +4,6 @@ use cdrc_rs::{AcquireRetire, AtomicRcPtr, RcPtr, SnapshotPtr};
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::mem;
 
-/// Some or executing the given expression.
-macro_rules! some_or {
-    ($e:expr, $err:expr) => {{
-        match $e {
-            Some(r) => r,
-            None => $err,
-        }
-    }};
-}
-
 struct Node<K, V, Guard>
 where
     Guard: AcquireRetire,
@@ -47,7 +37,7 @@ where
     Guard: AcquireRetire,
 {
     fn drop(&mut self) {
-        let guard = &Guard::handle();
+        let guard = unsafe { Guard::unprotected() };
         unsafe {
             let mut curr = self.head.load(guard);
             let mut next;
@@ -114,8 +104,8 @@ where
         Self {
             prev_snap,
             curr_snap,
-            prev: RcPtr::default(),
-            curr: RcPtr::default(),
+            prev: RcPtr::null(guard),
+            curr: RcPtr::null(guard),
         }
     }
 
@@ -196,14 +186,13 @@ where
         node: RcPtr<'g, Node<K, V, Guard>, Guard>,
         guard: &'g Guard,
     ) -> Result<(), RcPtr<'g, Node<K, V, Guard>, Guard>> {
-        let curr = mem::take(&mut self.curr);
         unsafe { node.deref() }
             .next
-            .store_relaxed(curr.clone(guard), guard);
+            .store_relaxed(self.curr.clone(guard), guard);
 
         if unsafe { self.prev.deref() }
             .next
-            .compare_exchange(&curr, &node, guard)
+            .compare_exchange(&self.curr, &node, guard)
         {
             self.curr = node;
             Ok(())
@@ -239,7 +228,7 @@ where
     /// Creates a new list.
     pub fn new() -> Self {
         List {
-            head: AtomicRcPtr::new(Node::head(), &Guard::handle()),
+            head: AtomicRcPtr::new(Node::head(), unsafe { Guard::unprotected() }),
         }
     }
 
@@ -364,10 +353,10 @@ where
 mod tests {
     use super::HList;
     use crate::cdrc::concurrent_map;
-    use cdrc_rs::GuardEBR;
+    use cdrc_rs::{HandleEBR, Handle};
 
     #[test]
     fn smoke_ebr_h_list() {
-        concurrent_map::tests::smoke::<GuardEBR, HList<i32, String, GuardEBR>>();
+        concurrent_map::tests::smoke::<HandleEBR, HList<i32, String, <HandleEBR as Handle>::Guard>>();
     }
 }
