@@ -118,8 +118,8 @@ where
         Node {
             key: right.key.clone(),
             value: None,
-            left: AtomicRcPtr::new(left, unsafe { Guard::unprotected() }),
-            right: AtomicRcPtr::new(right, unsafe { Guard::unprotected() }),
+            left: AtomicRcPtr::new(left, &Guard::handle()),
+            right: AtomicRcPtr::new(right, &Guard::handle()),
         }
     }
 }
@@ -219,7 +219,7 @@ where
         let s = Node::new_internal(inf0, inf1);
         let r = Node::new_internal(s, inf2);
         NMTreeMap {
-            r: AtomicRcPtr::new(r, unsafe { Guard::unprotected() }),
+            r: AtomicRcPtr::new(r, &Guard::handle()),
         }
     }
 
@@ -463,13 +463,13 @@ where
 mod tests {
     use super::NMTreeMap;
     use crate::cdrc::concurrent_map;
-    use cdrc_rs::{Handle, HandleEBR};
+    use cdrc_rs::GuardEBR;
 
     #[test]
     fn smoke_nm_tree() {
         concurrent_map::tests::smoke::<
-            HandleEBR,
-            NMTreeMap<i32, String, <HandleEBR as Handle>::Guard>,
+        GuardEBR,
+            NMTreeMap<i32, String, GuardEBR>,
         >();
     }
 }
