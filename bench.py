@@ -2,8 +2,8 @@ import subprocess
 import os
 import sys
 
-dss = ['HList', 'HMList', 'HHSList', 'HashMap', 'NMTree', 'EFRBTree', 'SkipList']
-mms = ['EBR', 'NR', 'HP', 'HP_PP', 'PEBR']
+dss = ['HList', 'HMList', 'HHSList', 'HashMap', 'NMTree', 'EFRBTree', 'SkipList', 'BonsaiTree']
+mms = ['EBR', 'NR', 'HP', 'HP_PP', 'PEBR', 'NBR', 'CDRC_EBR']
 cs = [1]
 i = 10
 cpu_count = os.cpu_count()
@@ -52,6 +52,8 @@ def invalid(mm, ds, c, g):
         is_invalid |= g == 0  # HHSList is just HMList with faster get()
     if mm == 'HP':
         is_invalid |= ds in ["HList", "HHSList"]
+    if mm == 'NBR':
+        is_invalid |= ds in ["BonsaiTree"]
     return is_invalid
 
 
