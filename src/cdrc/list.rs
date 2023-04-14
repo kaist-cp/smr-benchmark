@@ -142,13 +142,10 @@ where
         }
 
         // cleanup marked nodes between prev and curr
-        if !unsafe { self.prev.deref() }.next.compare_exchange_snapshot(
-            &prev_next,
-            &RcPtr::from_snapshot(&self.curr, guard),
-            guard,
-        ) {
-            return Err(());
-        }
+        unsafe { self.prev.deref() }
+            .next
+            .compare_exchange_snapshot(&prev_next, &RcPtr::from_snapshot(&self.curr, guard), guard)
+            .map_err(|_| ())?;
 
         Ok(found)
     }
@@ -166,19 +163,16 @@ where
 
             if next.mark() != 0 {
                 next = next.with_mark(0);
-                if unsafe { self.prev.deref_mut() }
+                unsafe { self.prev.deref_mut() }
                     .next
                     .compare_exchange_snapshot(
                         &self.curr,
                         &RcPtr::from_snapshot(&next, guard),
                         guard,
                     )
-                {
-                    self.curr = next;
-                    continue;
-                } else {
-                    return Err(());
-                }
+                    .map_err(|_| ())?;
+                self.curr = next;
+                continue;
             }
 
             match curr_node.key.cmp(key) {
@@ -231,6 +225,7 @@ where
         if unsafe { self.prev.deref() }
             .next
             .compare_exchange_snapshot(&self.curr, &node, guard)
+            .is_ok()
         {
             Ok(())
         } else {
