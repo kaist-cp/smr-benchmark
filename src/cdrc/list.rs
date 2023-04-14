@@ -99,10 +99,7 @@ where
     fn new(head: &'g AtomicRcPtr<Node<K, V, Guard>, Guard>, guard: &'g Guard) -> Self {
         let prev = head.load_snapshot(guard);
         let curr = unsafe { prev.deref() }.next.load_snapshot(guard);
-        Self {
-            prev,
-            curr,
-        }
+        Self { prev, curr }
     }
 
     /// Clean up a chain of logically removed nodes in each traversal.
@@ -145,14 +142,71 @@ where
         }
 
         // cleanup marked nodes between prev and curr
-        if !unsafe { self.prev.deref() }
-            .next
-            .compare_exchange_snapshot(&prev_next, &RcPtr::from_snapshot(&self.curr, guard), guard)
-        {
+        if !unsafe { self.prev.deref() }.next.compare_exchange_snapshot(
+            &prev_next,
+            &RcPtr::from_snapshot(&self.curr, guard),
+            guard,
+        ) {
             return Err(());
         }
 
         Ok(found)
+    }
+
+    /// Clean up a single logically removed node in each traversal.
+    #[inline]
+    fn find_harris_michael(&mut self, key: &K, guard: &'g Guard) -> Result<bool, ()> {
+        loop {
+            debug_assert_eq!(self.curr.mark(), 0);
+
+            let curr_node = some_or!(unsafe { self.curr.as_ref() }, return Ok(false));
+            let mut next = curr_node.next.load_snapshot(guard);
+
+            // NOTE: original version aborts here if self.prev is tagged
+
+            if next.mark() != 0 {
+                next = next.with_mark(0);
+                if unsafe { self.prev.deref_mut() }
+                    .next
+                    .compare_exchange_snapshot(
+                        &self.curr,
+                        &RcPtr::from_snapshot(&next, guard),
+                        guard,
+                    )
+                {
+                    self.curr = next;
+                    continue;
+                } else {
+                    return Err(());
+                }
+            }
+
+            match curr_node.key.cmp(key) {
+                Less => {
+                    mem::swap(&mut self.prev, &mut self.curr);
+                    self.curr = next;
+                }
+                Equal => return Ok(true),
+                Greater => return Ok(false),
+            }
+        }
+    }
+
+    /// Gotta go fast. Doesn't fail.
+    #[inline]
+    fn find_harris_herlihy_shavit(&mut self, key: &K, guard: &'g Guard) -> Result<bool, ()> {
+        Ok(loop {
+            let curr_node = some_or!(unsafe { self.curr.as_ref() }, break false);
+            match curr_node.key.cmp(key) {
+                Less => {
+                    mem::swap(&mut self.curr, &mut self.prev);
+                    self.curr = curr_node.next.load_snapshot(guard);
+                    continue;
+                }
+                Equal => break curr_node.next.load_snapshot(guard).mark() == 0,
+                Greater => break false,
+            }
+        })
     }
 
     /// gets the value.
@@ -168,9 +222,11 @@ where
         node: RcPtr<'g, Node<K, V, Guard>, Guard>,
         guard: &'g Guard,
     ) -> Result<(), RcPtr<'g, Node<K, V, Guard>, Guard>> {
-        unsafe { node.deref() }
-            .next
-            .store_snapshot(self.curr.clone(guard), Ordering::Relaxed, guard);
+        unsafe { node.deref() }.next.store_snapshot(
+            self.curr.clone(guard),
+            Ordering::Relaxed,
+            guard,
+        );
 
         if unsafe { self.prev.deref() }
             .next
@@ -297,6 +353,26 @@ where
     pub fn harris_remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         self.remove(key, Cursor::find_harris, guard)
     }
+
+    /// Omitted
+    pub fn harris_michael_get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        self.get(key, Cursor::find_harris_michael, guard)
+    }
+
+    /// Omitted
+    pub fn harris_michael_insert(&self, key: K, value: V, guard: &Guard) -> bool {
+        self.insert(key, value, Cursor::find_harris_michael, guard)
+    }
+
+    /// Omitted
+    pub fn harris_michael_remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        self.remove(key, Cursor::find_harris_michael, guard)
+    }
+
+    /// Omitted
+    pub fn harris_herlihy_shavit_get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        self.get(key, Cursor::find_harris_herlihy_shavit, guard)
+    }
 }
 
 pub struct HList<K, V, Guard>
@@ -330,14 +406,89 @@ where
     }
 }
 
+pub struct HMList<K, V, Guard>
+where
+    Guard: AcquireRetire,
+{
+    inner: List<K, V, Guard>,
+}
+
+impl<K, V, Guard> ConcurrentMap<K, V, Guard> for HMList<K, V, Guard>
+where
+    K: Ord + Default,
+    V: Default,
+    Guard: AcquireRetire,
+{
+    fn new() -> Self {
+        HMList { inner: List::new() }
+    }
+
+    #[inline]
+    fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        self.inner.harris_michael_get(key, guard)
+    }
+    #[inline]
+    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
+        self.inner.harris_michael_insert(key, value, guard)
+    }
+    #[inline]
+    fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        self.inner.harris_michael_remove(key, guard)
+    }
+}
+
+pub struct HHSList<K, V, Guard>
+where
+    Guard: AcquireRetire,
+{
+    inner: List<K, V, Guard>,
+}
+
+impl<K, V, Guard> ConcurrentMap<K, V, Guard> for HHSList<K, V, Guard>
+where
+    K: Ord + Default,
+    V: Default,
+    Guard: AcquireRetire,
+{
+    fn new() -> Self {
+        HHSList { inner: List::new() }
+    }
+
+    #[inline]
+    fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        self.inner.harris_herlihy_shavit_get(key, guard)
+    }
+    #[inline]
+    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
+        self.inner.harris_insert(key, value, guard)
+    }
+    #[inline]
+    fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        self.inner.harris_remove(key, guard)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::HList;
+    use super::{HHSList, HList, HMList};
     use crate::cdrc::concurrent_map;
-    use cdrc_rs::{HandleEBR, Handle};
+    use cdrc_rs::{Handle, HandleEBR};
 
     #[test]
     fn smoke_ebr_h_list() {
-        concurrent_map::tests::smoke::<HandleEBR, HList<i32, String, <HandleEBR as Handle>::Guard>>();
+        concurrent_map::tests::smoke::<HandleEBR, HList<i32, String, <HandleEBR as Handle>::Guard>>(
+        );
+    }
+
+    #[test]
+    fn smoke_ebr_hm_list() {
+        concurrent_map::tests::smoke::<HandleEBR, HMList<i32, String, <HandleEBR as Handle>::Guard>>(
+        );
+    }
+
+    #[test]
+    fn smoke_ebr_hhs_list() {
+        concurrent_map::tests::smoke::<HandleEBR, HHSList<i32, String, <HandleEBR as Handle>::Guard>>(
+        );
     }
 }

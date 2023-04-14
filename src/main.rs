@@ -533,6 +533,21 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 cdrc::HList<String, String, <cdrc_rs::HandleEBR as cdrc_rs::Handle>::Guard>,
                 N,
             >(config, PrefillStrategy::Decreasing),
+            DS::HMList => bench_map_cdrc::<
+                cdrc_rs::HandleEBR,
+                cdrc::HMList<String, String, <cdrc_rs::HandleEBR as cdrc_rs::Handle>::Guard>,
+                N,
+            >(config, PrefillStrategy::Decreasing),
+            DS::HHSList => bench_map_cdrc::<
+                cdrc_rs::HandleEBR,
+                cdrc::HHSList<String, String, <cdrc_rs::HandleEBR as cdrc_rs::Handle>::Guard>,
+                N,
+            >(config, PrefillStrategy::Decreasing),
+            DS::HashMap => bench_map_cdrc::<
+                cdrc_rs::HandleEBR,
+                cdrc::HashMap<String, String, <cdrc_rs::HandleEBR as cdrc_rs::Handle>::Guard>,
+                N,
+            >(config, PrefillStrategy::Decreasing),
             _ => panic!("Unsupported data structure for CDRC EBR"),
         },
     };
