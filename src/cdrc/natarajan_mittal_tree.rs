@@ -281,7 +281,7 @@ where
     /// Returns true if it successfully unlinks the flagged node in `record`.
     fn cleanup(&self, record: &SeekRecord<'_, K, V, Guard>, guard: &Guard) -> bool {
         // Identify the node(subtree) that will replace `successor`.
-        let leaf_marked = record.leaf_addr().load(guard);
+        let leaf_marked = record.leaf_addr().load_snapshot(guard);
         let leaf_flag = Marks::from_bits_truncate(leaf_marked.mark()).flag();
         let target_sibling_addr = if leaf_flag {
             record.leaf_sibling_addr()
@@ -296,11 +296,11 @@ where
         // Try to replace (ancestor, successor) w/ (ancestor, sibling).
         // Since (parent, sibling) might have been concurrently flagged, copy
         // the flag to the new edge (ancestor, sibling).
-        let target_sibling = target_sibling_addr.load(guard);
+        let target_sibling = target_sibling_addr.load_snapshot(guard);
         let flag = Marks::from_bits_truncate(target_sibling.mark()).flag();
         record
             .successor_addr()
-            .compare_exchange_snapshot(
+            .compare_exchange_ss_ss(
                 &record.successor,
                 &target_sibling.with_mark(Marks::new(flag, false).bits()),
                 guard,
@@ -359,7 +359,7 @@ where
             // NOTE: record.leaf_addr is called childAddr in the paper.
             match record
                 .leaf_addr()
-                .compare_exchange_snapshot(&record.leaf, &new_internal, guard)
+                .compare_exchange_ss_rc(&record.leaf, &new_internal, guard)
             {
                 Ok(()) => return Ok(()),
                 Err(current) => {
@@ -393,10 +393,9 @@ where
             let value = leaf_node.value.as_ref().unwrap();
 
             // Try injecting the deletion flag.
-            match record.leaf_addr().compare_exchange_snapshot(
+            match record.leaf_addr().compare_exchange_ss_ss(
                 &record.leaf,
-                &RcPtr::from_snapshot(&record.leaf.clone(guard), guard)
-                    .with_mark(Marks::new(true, false).bits()),
+                &record.leaf.clone(guard).with_mark(Marks::new(true, false).bits()),
                 guard,
             ) {
                 Ok(()) => {

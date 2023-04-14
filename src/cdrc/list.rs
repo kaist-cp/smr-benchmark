@@ -144,7 +144,7 @@ where
         // cleanup marked nodes between prev and curr
         unsafe { self.prev.deref() }
             .next
-            .compare_exchange_snapshot(&prev_next, &RcPtr::from_snapshot(&self.curr, guard), guard)
+            .compare_exchange_ss_ss(&prev_next, &self.curr, guard)
             .map_err(|_| ())?;
 
         Ok(found)
@@ -165,9 +165,9 @@ where
                 next = next.with_mark(0);
                 unsafe { self.prev.deref_mut() }
                     .next
-                    .compare_exchange_snapshot(
+                    .compare_exchange_ss_ss(
                         &self.curr,
-                        &RcPtr::from_snapshot(&next, guard),
+                        &next,
                         guard,
                     )
                     .map_err(|_| ())?;
@@ -224,7 +224,7 @@ where
 
         if unsafe { self.prev.deref() }
             .next
-            .compare_exchange_snapshot(&self.curr, &node, guard)
+            .compare_exchange_ss_rc(&self.curr, &node, guard)
             .is_ok()
         {
             Ok(())
@@ -245,7 +245,7 @@ where
 
         let _ = unsafe { self.prev.deref() }
             .next
-            .compare_exchange_snapshot(&self.curr, &next, guard);
+            .compare_exchange_ss_ss(&self.curr, &next, guard);
 
         Ok(&curr_node.value)
     }

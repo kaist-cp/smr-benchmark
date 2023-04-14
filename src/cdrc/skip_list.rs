@@ -74,7 +74,7 @@ struct Cursor<'g, K, V, Guard>
 where
     Guard: AcquireRetire,
 {
-    found: Option<RcPtr<'g, Node<K, V, Guard>, Guard>>,
+    found: Option<SnapshotPtr<'g, Node<K, V, Guard>, Guard>>,
     preds: [SnapshotPtr<'g, Node<K, V, Guard>, Guard>; MAX_HEIGHT],
     succs: [SnapshotPtr<'g, Node<K, V, Guard>, Guard>; MAX_HEIGHT],
 }
@@ -159,7 +159,7 @@ where
                     match curr_ref.key.cmp(key) {
                         std::cmp::Ordering::Greater => break,
                         std::cmp::Ordering::Equal => {
-                            cursor.found = Some(RcPtr::from_snapshot(&curr, guard));
+                            cursor.found = Some(curr.clone(guard));
                             break;
                         }
                         std::cmp::Ordering::Less => {}
@@ -185,9 +185,9 @@ where
         succ: &SnapshotPtr<'g, Node<K, V, Guard>, Guard>,
         guard: &'g Guard,
     ) -> bool {
-        pred.compare_exchange_snapshot(
+        pred.compare_exchange_ss_ss(
             &curr.clone(guard).with_mark(0),
-            &RcPtr::from_snapshot(&succ.clone(guard).with_mark(0), guard),
+            &succ.clone(guard).with_mark(0),
             guard,
         )
         .is_ok()
@@ -211,7 +211,7 @@ where
             );
 
             if unsafe { cursor.preds[0].deref() }.next[0]
-                .compare_exchange_snapshot(&cursor.succs[0], &new_node, guard)
+                .compare_exchange_ss_rc(&cursor.succs[0], &new_node, guard)
                 .is_ok()
             {
                 break;
@@ -245,7 +245,7 @@ where
                 }
 
                 if new_node_ref.next[level]
-                    .compare_exchange_snapshot(&next, &RcPtr::from_snapshot(&succ, guard), guard)
+                    .compare_exchange_ss_ss(&next, &succ, guard)
                     .is_err()
                 {
                     break 'build;
@@ -253,7 +253,7 @@ where
 
                 // Try installing the new node at the current level.
                 if unsafe { pred.deref() }.next[level]
-                    .compare_exchange_snapshot(&succ, &new_node, guard)
+                    .compare_exchange_ss_rc(&succ, &new_node, guard)
                     .is_ok()
                 {
                     // Success! Continue on the next level.
@@ -280,11 +280,11 @@ where
             // Try removing the node by marking its tower.
             if node_ref.mark_tower() {
                 for level in (0..node_ref.height).rev() {
-                    let succ = node_ref.next[level].load(guard);
+                    let succ = node_ref.next[level].load_snapshot(guard);
 
                     // Try linking the predecessor and successor at this level.
                     if unsafe { cursor.preds[level].deref() }.next[level]
-                        .compare_exchange(&node, &succ.with_mark(0), guard)
+                        .compare_exchange_ss_ss(&node, &succ.with_mark(0), guard)
                         .is_err()
                     {
                         self.find(key, guard);
