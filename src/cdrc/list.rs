@@ -238,12 +238,12 @@ where
     pub fn remove(self, guard: &'g Guard) -> Result<&'g V, ()> {
         let curr_node = unsafe { self.curr.deref() };
 
-        let next = curr_node.next.fetch_mark(1, guard);
+        let next = curr_node.next.fetch_or(1, guard);
         if next.mark() == 1 {
             return Err(());
         }
 
-        unsafe { self.prev.deref() }
+        let _ = unsafe { self.prev.deref() }
             .next
             .compare_exchange_snapshot(&self.curr, &next, guard);
 
