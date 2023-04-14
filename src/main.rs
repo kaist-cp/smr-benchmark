@@ -529,33 +529,33 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
         },
         MM::CDRC_EBR => match config.ds {
             DS::HList => bench_map_cdrc::<
-                cdrc_rs::HandleEBR,
-                cdrc::HList<String, String, <cdrc_rs::HandleEBR as cdrc_rs::Handle>::Guard>,
+                cdrc_rs::GuardEBR,
+                cdrc::HList<String, String, cdrc_rs::GuardEBR>,
                 N,
             >(config, PrefillStrategy::Decreasing),
             DS::HMList => bench_map_cdrc::<
-                cdrc_rs::HandleEBR,
-                cdrc::HMList<String, String, <cdrc_rs::HandleEBR as cdrc_rs::Handle>::Guard>,
+                cdrc_rs::GuardEBR,
+                cdrc::HMList<String, String, cdrc_rs::GuardEBR>,
                 N,
             >(config, PrefillStrategy::Decreasing),
             DS::HHSList => bench_map_cdrc::<
-                cdrc_rs::HandleEBR,
-                cdrc::HHSList<String, String, <cdrc_rs::HandleEBR as cdrc_rs::Handle>::Guard>,
+                cdrc_rs::GuardEBR,
+                cdrc::HHSList<String, String, cdrc_rs::GuardEBR>,
                 N,
             >(config, PrefillStrategy::Decreasing),
             DS::HashMap => bench_map_cdrc::<
-                cdrc_rs::HandleEBR,
-                cdrc::HashMap<String, String, <cdrc_rs::HandleEBR as cdrc_rs::Handle>::Guard>,
+                cdrc_rs::GuardEBR,
+                cdrc::HashMap<String, String, cdrc_rs::GuardEBR>,
                 N,
             >(config, PrefillStrategy::Decreasing),
             DS::NMTree => bench_map_cdrc::<
-                cdrc_rs::HandleEBR,
-                cdrc::NMTreeMap<String, String, <cdrc_rs::HandleEBR as cdrc_rs::Handle>::Guard>,
+                cdrc_rs::GuardEBR,
+                cdrc::NMTreeMap<String, String, cdrc_rs::GuardEBR>,
                 N,
             >(config, PrefillStrategy::Random),
             DS::SkipList => bench_map_cdrc::<
-                cdrc_rs::HandleEBR,
-                cdrc::SkipList<String, String, <cdrc_rs::HandleEBR as cdrc_rs::Handle>::Guard>,
+                cdrc_rs::GuardEBR,
+                cdrc::SkipList<String, String, cdrc_rs::GuardEBR>,
                 N,
             >(config, PrefillStrategy::Random),
             _ => panic!("Unsupported data structure for CDRC EBR"),
@@ -723,14 +723,14 @@ impl PrefillStrategy {
     }
 
     fn prefill_cdrc<
-        H: cdrc_rs::Handle,
-        M: cdrc::ConcurrentMap<String, String, H::Guard> + Send + Sync,
+        Guard: cdrc_rs::AcquireRetire,
+        M: cdrc::ConcurrentMap<String, String, Guard> + Send + Sync,
     >(
         self,
         config: &Config,
         map: &M,
     ) {
-        let guard = unsafe { <H::Guard as cdrc_rs::AcquireRetire>::unprotected() };
+        let guard = &Guard::handle();
         let mut rng = rand::thread_rng();
         match self {
             PrefillStrategy::Random => {
@@ -1291,17 +1291,15 @@ fn bench_map_nbr<M: nbr::ConcurrentMap<String, String> + Send + Sync, N: Unsigne
 }
 
 fn bench_map_cdrc<
-    H: cdrc_rs::Handle,
-    M: cdrc::ConcurrentMap<String, String, H::Guard> + Send + Sync,
+    Guard: cdrc_rs::AcquireRetire,
+    M: cdrc::ConcurrentMap<String, String, Guard> + Send + Sync,
     N: Unsigned,
 >(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
     let map = &M::new();
-    strategy.prefill_cdrc::<H, M>(config, map);
-
-    unsafe { H::set_max_threads(config.threads) };
+    strategy.prefill_cdrc(config, map);
 
     let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
     let (ops_sender, ops_receiver) = mpsc::channel();
@@ -1358,8 +1356,7 @@ fn bench_map_cdrc<
                 barrier.clone().wait();
                 let start = Instant::now();
 
-                let handle = H::register();
-                let mut guard = handle.pin();
+                let mut guard = Guard::handle();
                 while start.elapsed() < config.duration {
                     let key = config.key_dist.sample(&mut rng).to_string();
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
@@ -1377,7 +1374,7 @@ fn bench_map_cdrc<
                     ops += 1;
                     if ops % N::to_u64() == 0 {
                         drop(guard);
-                        guard = handle.pin();
+                        guard = Guard::handle();
                     }
                 }
 

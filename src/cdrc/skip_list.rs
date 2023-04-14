@@ -59,7 +59,7 @@ where
     pub fn mark_tower(&self) -> bool {
         for level in (0..self.height).rev() {
             let tag = self.next[level]
-                .fetch_or(1, unsafe { Guard::unprotected() })
+                .fetch_or(1, &Guard::handle())
                 .mark();
             // If the level 0 pointer was already marked, somebody else removed the node.
             if level == 0 && tag == 1 {
@@ -107,7 +107,7 @@ where
 {
     pub fn new() -> Self {
         Self {
-            head: AtomicRcPtr::new(Node::head(), unsafe { Guard::unprotected() }),
+            head: AtomicRcPtr::new(Node::head(), &Guard::handle()),
         }
     }
 
@@ -325,13 +325,13 @@ where
 mod tests {
     use super::SkipList;
     use crate::cdrc::concurrent_map;
-    use cdrc_rs::{Handle, HandleEBR};
+    use cdrc_rs::GuardEBR;
 
     #[test]
     fn smoke_skip_list() {
         concurrent_map::tests::smoke::<
-            HandleEBR,
-            SkipList<i32, String, <HandleEBR as Handle>::Guard>,
+        GuardEBR,
+            SkipList<i32, String, GuardEBR>,
         >();
     }
 }

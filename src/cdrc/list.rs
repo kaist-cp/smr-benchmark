@@ -38,7 +38,7 @@ where
     Guard: AcquireRetire,
 {
     fn drop(&mut self) {
-        let guard = unsafe { Guard::unprotected() };
+        let guard = &Guard::handle();
         unsafe {
             let mut curr = self.head.load(guard);
             let mut next;
@@ -260,7 +260,7 @@ where
     /// Creates a new list.
     pub fn new() -> Self {
         List {
-            head: AtomicRcPtr::new(Node::head(), unsafe { Guard::unprotected() }),
+            head: AtomicRcPtr::new(Node::head(), &Guard::handle()),
         }
     }
 
@@ -467,23 +467,20 @@ where
 mod tests {
     use super::{HHSList, HList, HMList};
     use crate::cdrc::concurrent_map;
-    use cdrc_rs::{Handle, HandleEBR};
+    use cdrc_rs::GuardEBR;
 
     #[test]
     fn smoke_ebr_h_list() {
-        concurrent_map::tests::smoke::<HandleEBR, HList<i32, String, <HandleEBR as Handle>::Guard>>(
-        );
+        concurrent_map::tests::smoke::<GuardEBR, HList<i32, String, GuardEBR>>();
     }
 
     #[test]
     fn smoke_ebr_hm_list() {
-        concurrent_map::tests::smoke::<HandleEBR, HMList<i32, String, <HandleEBR as Handle>::Guard>>(
-        );
+        concurrent_map::tests::smoke::<GuardEBR, HMList<i32, String, GuardEBR>>();
     }
 
     #[test]
     fn smoke_ebr_hhs_list() {
-        concurrent_map::tests::smoke::<HandleEBR, HHSList<i32, String, <HandleEBR as Handle>::Guard>>(
-        );
+        concurrent_map::tests::smoke::<GuardEBR, HHSList<i32, String, GuardEBR>>();
     }
 }

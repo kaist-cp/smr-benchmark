@@ -84,11 +84,10 @@ where
 mod tests {
     use super::HashMap;
     use crate::cdrc::concurrent_map;
-    use cdrc_rs::{Handle, HandleEBR};
+    use cdrc_rs::GuardEBR;
 
     #[test]
     fn smoke_hashmap() {
-        concurrent_map::tests::smoke::<HandleEBR, HashMap<i32, String, <HandleEBR as Handle>::Guard>>(
-        );
+        concurrent_map::tests::smoke::<GuardEBR, HashMap<i32, String, GuardEBR>>();
     }
 }
