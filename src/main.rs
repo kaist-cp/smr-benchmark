@@ -548,6 +548,11 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 cdrc::HashMap<String, String, <cdrc_rs::HandleEBR as cdrc_rs::Handle>::Guard>,
                 N,
             >(config, PrefillStrategy::Decreasing),
+            DS::NMTree => bench_map_cdrc::<
+                cdrc_rs::HandleEBR,
+                cdrc::NMTreeMap<String, String, <cdrc_rs::HandleEBR as cdrc_rs::Handle>::Guard>,
+                N,
+            >(config, PrefillStrategy::Random),
             _ => panic!("Unsupported data structure for CDRC EBR"),
         },
     };
