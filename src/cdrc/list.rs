@@ -3,6 +3,7 @@ use cdrc_rs::{AcquireRetire, AtomicRcPtr, RcPtr, SnapshotPtr};
 
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::mem;
+use std::sync::atomic::Ordering;
 
 struct Node<K, V, Guard>
 where
@@ -83,13 +84,10 @@ where
     Guard: AcquireRetire,
 {
     // `SnapshotPtr`s are used only for traversing the list.
-    prev_snap: SnapshotPtr<'g, Node<K, V, Guard>, Guard>,
-    curr_snap: SnapshotPtr<'g, Node<K, V, Guard>, Guard>,
-
-    prev: RcPtr<'g, Node<K, V, Guard>, Guard>,
+    prev: SnapshotPtr<'g, Node<K, V, Guard>, Guard>,
     // Tag of `curr` should always be zero so when `curr` is stored in a `prev`, we don't store a
     // marked pointer and cause cleanup to fail.
-    curr: RcPtr<'g, Node<K, V, Guard>, Guard>,
+    curr: SnapshotPtr<'g, Node<K, V, Guard>, Guard>,
 }
 
 impl<'g, K, V, Guard> Cursor<'g, K, V, Guard>
@@ -99,13 +97,11 @@ where
 {
     /// Creates a cursor.
     fn new(head: &'g AtomicRcPtr<Node<K, V, Guard>, Guard>, guard: &'g Guard) -> Self {
-        let prev_snap = head.load_snapshot(guard);
-        let curr_snap = unsafe { prev_snap.deref() }.next.load_snapshot(guard);
+        let prev = head.load_snapshot(guard);
+        let curr = unsafe { prev.deref() }.next.load_snapshot(guard);
         Self {
-            prev_snap,
-            curr_snap,
-            prev: RcPtr::null(guard),
-            curr: RcPtr::null(guard),
+            prev,
+            curr,
         }
     }
 
@@ -116,9 +112,9 @@ where
         // - cursor.curr: first unmarked node w/ key >= search key (4)
         // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
         // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
-        let mut prev_next = self.curr_snap.clone(guard);
+        let mut prev_next = self.curr.clone(guard);
         let found = loop {
-            let curr_node = some_or!(unsafe { self.curr_snap.as_ref() }, break false);
+            let curr_node = some_or!(unsafe { self.curr.as_ref() }, break false);
             let next = curr_node.next.load_snapshot(guard);
 
             // - finding stage is done if cursor.curr advancement stops
@@ -128,14 +124,14 @@ where
 
             if next.mark() != 0 {
                 // We add a 0 tag here so that `self.curr`s tag is always 0.
-                self.curr_snap = next.with_mark(0);
+                self.curr = next.with_mark(0);
                 continue;
             }
 
             match curr_node.key.cmp(key) {
                 Less => {
-                    mem::swap(&mut self.prev_snap, &mut self.curr_snap);
-                    self.curr_snap = next.clone(guard);
+                    mem::swap(&mut self.prev, &mut self.curr);
+                    self.curr = next.clone(guard);
                     prev_next = next;
                 }
                 Equal => break true,
@@ -143,31 +139,17 @@ where
             }
         };
 
-        self.prev = RcPtr::from_snapshot(&self.prev_snap, guard);
-        self.curr = RcPtr::from_snapshot(&self.curr_snap, guard);
-
         // If prev and curr WERE adjacent, no need to clean up
-        if prev_next == self.curr_snap {
+        if prev_next == self.curr {
             return Ok(found);
         }
-
-        let prev_next = RcPtr::from_snapshot(&prev_next, guard);
 
         // cleanup marked nodes between prev and curr
         if !unsafe { self.prev.deref() }
             .next
-            .compare_exchange(&prev_next, &self.curr, guard)
+            .compare_exchange_snapshot(&prev_next, &RcPtr::from_snapshot(&self.curr, guard), guard)
         {
             return Err(());
-        }
-
-        // defer_destroy from cursor.prev.load() to cursor.curr (exclusive)
-        let mut node = prev_next;
-        while !node.eq_without_tag(&self.curr) {
-            let node_ref = unsafe { node.deref() };
-            let next = node_ref.next.load(guard);
-            node_ref.next.store_null(guard);
-            node = next;
         }
 
         Ok(found)
@@ -188,13 +170,12 @@ where
     ) -> Result<(), RcPtr<'g, Node<K, V, Guard>, Guard>> {
         unsafe { node.deref() }
             .next
-            .store_relaxed(self.curr.clone(guard), guard);
+            .store_snapshot(self.curr.clone(guard), Ordering::Relaxed, guard);
 
         if unsafe { self.prev.deref() }
             .next
-            .compare_exchange(&self.curr, &node, guard)
+            .compare_exchange_snapshot(&self.curr, &node, guard)
         {
-            self.curr = node;
             Ok(())
         } else {
             Err(node)
@@ -213,7 +194,7 @@ where
 
         unsafe { self.prev.deref() }
             .next
-            .compare_exchange(&self.curr, &next, guard);
+            .compare_exchange_snapshot(&self.curr, &next, guard);
 
         Ok(&curr_node.value)
     }
