@@ -1,4 +1,4 @@
-use cdrc_rs::{AcquireRetire, AtomicRcPtr, RcPtr};
+use cdrc_rs::{AcquireRetire, AtomicRcPtr, RcPtr, SnapshotPtr};
 
 use super::concurrent_map::ConcurrentMap;
 use std::cmp;
@@ -137,15 +137,15 @@ where
     Guard: AcquireRetire,
 {
     /// Parent of `successor`
-    ancestor: RcPtr<'g, Node<K, V, Guard>, Guard>,
+    ancestor: SnapshotPtr<'g, Node<K, V, Guard>, Guard>,
     /// The first internal node with a marked outgoing edge
-    successor: RcPtr<'g, Node<K, V, Guard>, Guard>,
+    successor: SnapshotPtr<'g, Node<K, V, Guard>, Guard>,
     /// The direction of successor from ancestor.
     successor_dir: Direction,
     /// Parent of `leaf`
-    parent: RcPtr<'g, Node<K, V, Guard>, Guard>,
+    parent: SnapshotPtr<'g, Node<K, V, Guard>, Guard>,
     /// The end of the access path.
-    leaf: RcPtr<'g, Node<K, V, Guard>, Guard>,
+    leaf: SnapshotPtr<'g, Node<K, V, Guard>, Guard>,
     /// The direction of leaf from parent.
     leaf_dir: Direction,
 }
@@ -225,10 +225,13 @@ where
 
     // All `Shared<_>` fields are unmarked.
     fn seek<'g>(&'g self, key: &K, guard: &'g Guard) -> SeekRecord<'g, K, V, Guard> {
-        let r = self.r.load(guard);
-        let s = unsafe { r.deref() }.left.load(guard);
+        let r = self.r.load_snapshot(guard);
+        let s = unsafe { r.deref() }.left.load_snapshot(guard);
         let s_node = unsafe { s.deref() };
-        let leaf = s_node.left.load(guard).with_mark(Marks::empty().bits());
+        let leaf = s_node
+            .left
+            .load_snapshot(guard)
+            .with_mark(Marks::empty().bits());
         let leaf_node = unsafe { leaf.deref() };
 
         let mut record = SeekRecord {
@@ -242,7 +245,7 @@ where
 
         let mut prev_tag = Marks::from_bits_truncate(record.leaf.mark()).tag();
         let mut curr_dir = Direction::L;
-        let mut curr = leaf_node.left.load(guard);
+        let mut curr = leaf_node.left.load_snapshot(guard);
 
         while let Some(curr_node) = unsafe { curr.as_ref() } {
             if !prev_tag {
@@ -263,10 +266,10 @@ where
             prev_tag = Marks::from_bits_truncate(curr_mark).tag();
             if curr_node.key.cmp(key) == cmp::Ordering::Greater {
                 curr_dir = Direction::L;
-                curr = curr_node.left.load(guard);
+                curr = curr_node.left.load_snapshot(guard);
             } else {
                 curr_dir = Direction::R;
-                curr = curr_node.right.load(guard);
+                curr = curr_node.right.load_snapshot(guard);
             }
         }
 
@@ -297,7 +300,7 @@ where
         let flag = Marks::from_bits_truncate(target_sibling.mark()).flag();
         record
             .successor_addr()
-            .compare_exchange(
+            .compare_exchange_snapshot(
                 &record.successor,
                 &target_sibling.with_mark(Marks::new(flag, false).bits()),
                 guard,
@@ -332,7 +335,7 @@ where
 
         loop {
             let record = self.seek(&key, guard);
-            let leaf = record.leaf.clone(guard);
+            let leaf = RcPtr::from_snapshot(&record.leaf, guard);
 
             let (new_left, new_right) = match unsafe { leaf.deref() }.key.cmp(&key) {
                 cmp::Ordering::Equal => unsafe {
@@ -356,15 +359,14 @@ where
             // NOTE: record.leaf_addr is called childAddr in the paper.
             match record
                 .leaf_addr()
-                .compare_exchange(&record.leaf, &new_internal, guard)
+                .compare_exchange_snapshot(&record.leaf, &new_internal, guard)
             {
                 Ok(()) => return Ok(()),
                 Err(current) => {
                     // Insertion failed. Help the conflicting remove operation if needed.
                     // NOTE: The paper version checks if any of the mark is set, which is redundant.
-                    let current =
-                        RcPtr::from_snapshot(&current.with_mark(Marks::empty().bits()), guard);
-                    if current == record.leaf {
+                    if current.with_mark(Marks::empty().bits()).as_usize() == record.leaf.as_usize()
+                    {
                         self.cleanup(&record, guard);
                     }
                 }
@@ -391,11 +393,9 @@ where
             let value = leaf_node.value.as_ref().unwrap();
 
             // Try injecting the deletion flag.
-            match record.leaf_addr().compare_exchange(
+            match record.leaf_addr().compare_exchange_snapshot(
                 &record.leaf,
-                &record
-                    .leaf
-                    .clone(guard)
+                &RcPtr::from_snapshot(&record.leaf.clone(guard), guard)
                     .with_mark(Marks::new(true, false).bits()),
                 guard,
             ) {
@@ -412,9 +412,8 @@ where
                     // case 1. record.leaf_addr(e.current) points to another node: restart.
                     // case 2. Another thread flagged/tagged the edge to leaf: help and restart
                     // NOTE: The paper version checks if any of the mark is set, which is redundant.
-                    let current =
-                        RcPtr::from_snapshot(&current.with_mark(Marks::empty().bits()), guard);
-                    if record.leaf == current {
+                    if record.leaf.as_usize() == current.with_mark(Marks::empty().bits()).as_usize()
+                    {
                         self.cleanup(&record, guard);
                     }
                 }
