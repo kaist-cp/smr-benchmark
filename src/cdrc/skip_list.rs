@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use cdrc_rs::{AtomicRcPtr, RcPtr, AcquireRetire, SnapshotPtr};
+use cdrc_rs::{AcquireRetire, AtomicRcPtr, RcPtr, SnapshotPtr};
 
 use super::concurrent_map::ConcurrentMap;
 
@@ -10,7 +10,7 @@ type Tower<K, V, Guard> = [AtomicRcPtr<Node<K, V, Guard>, Guard>; MAX_HEIGHT];
 
 struct Node<K, V, Guard>
 where
-    Guard: AcquireRetire
+    Guard: AcquireRetire,
 {
     key: K,
     value: V,
@@ -22,7 +22,7 @@ impl<K, V, Guard> Node<K, V, Guard>
 where
     K: Default,
     V: Default,
-    Guard: AcquireRetire
+    Guard: AcquireRetire,
 {
     pub fn new(key: K, value: V) -> Self {
         let height = Self::generate_height();
@@ -72,7 +72,7 @@ where
 
 struct Cursor<'g, K, V, Guard>
 where
-    Guard: AcquireRetire
+    Guard: AcquireRetire,
 {
     found: Option<RcPtr<'g, Node<K, V, Guard>, Guard>>,
     preds: [SnapshotPtr<'g, Node<K, V, Guard>, Guard>; MAX_HEIGHT],
@@ -81,7 +81,7 @@ where
 
 impl<'g, K, V, Guard> Cursor<'g, K, V, Guard>
 where
-    Guard: AcquireRetire
+    Guard: AcquireRetire,
 {
     fn new(head: &SnapshotPtr<'g, Node<K, V, Guard>, Guard>, guard: &'g Guard) -> Self {
         Self {
@@ -94,7 +94,7 @@ where
 
 pub struct SkipList<K, V, Guard>
 where
-    Guard: AcquireRetire
+    Guard: AcquireRetire,
 {
     head: AtomicRcPtr<Node<K, V, Guard>, Guard>,
 }
@@ -103,11 +103,11 @@ impl<K, V, Guard> SkipList<K, V, Guard>
 where
     K: Ord + Clone + Default,
     V: Clone + Default,
-    Guard: AcquireRetire
+    Guard: AcquireRetire,
 {
     pub fn new() -> Self {
         Self {
-            head: AtomicRcPtr::new(Node::head(), unsafe { Guard::unprotected() })
+            head: AtomicRcPtr::new(Node::head(), unsafe { Guard::unprotected() }),
         }
     }
 
@@ -139,7 +139,12 @@ where
                     let succ = curr_ref.next[level].load_snapshot(guard);
 
                     if succ.mark() == 1 {
-                        if self.help_unlink(&unsafe { pred.deref() }.next[level], &curr, &succ, guard) {
+                        if self.help_unlink(
+                            &unsafe { pred.deref() }.next[level],
+                            &curr,
+                            &succ,
+                            guard,
+                        ) {
                             curr = succ.with_mark(0);
                             continue;
                         } else {
@@ -180,13 +185,12 @@ where
         succ: &SnapshotPtr<'g, Node<K, V, Guard>, Guard>,
         guard: &'g Guard,
     ) -> bool {
-        pred
-            .compare_exchange_snapshot(
-                &curr.clone(guard).with_mark(0),
-                &RcPtr::from_snapshot(&succ.clone(guard).with_mark(0), guard),
-                guard,
-            )
-            .is_ok()
+        pred.compare_exchange_snapshot(
+            &curr.clone(guard).with_mark(0),
+            &RcPtr::from_snapshot(&succ.clone(guard).with_mark(0), guard),
+            guard,
+        )
+        .is_ok()
     }
 
     pub fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
@@ -200,14 +204,14 @@ where
         let height = new_node_ref.height;
 
         loop {
-            new_node_ref.next[0].store_snapshot(cursor.succs[0].clone(guard), Ordering::Relaxed, guard);
+            new_node_ref.next[0].store_snapshot(
+                cursor.succs[0].clone(guard),
+                Ordering::Relaxed,
+                guard,
+            );
 
             if unsafe { cursor.preds[0].deref() }.next[0]
-                .compare_exchange_snapshot(
-                    &cursor.succs[0],
-                    &new_node,
-                    guard,
-                )
+                .compare_exchange_snapshot(&cursor.succs[0], &new_node, guard)
                 .is_ok()
             {
                 break;
@@ -261,11 +265,7 @@ where
             }
         }
 
-        if new_node_ref.next[height - 1]
-            .load_snapshot(guard)
-            .mark()
-            == 1
-        {
+        if new_node_ref.next[height - 1].load_snapshot(guard).mark() == 1 {
             self.find(&new_node_ref.key, guard);
         }
         true
@@ -284,11 +284,7 @@ where
 
                     // Try linking the predecessor and successor at this level.
                     if unsafe { cursor.preds[level].deref() }.next[level]
-                        .compare_exchange(
-                            &node,
-                            &succ.with_mark(0),
-                            guard,
-                        )
+                        .compare_exchange(&node, &succ.with_mark(0), guard)
                         .is_err()
                     {
                         self.find(key, guard);
@@ -305,7 +301,7 @@ impl<K, V, Guard> ConcurrentMap<K, V, Guard> for SkipList<K, V, Guard>
 where
     K: Ord + Clone + Default,
     V: Clone + Default,
-    Guard: AcquireRetire
+    Guard: AcquireRetire,
 {
     fn new() -> Self {
         SkipList::new()
@@ -333,7 +329,9 @@ mod tests {
 
     #[test]
     fn smoke_skip_list() {
-        concurrent_map::tests::smoke::<HandleEBR, SkipList<i32, String, <HandleEBR as Handle>::Guard>>(
-        );
+        concurrent_map::tests::smoke::<
+            HandleEBR,
+            SkipList<i32, String, <HandleEBR as Handle>::Guard>,
+        >();
     }
 }
