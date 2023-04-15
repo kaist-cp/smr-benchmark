@@ -51,7 +51,7 @@ def invalid(mm, ds, c, g):
     if ds == 'HHSList':
         is_invalid |= g == 0  # HHSList is just HMList with faster get()
     if mm == 'HP':
-        is_invalid |= ds in ["HList", "HHSList"]
+        is_invalid |= ds in ["HList", "HHSList", "NMTree"]
     if mm == 'NBR':
         is_invalid |= ds in ["BonsaiTree"]
     return is_invalid
