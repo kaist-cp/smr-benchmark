@@ -282,6 +282,42 @@ where
         record
     }
 
+    // All `*mut Node<K, V>` fields are unmarked.
+    fn seek_leaf<'g>(&'g self, key: &K, guard: &'g Guard) -> SeekRecord<K, V> {
+        let mut record;
+
+        read_phase!(guard; [record.parent, record.leaf] => {
+            let s = self.r.left.load(Ordering::Relaxed);
+            let s_node = unsafe { &*untagged(s) };
+            let leaf = untagged(s_node.left.load(Ordering::Relaxed));
+
+            record = SeekRecord {
+                ancestor: ptr::null_mut(),
+                successor: ptr::null_mut(),
+                successor_dir: Direction::L,
+                parent: s,
+                leaf,
+                leaf_dir: Direction::L
+            };
+
+            let mut curr = untagged(unsafe { &*record.leaf }
+                .left
+                .load(Ordering::Acquire));
+
+            while let Some(curr_node) = unsafe { curr.as_ref() } {
+                record.leaf = curr;
+
+                if curr_node.key.cmp(key) == cmp::Ordering::Greater {
+                    curr = curr_node.left.load(Ordering::Acquire);
+                } else {
+                    curr = curr_node.right.load(Ordering::Acquire);
+                }
+                curr = untagged(curr);
+            }
+        });
+        record
+    }
+
     /// Physically removes node.
     ///
     /// Returns true if it successfully unlinks the flagged node in `record`.
@@ -339,7 +375,7 @@ where
     }
 
     pub fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
-        let record = self.seek(key, guard);
+        let record = self.seek_leaf(key, guard);
         let leaf_node = unsafe { &*record.leaf };
 
         if leaf_node.key.cmp(key) != cmp::Ordering::Equal {

@@ -434,6 +434,71 @@ where
         return Ok(());
     }
 
+    /// Similar to `seek`, but traverse the tree with only two pointers
+    fn seek_leaf<'domain, 'hp>(
+        &self,
+        key: &K,
+        record: &mut SeekRecord<'domain, 'hp, K, V>,
+    ) -> Result<(), ()> {
+        let s = untagged(self.r.left.load(Ordering::Relaxed));
+        let s_node = unsafe { &*s };
+        let leaf = untagged(s_node.left.load(Ordering::Relaxed));
+
+        record.parent = s;
+        record
+            .handle
+            .leaf_h
+            .try_protect_pp(leaf, s_node, &s_node.left, &|s_node| {
+                tag(s_node.left.load(Ordering::Acquire)) & 2 == 2
+            })
+            .map_err(|_| ())?;
+        record.leaf = leaf;
+
+        let mut curr_dir = Direction::L;
+        let mut curr = unsafe { &*record.leaf }.left.load(Ordering::Relaxed);
+
+        while let Some(curr_node) = unsafe { untagged(curr).as_ref() } {
+            HazardPointer::swap(&mut record.handle.leaf_h, &mut record.handle.parent_h);
+            mem::swap(&mut record.leaf, &mut record.parent);
+            let mut curr_base = untagged(curr);
+
+            loop {
+                match record.handle.leaf_h.try_protect_pp(
+                    curr_base,
+                    unsafe { &*record.parent },
+                    match curr_dir {
+                        Direction::L => &unsafe { &*record.parent }.left,
+                        Direction::R => &unsafe { &*record.parent }.right,
+                    },
+                    &|src| {
+                        Marks::from_bits_truncate(tag(match curr_dir {
+                            Direction::L => src.left.load(Ordering::Acquire),
+                            Direction::R => src.right.load(Ordering::Acquire),
+                        }))
+                        .stop()
+                    },
+                ) {
+                    Ok(_) => break,
+                    Err(ProtectError::Changed(curr_base_new)) => curr_base = curr_base_new,
+                    Err(ProtectError::Stopped) => return Err(()),
+                }
+            }
+
+            record.leaf = curr_base;
+            record.leaf_dir = curr_dir;
+
+            if curr_node.key.cmp(key) == cmp::Ordering::Greater {
+                curr_dir = Direction::L;
+                curr = curr_node.left.load(Ordering::Acquire);
+            } else {
+                curr_dir = Direction::R;
+                curr = curr_node.right.load(Ordering::Acquire);
+            }
+        }
+
+        Ok(())
+    }
+
     /// Physically removes node.
     ///
     /// Returns true if it successfully unlinks the flagged node in `record`.
@@ -474,7 +539,7 @@ where
     ) -> Result<Option<&'hp V>, ()> {
         let mut record = SeekRecord::new(handle);
 
-        self.seek(key, &mut record)?;
+        self.seek_leaf(key, &mut record)?;
         let leaf_node = unsafe { &*untagged(record.leaf) };
 
         if leaf_node.key.cmp(key) != cmp::Ordering::Equal {
