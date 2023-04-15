@@ -250,7 +250,7 @@ where
         while let Some(curr_node) = unsafe { curr.as_ref() } {
             if !prev_tag {
                 // untagged edge: advance ancestor and successor pointers
-                record.ancestor = record.parent.clone(guard);
+                record.ancestor = record.parent;
                 record.successor = record.leaf.clone(guard);
                 record.successor_dir = record.leaf_dir;
             }
@@ -271,6 +271,44 @@ where
                 curr_dir = Direction::R;
                 curr = curr_node.right.load_snapshot(guard);
             }
+        }
+
+        record
+    }
+
+    /// Similar to `seek`, but traverse the tree with only two pointers
+    fn seek_leaf<'g>(&'g self, key: &K, guard: &'g Guard) -> SeekRecord<'g, K, V, Guard> {
+        let r = self.r.load_snapshot(guard);
+        let s = unsafe { r.deref() }.left.load_snapshot(guard);
+        let s_node = unsafe { s.deref() };
+        let leaf = s_node
+            .left
+            .load_snapshot(guard)
+            .with_mark(Marks::empty().bits());
+
+        let mut record = SeekRecord {
+            ancestor: SnapshotPtr::null(guard),
+            successor: SnapshotPtr::null(guard),
+            successor_dir: Direction::L,
+            parent: s,
+            leaf,
+            leaf_dir: Direction::L,
+        };
+
+        let mut curr = unsafe { record.leaf.deref() }
+            .left
+            .load_snapshot(guard)
+            .with_mark(Marks::empty().bits());
+
+        while let Some(curr_node) = unsafe { curr.as_ref() } {
+            record.leaf = curr;
+
+            if curr_node.key.cmp(key) == cmp::Ordering::Greater {
+                curr = curr_node.left.load_snapshot(guard);
+            } else {
+                curr = curr_node.right.load_snapshot(guard);
+            }
+            curr = curr.with_mark(Marks::empty().bits());
         }
 
         record
@@ -309,7 +347,7 @@ where
     }
 
     pub fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
-        let record = self.seek(key, guard);
+        let record = self.seek_leaf(key, guard);
         let leaf_node = unsafe { record.leaf.deref() };
 
         if leaf_node.key.cmp(key) != cmp::Ordering::Equal {
@@ -335,26 +373,35 @@ where
 
         loop {
             let record = self.seek(&key, guard);
-            let leaf = RcPtr::from_snapshot(&record.leaf, guard);
+            let leaf = record.leaf.clone(guard);
 
-            let (new_left, new_right) = match unsafe { leaf.deref() }.key.cmp(&key) {
+            let new_internal_node = unsafe { new_internal.deref_mut() };
+
+            match unsafe { record.leaf.deref() }.key.cmp(&key) {
                 cmp::Ordering::Equal => unsafe {
                     // Newly created nodes that failed to be inserted are free'd here.
                     let value = new_leaf.deref_mut().value.take().unwrap();
                     return Err((key, value));
                 },
-                cmp::Ordering::Greater => (new_leaf.clone(guard), leaf),
-                cmp::Ordering::Less => (leaf, new_leaf.clone(guard)),
-            };
-
-            let new_internal_node = unsafe { new_internal.deref_mut() };
-            new_internal_node.key = unsafe { new_right.deref().key.clone() };
-            new_internal_node
-                .left
-                .store(new_left, Ordering::Relaxed, guard);
-            new_internal_node
-                .right
-                .store(new_right, Ordering::Relaxed, guard);
+                cmp::Ordering::Greater => {
+                    new_internal_node.key = unsafe { leaf.deref().key.clone() };
+                    new_internal_node
+                        .left
+                        .store(new_leaf.clone(guard), Ordering::Relaxed, guard);
+                    new_internal_node
+                        .right
+                        .store_snapshot(leaf, Ordering::Relaxed, guard);
+                }
+                cmp::Ordering::Less => {
+                    new_internal_node.key = unsafe { new_leaf.deref().key.clone() };
+                    new_internal_node
+                        .left
+                        .store_snapshot(leaf, Ordering::Relaxed, guard);
+                    new_internal_node
+                        .right
+                        .store(new_leaf.clone(guard), Ordering::Relaxed, guard);
+                }
+            }
 
             // NOTE: record.leaf_addr is called childAddr in the paper.
             match record
@@ -393,9 +440,9 @@ where
             let value = leaf_node.value.as_ref().unwrap();
 
             // Try injecting the deletion flag.
-            match record.leaf_addr().compare_exchange_ss_ss(
+            match record.leaf_addr().compare_exchange_mark(
                 &record.leaf,
-                &record.leaf.clone(guard).with_mark(Marks::new(true, false).bits()),
+                Marks::new(true, false).bits(),
                 guard,
             ) {
                 Ok(()) => {
@@ -467,9 +514,6 @@ mod tests {
 
     #[test]
     fn smoke_nm_tree() {
-        concurrent_map::tests::smoke::<
-        GuardEBR,
-            NMTreeMap<i32, String, GuardEBR>,
-        >();
+        concurrent_map::tests::smoke::<GuardEBR, NMTreeMap<i32, String, GuardEBR>>();
     }
 }
