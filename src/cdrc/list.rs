@@ -165,11 +165,7 @@ where
                 next = next.with_mark(0);
                 unsafe { self.prev.deref_mut() }
                     .next
-                    .compare_exchange_ss_ss(
-                        &self.curr,
-                        &next,
-                        guard,
-                    )
+                    .compare_exchange_ss_ss(&self.curr, &next, guard)
                     .map_err(|_| ())?;
                 self.curr = next;
                 continue;

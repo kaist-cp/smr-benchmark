@@ -58,9 +58,7 @@ where
 
     pub fn mark_tower(&self) -> bool {
         for level in (0..self.height).rev() {
-            let tag = self.next[level]
-                .fetch_or(1, &Guard::handle())
-                .mark();
+            let tag = self.next[level].fetch_or(1, &Guard::handle()).mark();
             // If the level 0 pointer was already marked, somebody else removed the node.
             if level == 0 && tag == 1 {
                 return false;
@@ -329,9 +327,6 @@ mod tests {
 
     #[test]
     fn smoke_skip_list() {
-        concurrent_map::tests::smoke::<
-        GuardEBR,
-            SkipList<i32, String, GuardEBR>,
-        >();
+        concurrent_map::tests::smoke::<GuardEBR, SkipList<i32, String, GuardEBR>>();
     }
 }
