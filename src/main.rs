@@ -558,6 +558,11 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 cdrc::SkipList<String, String, cdrc_rs::GuardEBR>,
                 N,
             >(config, PrefillStrategy::Random),
+            DS::BonsaiTree => bench_map_cdrc::<
+                cdrc_rs::GuardEBR,
+                cdrc::BonsaiTreeMap<String, String, cdrc_rs::GuardEBR>,
+                N,
+            >(config, PrefillStrategy::Random),
             _ => panic!("Unsupported data structure for CDRC EBR"),
         },
     };
