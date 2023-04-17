@@ -40,6 +40,8 @@ PEBR = "PEBR"
 NR = "NR"
 HP = "HP"
 HP_PP = "HP_PP"
+NBR = "NBR"
+CDRC_EBR = "CDRC_EBR"
 
 # DS with read-dominated bench & write-only bench
 dss_all   = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, EFRBTREE, SKIPLIST]
@@ -48,19 +50,23 @@ dss_write = [HLIST, HMLIST,          HASHMAP, NMTREE, EFRBTREE, SKIPLIST]
 
 WRITE, HALF, READ = "write", "half", "read"
 
-SMR_ONLYs = [NR, EBR, HP, HP_PP, PEBR]
-SMR_Is = [NR, EBR, HP, HP_PP, PEBR]
+SMR_ONLYs = [NR, EBR, HP, HP_PP, PEBR, NBR, CDRC_EBR]
+SMR_Is = [NR, EBR, HP, HP_PP, PEBR, NBR, CDRC_EBR]
 
 cpu_count = os.cpu_count()
 ts = [1] + list(range(8, 145, 8))
 
 n_map = {0: ''}
 
+# https://matplotlib.org/stable/api/markers_api.html
 line_shapes = {
     NR: '.',
     EBR: 'o',
     HP: 'v',
-    HP_PP: 'D'
+    HP_PP: 'D',
+    PEBR: "x",
+    NBR: "s",
+    CDRC_EBR: "1",
 }
 
 line_colors = {
@@ -68,6 +74,9 @@ line_colors = {
     EBR: 'c',
     HP: 'hotpink',
     HP_PP: 'purple',
+    PEBR: "y",
+    NBR: "C0",
+    CDRC_EBR: "green",
 }
 
 line_types = {
@@ -75,6 +84,9 @@ line_types = {
     EBR: '--',
     HP: '--',
     HP_PP: '--',
+    PEBR: '--',
+    NBR: '--',
+    CDRC_EBR: '--',
 }
 
 def plot_title(ds, bench):
