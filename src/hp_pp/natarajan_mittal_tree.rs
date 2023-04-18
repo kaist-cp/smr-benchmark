@@ -498,7 +498,7 @@ where
         }
 
         Ok(())
-    }    
+    }
 
     /// Physically removes node.
     ///

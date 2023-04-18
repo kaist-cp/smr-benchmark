@@ -43,7 +43,8 @@ where
         guard: &'g mut Guard,
     ) -> Option<&'g V> {
         let i = Self::hash(k);
-        self.get_bucket(i).get(cursor, k, guard)
+        self.get_bucket(i)
+            .get_harris_herlihy_shavit(cursor, k, guard)
     }
 
     pub fn insert(&self, cursor: &mut Cursor<K, V>, k: K, v: V, guard: &mut Guard) -> bool {

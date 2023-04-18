@@ -42,7 +42,7 @@ where
 
     pub fn get<'g>(&'g self, k: &'g K, guard: &'g Guard) -> Option<&'g V> {
         let i = Self::hash(k);
-        self.get_bucket(i).get(k, guard)
+        self.get_bucket(i).get_harris_herlihy_shavit(k, guard)
     }
 
     pub fn insert(&self, k: K, v: V, guard: &Guard) -> bool {
