@@ -37,7 +37,7 @@ where
 
     pub fn get<'domain, 'hp>(&self, handle: &'hp mut Handle<'domain>, k: &K) -> Option<&'hp V> {
         let i = Self::hash(k);
-        self.get_bucket(i).get(handle, k)
+        self.get_bucket(i).get_harris_herlihy_shavit(handle, k)
     }
 
     pub fn insert<'domain, 'hp>(&self, handle: &'hp mut Handle<'domain>, k: K, v: V) -> bool {

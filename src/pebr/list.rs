@@ -566,6 +566,22 @@ pub struct HMList<K, V> {
     inner: List<K, V>,
 }
 
+impl<K, V> HMList<K, V>
+where
+    K: Ord,
+{
+    /// For optimistic search on HashMap 
+    #[inline]
+    pub fn get_harris_herlihy_shavit<'g>(
+        &'g self,
+        handle: &'g mut Cursor<K, V>,
+        key: &K,
+        guard: &'g mut Guard,
+    ) -> Option<&'g V> {
+        self.inner.harris_herlihy_shavit_get(key, handle, guard)
+    }
+}
+
 impl<K, V> ConcurrentMap<K, V> for HMList<K, V>
 where
     K: Ord,
