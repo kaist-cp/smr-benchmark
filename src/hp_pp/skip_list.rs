@@ -3,7 +3,8 @@ use std::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering};
 use std::{ptr, slice};
 
 use hp_pp::{
-    light_membarrier, tag, tagged, untagged, HazardPointer, ProtectError, Thread, DEFAULT_DOMAIN,
+    decompose_ptr, light_membarrier, tag, tagged, untagged, HazardPointer, ProtectError, Thread,
+    DEFAULT_DOMAIN,
 };
 
 use crate::hp::concurrent_map::ConcurrentMap;
@@ -59,7 +60,7 @@ impl<K, V> Node<K, V> {
         for level in (0..self.height).rev() {
             let tag = tag(self.next[level].fetch_or(1, Ordering::SeqCst));
             // If the level 0 pointer was already marked, somebody else removed the node.
-            if level == 0 && tag == 1 {
+            if level == 0 && (tag & 1) != 0 {
                 return false;
             }
         }
@@ -75,7 +76,7 @@ impl<K, V> Node<K, V> {
         let mut next = self.next[index].load(Ordering::Relaxed);
         loop {
             match hazptr.try_protect_pp(untagged(next), &self, &self.next[index], &|src| {
-                (tag(src.next[index].load(Ordering::Acquire)) & 1) != 0
+                (tag(src.next[index].load(Ordering::Acquire)) & 2) != 0
             }) {
                 Ok(_) => return Ok(next),
                 Err(ProtectError::Changed(new_next)) => {
@@ -159,6 +160,73 @@ where
         }
     }
 
+    fn find_optimistic<'domain, 'hp>(
+        &self,
+        key: &K,
+        handle: &'hp mut Handle<'domain>,
+    ) -> Option<Cursor<K, V>> {
+        'search: loop {
+            let mut cursor = Cursor::new(&self.head);
+
+            let mut level = MAX_HEIGHT;
+            while level >= 1 && self.head[level - 1].load(Ordering::Relaxed).is_null() {
+                level -= 1;
+            }
+
+            let mut pred = &self.head as *const _ as *mut Node<K, V>;
+            while level >= 1 {
+                level -= 1;
+                let mut curr =
+                    untagged(unsafe { &*untagged(pred) }.next[level].load(Ordering::Acquire));
+
+                loop {
+                    if curr.is_null() {
+                        break;
+                    }
+
+                    let pred_ref = unsafe { &*pred };
+
+                    // Inlined version of hp++ protection, without duplicate load
+                    handle.succs_h[level].protect_raw(curr);
+                    light_membarrier();
+                    let (curr_new_base, curr_new_tag) =
+                        decompose_ptr(pred_ref.next[level].load(Ordering::Acquire));
+                    if (curr_new_tag & 2) != 0 {
+                        // Stopped. Restart from head.
+                        continue 'search;
+                    } else if curr_new_base != curr {
+                        // If link changed but not stopped, retry protecting the new node.
+                        curr = curr_new_base;
+                        continue;
+                    }
+
+                    let curr_node = unsafe { &*curr };
+
+                    match curr_node.key.cmp(key) {
+                        std::cmp::Ordering::Less => {
+                            pred = curr;
+                            curr = curr_node.next[level].load(Ordering::Acquire);
+                            HazardPointer::swap(
+                                &mut handle.preds_h[level],
+                                &mut handle.succs_h[level],
+                            );
+                        }
+                        std::cmp::Ordering::Equal => {
+                            if curr_new_tag == 0 {
+                                cursor.succs[0] = curr;
+                                return Some(cursor);
+                            } else {
+                                return None;
+                            }
+                        }
+                        std::cmp::Ordering::Greater => break,
+                    }
+                }
+            }
+            return None;
+        }
+    }
+
     fn find<'domain, 'hp>(&self, key: &K, handle: &'hp mut Handle<'domain>) -> Cursor<K, V> {
         'search: loop {
             let mut cursor = Cursor::new(&self.head);
@@ -173,8 +241,6 @@ where
 
             while level >= 1 {
                 level -= 1;
-                handle.preds_h[level].protect_raw(pred);
-                light_membarrier();
                 loop {
                     let pred_ref = unsafe { &*untagged(pred) };
                     curr = ok_or!(
@@ -182,6 +248,9 @@ where
                         continue 'search
                     );
 
+                    if (tag(curr) & 1) != 0 {
+                        continue 'search;
+                    }
                     if untagged(curr).is_null() {
                         break;
                     }
@@ -193,7 +262,7 @@ where
                         continue 'search;
                     }
 
-                    if tag(succ) == 1 {
+                    if (tag(succ) & 1) != 0 {
                         unsafe {
                             handle.thread.try_unlink(
                                 PhysicalUnlink {
@@ -274,7 +343,7 @@ where
                 // If the current pointer is marked, that means another thread is already
                 // removing the node we've just inserted. In that case, let's just stop
                 // building the tower.
-                if tag(next) == 1 {
+                if (tag(next) & 1) != 0 {
                     break 'build;
                 }
 
@@ -308,7 +377,7 @@ where
             }
         }
 
-        if tag(new_node_ref.next[height - 1].load(Ordering::SeqCst)) == 1 {
+        if (tag(new_node_ref.next[height - 1].load(Ordering::SeqCst)) & 1) != 0 {
             self.find(&new_node_ref.key, handle);
         }
 
@@ -357,10 +426,9 @@ where
 
 impl<K, V> hp_pp::Invalidate for Node<K, V> {
     fn invalidate(&self) {
-        // There's nothing to do here.
-        // Before logically remove a node,
-        // the entire tower of the node is marked,
-        // so additional invalidation is not needed.
+        for level in 0..self.height {
+            self.next[level].fetch_or(2, Ordering::SeqCst);
+        }
     }
 }
 
@@ -417,7 +485,7 @@ where
 
     #[inline]
     fn get<'domain, 'hp>(&self, handle: &'hp mut Self::Handle<'domain>, key: &K) -> Option<&'hp V> {
-        let cursor = self.find(key, handle);
+        let cursor = self.find_optimistic(key, handle)?;
         let node = unsafe { &*cursor.succs[0] };
         if node.key.eq(&key) {
             Some(&node.value)

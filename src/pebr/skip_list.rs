@@ -150,6 +150,69 @@ where
         }
     }
 
+    fn find_optimistic_inner<'g>(
+        &'g self,
+        key: &K,
+        handle: &'g mut Handle<K, V>,
+        guard: &'g Guard,
+    ) -> Result<Option<Cursor<'g, K, V>>, ShieldError> {
+        let mut cursor = Cursor::new(&self.head);
+
+        let mut level = MAX_HEIGHT;
+        while level >= 1
+            && self.head[level - 1]
+                .load(Ordering::Relaxed, guard)
+                .is_null()
+        {
+            level -= 1;
+        }
+
+        let mut pred = &self.head;
+        while level >= 1 {
+            level -= 1;
+            let mut curr = pred[level].load(Ordering::Acquire, guard);
+
+            loop {
+                handle.succs_h[level].defend(curr, guard)?;
+                let curr_node = some_or!(unsafe { curr.as_ref() }, break);
+
+                match curr_node.key.cmp(key) {
+                    std::cmp::Ordering::Less => {
+                        pred = &curr_node.next;
+                        curr = curr_node.next[level].load(Ordering::Acquire, guard);
+                        mem::swap(&mut handle.succs_h[level], &mut handle.preds_h[level]);
+                    }
+                    std::cmp::Ordering::Equal => {
+                        if curr_node.next[level].load(Ordering::Acquire, guard).tag() == 0 {
+                            cursor.succs[0] = curr;
+                            return Ok(Some(cursor));
+                        } else {
+                            return Ok(None);
+                        }
+                    }
+                    std::cmp::Ordering::Greater => break,
+                }
+            }
+        }
+        return Ok(None);
+    }
+
+    fn find_optimistic<'g>(
+        &'g self,
+        key: &K,
+        handle: &'g mut Handle<K, V>,
+        guard: &'g mut Guard,
+    ) -> Option<Cursor<'g, K, V>> {
+        loop {
+            match self.find_optimistic_inner(key, handle.launder(), unsafe {
+                &mut *(guard as *mut Guard)
+            }) {
+                Ok(cursor) => return cursor,
+                Err(ShieldError::Ejected) => guard.repin(),
+            }
+        }
+    }
+
     fn find_inner<'g>(
         &'g self,
         key: &K,
@@ -409,7 +472,7 @@ where
         key: &'g K,
         guard: &'g mut Guard,
     ) -> Option<&'g V> {
-        let cursor = self.find(key, handle, guard);
+        let cursor = self.find_optimistic(key, handle, guard)?;
         let node = unsafe { cursor.succs[0].deref() };
         if node.key.eq(&key) {
             Some(&node.value)

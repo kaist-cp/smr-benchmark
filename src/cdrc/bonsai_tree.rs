@@ -1,4 +1,4 @@
-use cdrc_rs::{AcquireRetire, AtomicRcPtr, RcPtr, SnapshotPtr, LocalPtr};
+use cdrc_rs::{AcquireRetire, AtomicRcPtr, LocalPtr, RcPtr, SnapshotPtr};
 
 use super::concurrent_map::ConcurrentMap;
 
@@ -33,7 +33,7 @@ impl Retired {
 /// Retired node if Shared ptr of Node has RETIRED tag.
 struct Node<K, V, Guard>
 where
-    Guard: AcquireRetire
+    Guard: AcquireRetire,
 {
     key: K,
     value: V,
@@ -54,14 +54,14 @@ where
 
     fn is_retired<P>(node: &P) -> bool
     where
-        P: LocalPtr<'g, Node<K, V, Guard>, Guard>
+        P: LocalPtr<'g, Node<K, V, Guard>, Guard>,
     {
         Retired::from_bits_truncate(node.mark()).retired()
     }
 
     fn is_retired_spot<P>(node: &P, guard: &'g Guard) -> bool
     where
-        P: LocalPtr<'g, Node<K, V, Guard>, Guard>
+        P: LocalPtr<'g, Node<K, V, Guard>, Guard>,
     {
         if Self::is_retired(node) {
             return true;
@@ -77,7 +77,7 @@ where
 
     fn node_size<P>(node: &P) -> usize
     where
-        P: LocalPtr<'g, Node<K, V, Guard>, Guard>
+        P: LocalPtr<'g, Node<K, V, Guard>, Guard>,
     {
         debug_assert!(!Self::is_retired(node));
         if let Some(node_ref) = unsafe { node.as_ref() } {
@@ -135,13 +135,16 @@ where
 
         let left_size = Node::node_size(left);
         let right_size = Node::node_size(right);
-        let new_node = RcPtr::make_shared(Node {
-            key,
-            value,
-            size: left_size + right_size + 1,
-            left: AtomicRcPtr::from_local(left, guard),
-            right: AtomicRcPtr::from_local(right, guard),
-        }, guard);
+        let new_node = RcPtr::make_shared(
+            Node {
+                key,
+                value,
+                size: left_size + right_size + 1,
+                left: AtomicRcPtr::from_local(left, guard),
+                right: AtomicRcPtr::from_local(right, guard),
+            },
+            guard,
+        );
         new_node
     }
 
@@ -336,7 +339,7 @@ where
         key: K,
         value: V,
         guard: &'g Guard,
-    ) -> RcPtr<'g, Node<K, V, Guard>, Guard> 
+    ) -> RcPtr<'g, Node<K, V, Guard>, Guard>
     where
         P1: LocalPtr<'g, Node<K, V, Guard>, Guard>,
         P2: LocalPtr<'g, Node<K, V, Guard>, Guard>,
@@ -365,7 +368,7 @@ where
         key: K,
         value: V,
         guard: &'g Guard,
-    ) -> RcPtr<'g, Node<K, V, Guard>, Guard> 
+    ) -> RcPtr<'g, Node<K, V, Guard>, Guard>
     where
         P1: LocalPtr<'g, Node<K, V, Guard>, Guard>,
         P2: LocalPtr<'g, Node<K, V, Guard>, Guard>,
@@ -512,7 +515,10 @@ where
         &mut self,
         node: &P,
         guard: &'g Guard,
-    ) -> (RcPtr<'g, Node<K, V, Guard>, Guard>, RcPtr<'g, Node<K, V, Guard>, Guard>)
+    ) -> (
+        RcPtr<'g, Node<K, V, Guard>, Guard>,
+        RcPtr<'g, Node<K, V, Guard>, Guard>,
+    )
     where
         P: LocalPtr<'g, Node<K, V, Guard>, Guard>,
     {
@@ -550,7 +556,10 @@ where
         &mut self,
         node: &P,
         guard: &'g Guard,
-    ) -> (RcPtr<'g, Node<K, V, Guard>, Guard>, RcPtr<'g, Node<K, V, Guard>, Guard>)
+    ) -> (
+        RcPtr<'g, Node<K, V, Guard>, Guard>,
+        RcPtr<'g, Node<K, V, Guard>, Guard>,
+    )
     where
         P: LocalPtr<'g, Node<K, V, Guard>, Guard>,
     {
@@ -646,11 +655,7 @@ where
 
             if self
                 .root
-                .compare_exchange(
-                    &old_root,
-                    &new_root,
-                    guard,
-                )
+                .compare_exchange(&old_root, &new_root, guard)
                 .is_ok()
             {
                 return inserted;
@@ -671,11 +676,7 @@ where
 
             if self
                 .root
-                .compare_exchange(
-                    &old_root,
-                    &new_root,
-                    guard,
-                )
+                .compare_exchange(&old_root, &new_root, guard)
                 .is_ok()
             {
                 return value;

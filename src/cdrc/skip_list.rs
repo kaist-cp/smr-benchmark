@@ -109,6 +109,45 @@ where
         }
     }
 
+    fn find_optimistic<'g>(&'g self, key: &K, guard: &'g Guard) -> Cursor<'g, K, V, Guard> {
+        let head = self.head.load_snapshot(guard);
+        let mut cursor = Cursor::new(&head, guard);
+
+        let mut level = MAX_HEIGHT;
+        while level >= 1
+            && unsafe { head.deref() }.next[level - 1]
+                .load_snapshot(guard)
+                .is_null()
+        {
+            level -= 1;
+        }
+
+        let mut pred = head;
+        while level >= 1 {
+            level -= 1;
+            let mut curr = unsafe { pred.deref() }.next[level].load_snapshot(guard);
+
+            loop {
+                let curr_node = some_or!(unsafe { curr.as_ref() }, break);
+                match curr_node.key.cmp(key) {
+                    std::cmp::Ordering::Less => {
+                        core::mem::swap(&mut curr, &mut pred);
+                        curr = curr_node.next[level].load_snapshot(guard);
+                    }
+                    std::cmp::Ordering::Equal => {
+                        if curr_node.next[level].load_snapshot(guard).mark() == 0 {
+                            cursor.found = Some(curr)
+                        }
+                        return cursor;
+                    }
+                    std::cmp::Ordering::Greater => break,
+                }
+            }
+        }
+
+        cursor
+    }
+
     fn find<'g>(&'g self, key: &K, guard: &'g Guard) -> Cursor<'g, K, V, Guard> {
         'search: loop {
             let head = self.head.load_snapshot(guard);
@@ -306,7 +345,7 @@ where
     }
 
     fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
-        let cursor = self.find(key, guard);
+        let cursor = self.find_optimistic(key, guard);
         cursor.found.map(|node| &unsafe { node.deref() }.value)
     }
 
