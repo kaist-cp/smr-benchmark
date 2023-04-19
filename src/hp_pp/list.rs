@@ -550,7 +550,7 @@ impl<K, V> HMList<K, V>
 where
     K: Ord,
 {
-    /// For optimistic search on HashMap 
+    /// For optimistic search on HashMap
     #[inline]
     pub fn get_harris_herlihy_shavit<'domain, 'hp>(
         &self,

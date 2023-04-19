@@ -410,7 +410,7 @@ where
     V: Default,
     Guard: AcquireRetire,
 {
-    /// For optimistic search on HashMap 
+    /// For optimistic search on HashMap
     #[inline]
     pub fn get_harris_herlihy_shavit<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         self.inner.harris_herlihy_shavit_get(key, guard)
