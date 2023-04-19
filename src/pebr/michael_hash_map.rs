@@ -12,7 +12,7 @@ pub struct HashMap<K, V> {
 
 impl<K, V> HashMap<K, V>
 where
-    K: Ord + Hash,
+    K: Ord + Hash + Clone,
 {
     pub fn with_capacity(n: usize) -> Self {
         let mut buckets = Vec::with_capacity(n);
@@ -60,7 +60,7 @@ where
 
 impl<K, V> ConcurrentMap<K, V> for HashMap<K, V>
 where
-    K: Ord + Hash,
+    K: Ord + Hash + Clone,
 {
     type Handle = Cursor<K, V>;
 

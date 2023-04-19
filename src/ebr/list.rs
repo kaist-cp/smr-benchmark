@@ -313,6 +313,39 @@ where
         }
     }
 
+    #[inline]
+    pub fn pop<'g>(&'g self, guard: &'g Guard) -> Option<(&'g K, &'g V)> {
+        loop {
+            let cursor = self.head(guard);
+            if cursor.curr.is_null() {
+                return None;
+            }
+
+            let curr_node = unsafe { cursor.curr.deref() };
+
+            let next = curr_node.next.fetch_or(1, Ordering::Acquire, guard);
+            if next.tag() == 1 {
+                continue;
+            }
+
+            if cursor
+                .prev
+                .compare_exchange(
+                    cursor.curr,
+                    next,
+                    Ordering::Release,
+                    Ordering::Relaxed,
+                    guard,
+                )
+                .is_ok()
+            {
+                unsafe { guard.defer_destroy(cursor.curr) };
+            }
+
+            return Some((&curr_node.key, &curr_node.value));
+        }
+    }
+
     /// Omitted
     pub fn harris_get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         self.get(key, Cursor::find_harris, guard)
@@ -416,6 +449,17 @@ pub struct HHSList<K, V> {
     inner: List<K, V>,
 }
 
+impl<K, V> HHSList<K, V>
+where
+    K: Ord,
+{
+    /// Pop the first element efficiently.
+    /// This method is used for only the fine grained benchmark (src/bin/fine_grained_bench).
+    pub fn pop<'g>(&'g self, guard: &'g Guard) -> Option<(&'g K, &'g V)> {
+        self.inner.pop(guard)
+    }
+}
+
 impl<K, V> ConcurrentMap<K, V> for HHSList<K, V>
 where
     K: Ord,
@@ -456,5 +500,26 @@ mod tests {
     #[test]
     fn smoke_hhs_list() {
         concurrent_map::tests::smoke::<HHSList<i32, String>>();
+    }
+
+    #[test]
+    fn litmus_hhs_pop() {
+        use concurrent_map::ConcurrentMap;
+        let map = HHSList::new();
+
+        let guard = &crossbeam_ebr::pin();
+        map.insert(1, "1", guard);
+        map.insert(2, "2", guard);
+        map.insert(3, "3", guard);
+
+        fn assert_eq(a: (&i32, &&str), b: (i32, &str)) {
+            assert_eq!(*a.0, b.0);
+            assert_eq!(*a.1, b.1);
+        }
+
+        assert_eq(map.pop(guard).unwrap(), (1, "1"));
+        assert_eq(map.pop(guard).unwrap(), (2, "2"));
+        assert_eq(map.pop(guard).unwrap(), (3, "3"));
+        assert_eq!(map.pop(guard), None);
     }
 }
