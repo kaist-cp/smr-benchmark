@@ -217,13 +217,8 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
             // NOTE: `write_record` on `bench`
             output
                 .write_record(&[
-                    // "timestamp",
                     "mm",
-                    "threads",
                     "sampling_period",
-                    "non_coop",
-                    "get_rate",
-                    "ops_per_cs",
                     "throughput",
                     "peak_mem",
                     "avg_mem",
