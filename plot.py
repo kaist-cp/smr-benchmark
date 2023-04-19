@@ -81,12 +81,12 @@ line_colors = {
 
 line_types = {
     NR: '-',
-    EBR: '--',
-    HP: '--',
-    HP_PP: '--',
-    PEBR: '--',
-    NBR: '--',
-    CDRC_EBR: '--',
+    EBR: 'dotted',
+    HP: 'dashed',
+    HP_PP: 'dashdot',
+    PEBR: (5, (10, 3)),
+    NBR: (0, (3, 1, 1, 1)),
+    CDRC_EBR: (0, (3, 1, 1, 1, 1, 1)),
 }
 
 def plot_title(ds, bench):
