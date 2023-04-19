@@ -274,6 +274,53 @@ where
         }
     }
 
+    #[inline]
+    fn pop_inner<'domain, 'hp>(
+        &self,
+        handle: &'hp mut Handle<'domain>,
+    ) -> Result<Option<(&'hp K, &'hp V)>, ()> {
+        let cursor = Cursor::new(&self.head, handle.launder());
+        let prev = unsafe { &(*cursor.prev).next };
+
+        handle.curr_h.protect_raw(cursor.curr);
+        light_membarrier();
+        let (curr_new_base, curr_new_tag) = decompose_ptr(prev.load(Ordering::Acquire));
+        if curr_new_tag != 0 || curr_new_base != cursor.curr {
+            return Err(());
+        }
+
+        if cursor.curr.is_null() {
+            return Ok(None);
+        }
+
+        let curr_node = unsafe { &*cursor.curr };
+
+        let next = curr_node.next.fetch_or(1, Ordering::Relaxed);
+        let next_tag = tag(next);
+        if next_tag == 1 {
+            return Err(());
+        }
+
+        if prev
+            .compare_exchange(cursor.curr, next, Ordering::Release, Ordering::Relaxed)
+            .is_ok()
+        {
+            unsafe { handle.thread.retire(cursor.curr) };
+        }
+
+        Ok(Some((&curr_node.key, &curr_node.value)))
+    }
+
+    #[inline]
+    pub fn pop<'domain, 'hp>(&self, handle: &'hp mut Handle<'domain>) -> Option<(&'hp K, &'hp V)> {
+        loop {
+            match self.pop_inner(handle.launder()) {
+                Ok(r) => return r,
+                Err(_) => continue,
+            }
+        }
+    }
+
     pub fn harris_michael_get<'domain, 'hp>(
         &self,
         key: &K,
@@ -302,6 +349,17 @@ where
 
 pub struct HMList<K, V> {
     inner: List<K, V>,
+}
+
+impl<K, V> HMList<K, V>
+where
+    K: Ord,
+{
+    /// Pop the first element efficiently.
+    /// This method is used for only the fine grained benchmark (src/bin/fine_grained_bench).
+    pub fn pop<'domain, 'hp>(&self, handle: &'hp mut Handle<'domain>) -> Option<(&'hp K, &'hp V)> {
+        self.inner.pop(handle)
+    }
 }
 
 impl<K, V> ConcurrentMap<K, V> for HMList<K, V>
@@ -349,5 +407,26 @@ mod tests {
     #[test]
     fn smoke_hm_list() {
         concurrent_map::tests::smoke::<HMList<i32, String>>();
+    }
+
+    #[test]
+    fn litmus_hm_pop() {
+        use concurrent_map::ConcurrentMap;
+        let map = HMList::new();
+
+        let handle = &mut HMList::<i32, String>::handle();
+        map.insert(handle, 1, "1".to_string());
+        map.insert(handle, 2, "2".to_string());
+        map.insert(handle, 3, "3".to_string());
+
+        fn assert_eq(a: (&i32, &String), b: (i32, String)) {
+            assert_eq!(*a.0, b.0);
+            assert_eq!(*a.1, b.1);
+        }
+
+        assert_eq(map.pop(handle).unwrap(), (1, "1".to_string()));
+        assert_eq(map.pop(handle).unwrap(), (2, "2".to_string()));
+        assert_eq(map.pop(handle).unwrap(), (3, "3".to_string()));
+        assert_eq!(map.pop(handle), None);
     }
 }

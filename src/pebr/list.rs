@@ -25,7 +25,7 @@ pub struct List<K, V> {
 
 impl<K, V> Default for List<K, V>
 where
-    K: Ord,
+    K: Ord + Clone,
 {
     fn default() -> Self {
         Self::new()
@@ -85,7 +85,7 @@ impl<K, V> Cursor<K, V> {
 /// `Shared::from_usize(&list.head as *const Atomic<Node<K, V>> as usize)`.
 impl<K, V> Cursor<K, V>
 where
-    K: Ord,
+    K: Ord + Clone,
 {
     #[inline]
     fn find_harris<'g>(&mut self, key: &K, guard: &'g Guard) -> Result<bool, FindError> {
@@ -267,7 +267,7 @@ where
 
 impl<K, V> List<K, V>
 where
-    K: Ord,
+    K: Ord + Clone,
 {
     pub fn new() -> Self {
         List {
@@ -436,6 +436,56 @@ where
         }
     }
 
+    fn pop_inner<'g>(
+        &'g self,
+        cursor: &mut Cursor<K, V>,
+        guard: &'g mut Guard,
+    ) -> Result<Option<(K, V)>, FindError> {
+        cursor.init_find(&self.head);
+        let head = unsafe { &*(cursor.prev.shared().into_usize() as *const Atomic<Node<K, V>>) };
+        let curr = head.load(Ordering::Acquire, guard);
+
+        if curr.is_null() {
+            unsafe { cursor.curr.defend_fake(curr) };
+            return Ok(None);
+        }
+
+        cursor
+            .curr
+            .defend(curr, guard)
+            .map_err(FindError::ShieldError)?;
+
+        let curr_node = unsafe { cursor.curr.as_ref() }.unwrap();
+        let next = curr_node.next.fetch_or(1, Ordering::Relaxed, guard);
+        if next.tag() == 1 {
+            return Err(FindError::Retry);
+        }
+
+        let key = curr_node.key.clone();
+        let value = unsafe { ptr::read(&curr_node.value) };
+
+        if unsafe { cursor.prev.deref() }
+            .next
+            .compare_and_set(cursor.curr.shared(), next, Ordering::Release, guard)
+            .is_ok()
+        {
+            unsafe { guard.defer_destroy(cursor.curr.shared()) };
+        }
+
+        Ok(Some((key, ManuallyDrop::into_inner(value))))
+    }
+
+    #[inline]
+    pub fn pop<'g>(&'g self, cursor: &mut Cursor<K, V>, guard: &'g mut Guard) -> Option<(K, V)> {
+        loop {
+            match self.pop_inner(cursor, unsafe { &mut *(guard as *mut Guard) }) {
+                Ok(r) => return r,
+                Err(FindError::Retry) => continue,
+                Err(FindError::ShieldError(ShieldError::Ejected)) => guard.repin(),
+            }
+        }
+    }
+
     pub fn harris_get<'g>(
         &'g self,
         key: &K,
@@ -527,7 +577,7 @@ pub struct HList<K, V> {
 
 impl<K, V> ConcurrentMap<K, V> for HList<K, V>
 where
-    K: Ord,
+    K: Ord + Clone,
 {
     type Handle = Cursor<K, V>;
 
@@ -568,7 +618,7 @@ pub struct HMList<K, V> {
 
 impl<K, V> HMList<K, V>
 where
-    K: Ord,
+    K: Ord + Clone,
 {
     /// For optimistic search on HashMap
     #[inline]
@@ -584,7 +634,7 @@ where
 
 impl<K, V> ConcurrentMap<K, V> for HMList<K, V>
 where
-    K: Ord,
+    K: Ord + Clone,
 {
     type Handle = Cursor<K, V>;
 
@@ -623,9 +673,20 @@ pub struct HHSList<K, V> {
     inner: List<K, V>,
 }
 
+impl<K, V> HHSList<K, V>
+where
+    K: Ord + Clone,
+{
+    /// Pop the first element efficiently.
+    /// This method is used for only the fine grained benchmark (src/bin/fine_grained_bench).
+    pub fn pop(&self, handle: &mut Cursor<K, V>, guard: &mut Guard) -> Option<(K, V)> {
+        self.inner.pop(handle, guard)
+    }
+}
+
 impl<K, V> ConcurrentMap<K, V> for HHSList<K, V>
 where
-    K: Ord,
+    K: Ord + Clone,
 {
     type Handle = Cursor<K, V>;
 
@@ -679,5 +740,22 @@ mod tests {
     #[test]
     fn smoke_hhs_list() {
         concurrent_map::tests::smoke::<HHSList<i32, String>>();
+    }
+
+    #[test]
+    fn litmus_hhs_pop() {
+        use concurrent_map::ConcurrentMap;
+        let map = HHSList::new();
+
+        let guard = &mut crossbeam_pebr::pin();
+        let handle = &mut HHSList::handle(guard);
+        map.insert(handle, 1, "1".to_string(), guard);
+        map.insert(handle, 2, "2".to_string(), guard);
+        map.insert(handle, 3, "3".to_string(), guard);
+
+        assert_eq!(map.pop(handle, guard).unwrap(), (1, "1".to_string()));
+        assert_eq!(map.pop(handle, guard).unwrap(), (2, "2".to_string()));
+        assert_eq!(map.pop(handle, guard).unwrap(), (3, "3".to_string()));
+        assert_eq!(map.pop(handle, guard), None);
     }
 }
