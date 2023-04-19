@@ -32,7 +32,7 @@ for run in range(runs):
     for i, cmd in enumerate(cmds):
         print("run {}/{}, bench {}/{}: '{}'".format(run + 1, runs, i + 1, len(cmds), ' '.join(cmd)))
         try:
-            subprocess.run(cmd, timeout=20)
+            subprocess.run(cmd, timeout=30)
         except subprocess.TimeoutExpired:
             print("timeout")
             failed.append(' '.join(cmd))
