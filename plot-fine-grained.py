@@ -110,7 +110,7 @@ def draw(title, name, data, line_name, y_value, y_label=None, y_max=None, legend
 def draw_throughput(data):
     data = data.copy()
     y_label = 'Throughput ratio to NR'
-    legend = True
+    legend = False
     y_max = data.throughput.max() * 1.05
     draw("", f'{RESULTS_PATH}/throughput.pdf',
          data, SMR_ONLY, THROUGHPUT, y_label, y_max, legend)

@@ -32,5 +32,4 @@ def draw_throughput_by_thread(key_range: int, get_rate: int):
     plt.savefig(f"./results/NMTree-EFRBTree-Throughput-{key_range}-{get_rate}.pdf", format="pdf")
 
 for key_range in [128, 100000]:
-    for get_rate in [0, 1, 2]:
-        draw_throughput_by_thread(key_range, get_rate)
+    draw_throughput_by_thread(key_range, 1)

@@ -44,18 +44,22 @@ NBR = "NBR"
 CDRC_EBR = "CDRC_EBR"
 
 # DS with read-dominated bench & write-only bench
-dss_all   = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, EFRBTREE, SKIPLIST]
-dss_read  = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, EFRBTREE, SKIPLIST]
-dss_write = [HLIST, HMLIST,          HASHMAP, NMTREE, EFRBTREE, SKIPLIST]
+dss_all   = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, EFRBTREE, SKIPLIST, BONSAITREE]
+dss_read  = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, EFRBTREE, SKIPLIST, BONSAITREE]
+dss_write = [HLIST, HMLIST,          HASHMAP, NMTREE, EFRBTREE, SKIPLIST, BONSAITREE]
 
 WRITE, HALF, READ = "write", "half", "read"
 
-SMR_ONLYs = [NR, EBR, HP, HP_PP, PEBR, NBR, CDRC_EBR]
-SMR_Is = [NR, EBR, HP, HP_PP, PEBR, NBR, CDRC_EBR]
+SMR_ONLYs = [NR, EBR, HP, HP_PP, PEBR, CDRC_EBR]
+SMR_Is = [NR, EBR, HP, HP_PP, PEBR, CDRC_EBR]
 
 cpu_count = os.cpu_count()
-ts = [1] + list(range(8, 145, 8))
-
+if not cpu_count or cpu_count <= 24:
+    ts = [1] + list(range(4, 33, 4))
+elif cpu_count <= 64:
+    ts = [1] + list(range(8, 81, 8))
+else:
+    ts = [1] + list(range(10, 151, 10))
 n_map = {0: ''}
 
 # https://matplotlib.org/stable/api/markers_api.html
@@ -156,8 +160,8 @@ def draw_throughput(data, ds, bench):
     data = data[data.non_coop == 0]
     if ds == NMTREE:
         data = data[data.mm != HP]
-    y_label = 'Throughput (M op/s)' if ds in [HLIST, HASHMAP] else None
-    legend = True
+    y_label = 'Throughput (M op/s)' if ds in [HMLIST, NMTREE] else None
+    legend = False
     y_max = data.throughput.max() * 1.05
     draw(plot_title(ds, bench), f'{RESULTS_PATH}/{ds}_{bench}_throughput.pdf',
          data, SMR_ONLY, THROUGHPUT, y_label, y_max, legend)
@@ -167,14 +171,14 @@ def draw_mem(data, ds, bench):
     data = data[data.key_range == key_range(ds, True)]
     if ds == NMTREE:
         data = data[data.mm != HP]
-    y_label = 'Peak memory usage (MiB)' if ds in [HLIST, HASHMAP] else None
+    y_label = 'Peak memory usage (MiB)' if ds in [HMLIST, NMTREE] else None
     y_max = None
-    legend = True
+    legend = False
     if ds == BONSAITREE:
         _d = data[~data[SMR_I].isin([NR])]  # exclude NR and EBR stalled
         max_threads = _d.threads.max()
         y_max = _d[_d.threads == max_threads].peak_mem.max() * 0.80
-    elif ds in [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, EFRBTREE]:
+    elif ds in [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, EFRBTREE, SKIPLIST]:
         _d = data[~data[SMR_I].isin([NR])]  # exclude NR and EBR stalled
         y_max = _d[_d.ds == ds].peak_mem.max() * 1.05
     else:
@@ -186,11 +190,12 @@ def draw_mem(data, ds, bench):
 def draw_garb(data, ds, bench):
     data = data[ds].copy()
     data = data[data.key_range == key_range(ds, True)]
-    data = data[data.mm != "NR"]
+    data = data[data.mm != NR]
+    data = data[data.mm != CDRC_EBR]
     if ds == NMTREE:
         data = data[data.mm != HP]
-    y_label = 'Avg. Unreclaimed memory blocks'
-    legend = True
+    y_label = 'Avg. Unreclaimed memory blocks' if ds in [HMLIST, NMTREE] else None
+    legend = False
     max_threads = data.threads.max()
     y_max = data[(data.threads == max_threads) & (data.mm == HP_PP)].avg_garb.max() * 1.7
     draw(plot_title(ds, bench), f'{RESULTS_PATH}/{ds}_{bench}_avg_garb.pdf',
@@ -200,11 +205,12 @@ def draw_garb(data, ds, bench):
 def draw_peak_garb(data, ds, bench):
     data = data[ds].copy()
     data = data[data.key_range == key_range(ds, True)]
-    data = data[data.mm != "NR"]
+    data = data[data.mm != NR]
+    data = data[data.mm != CDRC_EBR]
     if ds == NMTREE:
         data = data[data.mm != HP]
-    y_label = 'Peak unreclaimed memory blocks'
-    legend = True
+    y_label = 'Peak unreclaimed memory blocks' if ds in [HMLIST, NMTREE] else None
+    legend = False
     max_threads = data.threads.max()
     y_max = data[(data.threads == max_threads) & (data.mm == HP_PP)].peak_garb.max() * 2
     draw(plot_title(ds, bench), f'{RESULTS_PATH}/{ds}_{bench}_peak_garb.pdf',
@@ -219,9 +225,6 @@ avg_data = { WRITE: {}, HALF: {}, READ: {} }
 for ds in dss_all:
     data = pd.read_csv(f'{RESULTS_PATH}/' + ds + '.csv')
 
-    # for testing
-    data = data[data.threads <= 80]
-
     data.throughput = data.throughput.map(lambda x: x / 1000_000)
     data.peak_mem = data.peak_mem.map(lambda x: x / (2 ** 20))
     data.avg_mem = data.avg_mem.map(lambda x: x / (2 ** 20))
@@ -230,6 +233,8 @@ for ds in dss_all:
     data = data[data.ops_per_cs == 1]
     # ignore -n1 data
     data = data[data.non_coop != 1]
+    # ignore NBR
+    data = data[data.mm != NBR]
 
     raw_data[ds] = data.copy()
 
