@@ -25,7 +25,7 @@ if os.path.exists('.git'):
     subprocess.run(['git', 'submodule', 'update', '--init', '--recursive'])
 subprocess.run(['cargo', 'build', '--release'])
 
-run_cmd = ['./target/release/pebr-benchmark', '-i', str(i), '-s1']
+run_cmd = ['./target/release/smr-benchmark', '-i', str(i), '-s1']
 
 def key_range(ds, large):
     if ds in ["HList", "HMList", "HHSList"]:

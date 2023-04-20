@@ -1,20 +1,24 @@
-# A Marriage of Pointer- and Epoch-Based Reclamation
+# General-Purpose SMR Benchmark Suite Written in Rust
 
 This is the artifact for
 
-Jeehoon Kang and Jaehwang Jung, A Marriage of Pointer- and Epoch-Based Reclamation, PLDI 2020.
-
-The latest developments are on <https://github.com/kaist-cp/pebr-benchmark>.
+* Jeehoon Kang and Jaehwang Jung, A Marriage of Pointer- and Epoch-Based Reclamation, PLDI 2020.
+* Jaehwang Jung, Janggun Lee, Jeonghyeon Kim and Jeehoon Kang, Applying Hazard Pointers to More Concurrent Data Structures, SPAA 2023.
 
 ## Summary
-On Ubuntu 18.04,
+On Ubuntu 18.04 or later,
 
 ```
-sudo apt install build-essential python3-pip
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+sudo apt install build-essential python3-pip clang
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh  # You may need to reload the shell after finishing this to use 'cargo'
 pip3 install --user pandas plotnine
+
 python3 bench.py
+python3 bench-fine-grained.py
 python3 plot.py
+python3 plot-hlist-hhslist.py
+python3 plot-nmtree-efrbtree.py
+python3 plot-fine-grained.py
 ```
 
 ## Dependencies
@@ -45,35 +49,39 @@ cargo build --release                   # remove --release for debug build
 To run a single test,
 
 ```
-./target/release/pebr-benchmark -d <data structure> -m <reclamation scheme> -t <threads>
+./target/release/smr-benchmark -d <data structure> -m <reclamation scheme> -t <threads>
 ```
 
 where
 
-* data structure: HList, HMList, HHSList, HashMap, NMTree, BonsaiTree
-* reclamation scheme: NR, EBR, PEBR
+* data structure: HList, HMList, HHSList, HashMap, NMTree, BonsaiTree, SkipList, EFRBTree
+* reclamation scheme: NR, EBR, PEBR, HP, HP_PP, CDRC_EBR
 
 For detailed usage information,
 
 ```
-./target/release/pebr-benchmark -h
+./target/release/smr-benchmark -h
 ```
 
 To run the entire benchmark,
 
 ```
-python3 bench.py
+python3 bench.py                # Overall throughput benchmarks
+python3 bench-fine-grained.py   # Throughput of long-running read operations
 ```
 
-This takes several hours and creates raw CSV data under `./results/`.
+This takes several hours and creates raw CSV data under `./results/` and `./results-fine-grained/`.
 
 To generate plots,
 
 ```
-python3 plot.py
+python3 plot.py                   # Overall throughput plots
+python3 plot-hlist-hhslist.py     # HMList with HP vs. HHSList with HP++
+python3 plot-nmtree-efrbtree.py   # EFRBTree with HP vs. NMTree with HP++
+python3 plot-fine-grained.py      # Throughput of long-running read operations
 ```
 
-This creates plots presented in the paper under `./results/`.
+This creates plots presented in the paper under `./results/` and `./results-fine-grained/`.
 
 
 ## Debug
@@ -96,14 +104,22 @@ This is because of a minor bug in original Crossbeam but it doesn't affect perfo
 
 * `./crossbeam-ebr` is the original Crossbeam source code.
 
+* `./hp_pp` is an implementation of the original HP and our HP++.
+
+* `./nbr-rs` is an implementation of NBR, which is not included in our final benchmarking scripts.
+
+* `./cdrc-rs` is an implementation of CDRC with Crossbeam EBR.
+
 * `./src` contains the benchmark driver (`./src/main.rs`) and the
-  implementation of data structures based on PEBR (`./src/pebr/`) and
-  original Crossbeam (`./src/ebr/`).
+  implementation of data structures based on each SMR.
+  
+  * PEBR (`./src/pebr/`)
+  * EBR with original Crossbeam (`./src/ebr/`).
+  * HP (`./src/hp/`)
+  * HP++ (`./src/hp_pp/`)
+  * NBR (`./src/nbr`)
+  * CDRC (`./src/cdrc`)
 
-
-## Results
-
-`./paper-results` contains the raw results and graphs used in the paper.
 
 ## Note
 * On Windows, the benchmark uses the default memory allocator instead of
