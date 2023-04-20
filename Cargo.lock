@@ -489,27 +489,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d01a5bd0424d00070b0098dd17ebca6f961a959dead1dbcbbbc1d1cd8d3deeba"
 
 [[package]]
-name = "pebr-benchmark"
-version = "0.1.0"
-dependencies = [
- "bitflags",
- "cdrc-rs",
- "cfg-if 1.0.0",
- "clap",
- "crossbeam-epoch 0.9.13",
- "crossbeam-pebr-epoch",
- "crossbeam-utils 0.8.14",
- "csv",
- "hp_pp",
- "jemalloc-ctl",
- "jemallocator",
- "nbr-rs",
- "rand",
- "scopeguard",
- "typenum",
-]
-
-[[package]]
 name = "peeking_take_while"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -635,6 +614,27 @@ name = "shlex"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43b2853a4d09f215c24cc5489c992ce46052d359b5109343cbafbf26bc62f8a3"
+
+[[package]]
+name = "smr-benchmark"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "cdrc-rs",
+ "cfg-if 1.0.0",
+ "clap",
+ "crossbeam-epoch 0.9.13",
+ "crossbeam-pebr-epoch",
+ "crossbeam-utils 0.8.14",
+ "csv",
+ "hp_pp",
+ "jemalloc-ctl",
+ "jemallocator",
+ "nbr-rs",
+ "rand",
+ "scopeguard",
+ "typenum",
+]
 
 [[package]]
 name = "static_assertions"

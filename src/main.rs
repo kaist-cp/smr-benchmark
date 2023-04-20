@@ -5,7 +5,7 @@ extern crate csv;
 
 extern crate crossbeam_ebr;
 extern crate crossbeam_pebr;
-extern crate pebr_benchmark;
+extern crate smr_benchmark;
 
 use ::hp_pp::DEFAULT_DOMAIN;
 use clap::{arg_enum, value_t, App, Arg, ArgMatches};
@@ -23,11 +23,11 @@ use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
 use typenum::{Unsigned, U1, U4};
 
-use pebr_benchmark::hp;
-use pebr_benchmark::hp_pp;
-use pebr_benchmark::nbr;
-use pebr_benchmark::pebr;
-use pebr_benchmark::{cdrc, ebr};
+use smr_benchmark::hp;
+use smr_benchmark::hp_pp;
+use smr_benchmark::nbr;
+use smr_benchmark::pebr;
+use smr_benchmark::{cdrc, ebr};
 
 arg_enum! {
     #[derive(PartialEq, Debug)]
@@ -139,7 +139,7 @@ cfg_if! {
 }
 
 fn main() {
-    let matches = App::new("pebr_benchmark")
+    let matches = App::new("smr_benchmark")
         .arg(
             Arg::with_name("data structure")
                 .short("d")
