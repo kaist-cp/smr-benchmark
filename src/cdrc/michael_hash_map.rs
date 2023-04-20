@@ -3,13 +3,13 @@ use cdrc_rs::AcquireRetire;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use super::list::HMList;
+use super::list::HHSList;
 
 pub struct HashMap<K, V, Guard>
 where
     Guard: AcquireRetire,
 {
-    buckets: Vec<HMList<K, V, Guard>>,
+    buckets: Vec<HHSList<K, V, Guard>>,
 }
 
 impl<K, V, Guard> HashMap<K, V, Guard>
@@ -21,14 +21,14 @@ where
     pub fn with_capacity(n: usize) -> Self {
         let mut buckets = Vec::with_capacity(n);
         for _ in 0..n {
-            buckets.push(HMList::new());
+            buckets.push(HHSList::new());
         }
 
         HashMap { buckets }
     }
 
     #[inline]
-    pub fn get_bucket(&self, index: usize) -> &HMList<K, V, Guard> {
+    pub fn get_bucket(&self, index: usize) -> &HHSList<K, V, Guard> {
         unsafe { self.buckets.get_unchecked(index % self.buckets.len()) }
     }
 
@@ -42,7 +42,7 @@ where
 
     pub fn get<'g>(&'g self, k: &'g K, guard: &'g Guard) -> Option<&'g V> {
         let i = Self::hash(k);
-        self.get_bucket(i).get_harris_herlihy_shavit(k, guard)
+        self.get_bucket(i).get(k, guard)
     }
 
     pub fn insert(&self, k: K, v: V, guard: &Guard) -> bool {
