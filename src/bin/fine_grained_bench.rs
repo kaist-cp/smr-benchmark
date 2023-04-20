@@ -524,7 +524,11 @@ fn bench_map_nr(config: &Config, strategy: PrefillStrategy) -> (u64, usize, usiz
                 let start = Instant::now();
 
                 while start.elapsed() < config.duration {
-                    let key = format!("{:0width$}", config.key_dist.sample(&mut rng), width = width);
+                    let key = format!(
+                        "{:0width$}",
+                        config.key_dist.sample(&mut rng),
+                        width = width
+                    );
                     let _ = map.get(&key, unsafe { crossbeam_ebr::leaking() });
                     ops += 1;
                 }
@@ -645,7 +649,11 @@ fn bench_map_ebr<N: Unsigned>(
 
                 let mut guard = handle.pin();
                 while start.elapsed() < config.duration {
-                    let key = format!("{:0width$}", config.key_dist.sample(&mut rng), width = width);
+                    let key = format!(
+                        "{:0width$}",
+                        config.key_dist.sample(&mut rng),
+                        width = width
+                    );
                     let _ = map.get(&key, &guard);
                     ops += 1;
                     if ops % N::to_u64() == 0 {
@@ -772,7 +780,11 @@ fn bench_map_pebr<N: Unsigned>(
 
                 let mut guard = handle.pin();
                 while start.elapsed() < config.duration {
-                    let key = format!("{:0width$}", config.key_dist.sample(&mut rng), width = width);
+                    let key = format!(
+                        "{:0width$}",
+                        config.key_dist.sample(&mut rng),
+                        width = width
+                    );
                     let _ = map.get(&mut map_handle, &key, &mut guard);
                     ops += 1;
                     if ops % N::to_u64() == 0 {
@@ -884,7 +896,11 @@ fn bench_map_hp(config: &Config, strategy: PrefillStrategy) -> (u64, usize, usiz
                 let start = Instant::now();
 
                 while start.elapsed() < config.duration {
-                    let key = format!("{:0width$}", config.key_dist.sample(&mut rng), width = width);
+                    let key = format!(
+                        "{:0width$}",
+                        config.key_dist.sample(&mut rng),
+                        width = width
+                    );
                     let _ = map.get(&mut map_handle, &key);
                     ops += 1;
                 }
@@ -995,7 +1011,11 @@ fn bench_map_hp_pp(
                 let start = Instant::now();
 
                 while start.elapsed() < config.duration {
-                    let key = format!("{:0width$}", config.key_dist.sample(&mut rng), width = width);
+                    let key = format!(
+                        "{:0width$}",
+                        config.key_dist.sample(&mut rng),
+                        width = width
+                    );
                     let _ = map.get(&mut map_handle, &key);
                     ops += 1;
                 }
@@ -1111,7 +1131,11 @@ fn bench_map_cdrc<Guard: cdrc_rs::AcquireRetire, N: Unsigned>(
 
                 let mut guard = Guard::handle();
                 while start.elapsed() < config.duration {
-                    let key = format!("{:0width$}", config.key_dist.sample(&mut rng), width = width);
+                    let key = format!(
+                        "{:0width$}",
+                        config.key_dist.sample(&mut rng),
+                        width = width
+                    );
                     let _ = map.get(&key, &guard);
                     ops += 1;
                     if ops % N::to_u64() == 0 {
