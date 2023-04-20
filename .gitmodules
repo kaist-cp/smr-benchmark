@@ -10,3 +10,6 @@
 [submodule "cdrc-rs"]
 	path = cdrc-rs
 	url = https://github.com/powergee/cdrc-rs.git
+[submodule "hp_pp"]
+	path = hp_pp
+	url = https://github.com/kaist-cp/hp-plus.git
