@@ -55,7 +55,7 @@ To run a single test,
 where
 
 * data structure: HList, HMList, HHSList, HashMap, NMTree, BonsaiTree, SkipList, EFRBTree
-* reclamation scheme: NR, EBR, PEBR, HP, HP_PP, CDRC_EBR
+* reclamation scheme: NR, EBR, PEBR, HP, HP_PP, CDRC_EBR, NBR
 
 For detailed usage information,
 
@@ -66,7 +66,7 @@ For detailed usage information,
 To run the entire benchmark,
 
 ```
-python3 bench.py                # Overall throughput benchmarks
+python3 bench.py                # General throughput benchmarks
 python3 bench-fine-grained.py   # Throughput of long-running read operations
 ```
 
@@ -75,7 +75,7 @@ This takes several hours and creates raw CSV data under `./results/` and `./resu
 To generate plots,
 
 ```
-python3 plot.py                   # Overall throughput plots
+python3 plot.py                   # General throughput plots
 python3 plot-hlist-hhslist.py     # HMList with HP vs. HHSList with HP++
 python3 plot-nmtree-efrbtree.py   # EFRBTree with HP vs. NMTree with HP++
 python3 plot-fine-grained.py      # Throughput of long-running read operations
@@ -106,7 +106,7 @@ This is because of a minor bug in original Crossbeam but it doesn't affect perfo
 
 * `./hp_pp` is an implementation of the original HP and our HP++.
 
-* `./nbr-rs` is an implementation of NBR, which is not included in our final benchmarking scripts.
+* `./nbr-rs` is an implementation of NBR+ with signal optimizing.
 
 * `./cdrc-rs` is an implementation of CDRC with Crossbeam EBR.
 
