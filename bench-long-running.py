@@ -1,6 +1,5 @@
 import subprocess
 import os
-import sys
 
 mms = ['EBR', 'NR', 'HP', 'HP_PP', 'PEBR', 'CDRC_EBR']
 
@@ -13,9 +12,9 @@ i = 10
 
 if os.path.exists('.git'):
     subprocess.run(['git', 'submodule', 'update', '--init', '--recursive'])
-subprocess.run(['cargo', 'build', '--release', '--bin', 'fine_grained_bench'])
+subprocess.run(['cargo', 'build', '--release', '--bin', 'long_running'])
 
-run_cmd = ['./target/release/fine_grained_bench', f'-i{i}', f'-w{writers}', f'-g{readers}']
+run_cmd = ['./target/release/long_running', f'-i{i}', f'-w{writers}', f'-g{readers}']
 
 cmds = []
 

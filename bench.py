@@ -52,6 +52,8 @@ def invalid(mm, ds, c, g):
         is_invalid |= ds in ["HList", "HHSList", "NMTree"]
     if mm == 'NBR':
         is_invalid |= ds in ["BonsaiTree"]
+    if mm == 'CDRC_EBR':
+        is_invalid |= ds in ["EFRBTree"] # TODO: add support of weak ptr to CDRC
     return is_invalid
 
 

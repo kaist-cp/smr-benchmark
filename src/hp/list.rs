@@ -356,7 +356,7 @@ where
     K: Ord,
 {
     /// Pop the first element efficiently.
-    /// This method is used for only the fine grained benchmark (src/bin/fine_grained_bench).
+    /// This method is used for only the fine grained benchmark (src/bin/long_running).
     pub fn pop<'domain, 'hp>(&self, handle: &'hp mut Handle<'domain>) -> Option<(&'hp K, &'hp V)> {
         self.inner.pop(handle)
     }

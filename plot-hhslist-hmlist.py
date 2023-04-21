@@ -1,5 +1,3 @@
-# (HP++ HHSList) vs (HP HMList): Throughput
-
 import pandas as pd
 from plotnine import *
 import matplotlib.pyplot as plt
