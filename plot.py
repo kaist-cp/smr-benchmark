@@ -4,7 +4,6 @@ from plotnine import *
 import warnings
 import os
 import matplotlib
-import math
 
 RESULTS_PATH = "results"
 

@@ -6,7 +6,7 @@ import os
 import matplotlib
 import math
 
-RESULTS_PATH = "results-fine-grained"
+RESULTS_PATH = "results"
 
 warnings.filterwarnings("ignore")
 pd.set_option('display.max_rows', None)
@@ -117,7 +117,7 @@ def draw_throughput(data):
 
 
 # preprocess
-data = pd.read_csv(f'{RESULTS_PATH}/result.csv')
+data = pd.read_csv(f'{RESULTS_PATH}/long-running.csv')
 
 data.peak_mem = data.peak_mem.map(lambda x: x / (2 ** 20))
 data.avg_mem = data.avg_mem.map(lambda x: x / (2 ** 20))

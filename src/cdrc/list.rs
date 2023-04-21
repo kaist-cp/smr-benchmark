@@ -480,7 +480,7 @@ where
     Guard: AcquireRetire,
 {
     /// Pop the first element efficiently.
-    /// This method is used for only the fine grained benchmark (src/bin/fine_grained_bench).
+    /// This method is used for only the fine grained benchmark (src/bin/long_running).
     pub fn pop<'g>(&'g self, guard: &'g Guard) -> Option<(&'g K, &'g V)> {
         self.inner.pop(guard)
     }
