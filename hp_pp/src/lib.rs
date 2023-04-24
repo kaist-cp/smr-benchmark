@@ -5,6 +5,7 @@ mod tag;
 mod thread;
 
 pub use hazard::HazardPointer;
+pub use hazard::ProtectError;
 pub use membarrier::light_membarrier;
 pub use tag::*;
 
