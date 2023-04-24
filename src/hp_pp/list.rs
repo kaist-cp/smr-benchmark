@@ -98,7 +98,6 @@ where
         let mut curr_origin = self.prev;
         let mut curr = unsafe { &*curr_origin }.next.load(Ordering::Acquire);
         let mut prev_next = curr;
-        let mut to_be_unlinked = Vec::with_capacity(32);
 
         let found = loop {
             if curr.is_null() {
@@ -131,19 +130,16 @@ where
             match (curr_node.key.cmp(key), tag(next)) {
                 (Less, tag) => {
                     curr_origin = curr;
-                    to_be_unlinked.push(curr);
                     curr = untagged(next);
                     if (tag & 1) == 0 {
                         mem::swap(&mut self.prev, &mut self.curr);
                         mem::swap(&mut self.handle.prev_h, &mut self.handle.curr_h);
                         prev_next = untagged(next);
-                        to_be_unlinked.clear();
                     }
                 }
                 (cmp, 0) => break cmp == Equal,
                 _ => {
                     curr_origin = curr;
-                    to_be_unlinked.push(curr);
                     curr = untagged(next);
                 }
             }
@@ -158,7 +154,20 @@ where
         if unsafe {
             !try_unlink(
                 slice::from_ref(&curr),
-                &to_be_unlinked,
+                || {
+                    let mut collected = Vec::with_capacity(16);
+                    let mut node = prev_next;
+                    loop {
+                        if untagged(node) == curr {
+                            break;
+                        }
+                        let node_ref = node.as_ref().unwrap();
+                        let next = node_ref.next.load(Ordering::Acquire);
+                        collected.push(node);
+                        node = next;
+                    }
+                    collected
+                },
                 || {
                     (&*self.prev)
                         .next
@@ -214,11 +223,10 @@ where
                 }
             } else {
                 let links = slice::from_ref(&next_base);
-                let to_be_unlinked = slice::from_ref(&self.curr);
                 if unsafe {
                     !try_unlink(
                         links,
-                        to_be_unlinked,
+                        || vec![self.curr],
                         || {
                             prev.compare_exchange(
                                 self.curr,
@@ -397,11 +405,10 @@ where
             let prev = unsafe { &(*cursor.prev).next };
 
             let links = slice::from_ref(&next);
-            let to_be_unlinked = slice::from_ref(&cursor.curr);
             unsafe {
                 try_unlink(
                     links,
-                    to_be_unlinked,
+                    || vec![cursor.curr],
                     || {
                         prev.compare_exchange(
                             cursor.curr,
