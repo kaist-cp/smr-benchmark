@@ -421,7 +421,15 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             _ => panic!("Unsupported data structure for HP"),
         },
         MM::HP_PP => match config.ds {
+            DS::HList => bench_map_hp_pp::<hp_pp::HList<String, String>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
             DS::HMList => bench_map_hp_pp::<hp_pp::HMList<String, String>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::HHSList => bench_map_hp_pp::<hp_pp::HHSList<String, String>, N>(
                 config,
                 PrefillStrategy::Decreasing,
             ),

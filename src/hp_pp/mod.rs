@@ -5,5 +5,5 @@ pub mod michael_hash_map;
 
 pub use self::concurrent_map::ConcurrentMap;
 
-pub use self::list::HMList;
+pub use self::list::{HList, HMList, HHSList};
 pub use self::michael_hash_map::HashMap;
