@@ -37,19 +37,20 @@ pub unsafe fn retire<T>(ptr: *mut T) {
 /// # Safety
 /// * The memory blocks in `to_be_unlinked` are no longer modified.
 /// * TODO
-pub unsafe fn try_unlink<T, F1, F2>(
+pub unsafe fn try_unlink<T, F1, F2, F3>(
     links: &[*mut T],
-    to_be_unlinked: &[*mut T],
-    do_unlink: F1,
-    set_stop: F2,
+    collect_unlinked: F1,
+    do_unlink: F2,
+    set_stop: F3,
 ) -> bool
 where
-    F1: FnOnce() -> bool,
-    F2: Fn(*mut T),
+    F1: FnOnce() -> Vec<*mut T>,
+    F2: FnOnce() -> bool,
+    F3: Fn(*mut T),
 {
     DEFAULT_THREAD.with(|t| {
         t.borrow_mut()
-            .try_unlink(links, to_be_unlinked, do_unlink, set_stop)
+            .try_unlink(links, collect_unlinked, do_unlink, set_stop)
     })
 }
 

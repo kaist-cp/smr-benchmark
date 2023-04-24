@@ -436,6 +436,9 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             DS::HashMap => {
                 bench_map_hp_pp::<hp_pp::HashMap<String, String>, N>(config, PrefillStrategy::Decreasing)
             }
+            DS::NMTree => {
+                bench_map_hp_pp::<hp_pp::NMTreeMap<String, String>, N>(config, PrefillStrategy::Random)
+            }
             _ => panic!("Unsupported data structure for HP++"),
         },
     };
