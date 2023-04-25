@@ -397,7 +397,7 @@ where
             }
 
             let curr_node = unsafe { cursor.curr.as_ref() }.unwrap();
-            let next = curr_node.next.fetch_or(1, Ordering::Relaxed, guard);
+            let next = curr_node.next.fetch_or(1, Ordering::AcqRel, guard);
             if next.tag() == 1 {
                 continue;
             }
@@ -456,7 +456,7 @@ where
             .map_err(FindError::ShieldError)?;
 
         let curr_node = unsafe { cursor.curr.as_ref() }.unwrap();
-        let next = curr_node.next.fetch_or(1, Ordering::Relaxed, guard);
+        let next = curr_node.next.fetch_or(1, Ordering::AcqRel, guard);
         if next.tag() == 1 {
             return Err(FindError::Retry);
         }

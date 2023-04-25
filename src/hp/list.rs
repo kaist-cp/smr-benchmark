@@ -233,7 +233,7 @@ where
             }
 
             let curr_node = unsafe { &*cursor.curr };
-            let next = curr_node.next.fetch_or(1, Ordering::Acquire);
+            let next = curr_node.next.fetch_or(1, Ordering::AcqRel);
             let next_tag = tag(next);
             if next_tag == 1 {
                 continue;
@@ -291,7 +291,7 @@ where
 
         let curr_node = unsafe { &*cursor.curr };
 
-        let next = curr_node.next.fetch_or(1, Ordering::Acquire);
+        let next = curr_node.next.fetch_or(1, Ordering::AcqRel);
         let next_tag = tag(next);
         if next_tag == 1 {
             return Err(());
