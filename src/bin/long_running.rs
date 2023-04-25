@@ -195,9 +195,7 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
 
     let output_name = &m
         .value_of("output")
-        .map_or(format!("results/long-running.csv"), |o| {
-            o.to_string()
-        });
+        .map_or(format!("results/long-running.csv"), |o| o.to_string());
     create_dir_all("results").unwrap();
     let output = match OpenOptions::new()
         .read(true)
