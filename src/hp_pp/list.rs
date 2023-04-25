@@ -29,14 +29,10 @@ where
 
 impl<K, V> Drop for List<K, V> {
     fn drop(&mut self) {
-        unsafe {
-            let mut curr = *self.head.get_mut();
+        let mut curr = untagged(*self.head.get_mut());
 
-            while !curr.is_null() {
-                let next = untagged(*(*curr).next.get_mut());
-                drop(Box::from_raw(curr));
-                curr = next;
-            }
+        while !curr.is_null() {
+            curr = untagged(*unsafe { Box::from_raw(curr) }.next.get_mut());
         }
     }
 }
@@ -116,7 +112,7 @@ impl<'r, 'domain, 'hp, K, V> hp_pp::Unlink<Node<K, V>> for HarrisUnlink<'r, 'dom
                     break;
                 }
                 let node_ref = unsafe { node.as_ref() }.unwrap();
-                let next_base = untagged(node_ref.next.load(Ordering::Acquire));
+                let next_base = untagged(node_ref.next.load(Ordering::Relaxed));
                 collected.push(node);
                 node = next_base;
             }
@@ -407,7 +403,7 @@ where
             }
 
             let curr_node = unsafe { &*cursor.curr };
-            let next = curr_node.next.fetch_or(1, Ordering::Relaxed);
+            let next = curr_node.next.fetch_or(1, Ordering::Acquire);
             let next_tag = tag(next);
             if next_tag == 1 {
                 continue;
@@ -462,7 +458,7 @@ where
             }
 
             let curr_node = unsafe { &*cursor.curr };
-            let next = curr_node.next.fetch_or(1, Ordering::Relaxed);
+            let next = curr_node.next.fetch_or(1, Ordering::Acquire);
             let next_tag = tag(next);
             if (next_tag & 1) != 0 {
                 continue;
