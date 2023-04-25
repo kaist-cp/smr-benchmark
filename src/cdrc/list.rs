@@ -234,10 +234,14 @@ where
     pub fn remove(self, guard: &'g Guard) -> Result<&'g V, ()> {
         let curr_node = unsafe { self.curr.deref() };
 
-        let next = curr_node.next.fetch_or(1, guard);
+        let next = curr_node.next.load_snapshot(guard);
         if next.mark() == 1 {
             return Err(());
         }
+        curr_node
+            .next
+            .compare_exchange_mark(&next, 1, guard)
+            .map_err(|_| ())?;
 
         let _ = unsafe { self.prev.deref() }
             .next
@@ -340,8 +344,13 @@ where
 
             let curr_node = unsafe { cursor.curr.deref() };
 
-            let next = curr_node.next.fetch_or(1, guard);
-            if next.mark() == 1 {
+            let next = curr_node.next.load_snapshot(guard);
+            if next.mark() == 1
+                || curr_node
+                    .next
+                    .compare_exchange_mark(&next, 1, guard)
+                    .is_err()
+            {
                 continue;
             }
 
