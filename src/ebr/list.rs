@@ -215,7 +215,7 @@ where
     pub fn remove(self, guard: &'g Guard) -> Result<&'g V, ()> {
         let curr_node = unsafe { self.curr.deref() };
 
-        let next = curr_node.next.fetch_or(1, Ordering::Acquire, guard);
+        let next = curr_node.next.fetch_or(1, Ordering::AcqRel, guard);
         if next.tag() == 1 {
             return Err(());
         }
@@ -323,7 +323,7 @@ where
 
             let curr_node = unsafe { cursor.curr.deref() };
 
-            let next = curr_node.next.fetch_or(1, Ordering::Acquire, guard);
+            let next = curr_node.next.fetch_or(1, Ordering::AcqRel, guard);
             if next.tag() == 1 {
                 continue;
             }
