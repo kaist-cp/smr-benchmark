@@ -18,8 +18,8 @@ nbr-rs = { path = "./nbr-rs" }
 cdrc-rs = { path = "./cdrc-rs" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-jemallocator = "0.5"
-jemalloc-ctl = "0.5"
+tikv-jemallocator = "0.5"
+tikv-jemalloc-ctl = "0.5"
 
 [dependencies.crossbeam-ebr]
 package = "crossbeam-epoch"
