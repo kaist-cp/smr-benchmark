@@ -74,16 +74,16 @@ struct Config {
 
 cfg_if! {
     if #[cfg(all(not(feature = "sanitize"), target_os = "linux"))] {
-        extern crate jemalloc_ctl;
+        extern crate tikv_jemalloc_ctl;
         struct MemSampler {
-            epoch_mib: jemalloc_ctl::epoch_mib,
-            allocated_mib: jemalloc_ctl::stats::allocated_mib,
+            epoch_mib: tikv_jemalloc_ctl::epoch_mib,
+            allocated_mib: tikv_jemalloc_ctl::stats::allocated_mib,
         }
         impl MemSampler {
             pub fn new() -> Self {
                 MemSampler {
-                    epoch_mib: jemalloc_ctl::epoch::mib().unwrap(),
-                    allocated_mib: jemalloc_ctl::stats::allocated::mib().unwrap(),
+                    epoch_mib: tikv_jemalloc_ctl::epoch::mib().unwrap(),
+                    allocated_mib: tikv_jemalloc_ctl::stats::allocated::mib().unwrap(),
                 }
             }
             pub fn sample(&self) -> usize {
