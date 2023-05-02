@@ -11,6 +11,9 @@ enum FindError {
     ShieldError(ShieldError),
 }
 
+// `#[repr(C)]` is used to ensure the first field
+// is also the first data in the memory alignment.
+#[repr(C)]
 #[derive(Debug)]
 struct Node<K, V> {
     /// Mark: tag(), Tag: not needed

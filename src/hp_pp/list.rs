@@ -6,6 +6,9 @@ use std::{mem, ptr, slice};
 
 use hp_pp::{decompose_ptr, light_membarrier, tag, tagged, try_unlink, untagged, HazardPointer};
 
+// `#[repr(C)]` is used to ensure the first field
+// is also the first data in the memory alignment.
+#[repr(C)]
 #[derive(Debug)]
 pub struct Node<K, V> {
     /// tag 1: logically deleted, tag 2: stopped

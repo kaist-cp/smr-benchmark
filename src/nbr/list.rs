@@ -6,6 +6,9 @@ use std::cmp::Ordering::{Equal, Greater, Less};
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
+// `#[repr(C)]` is used to ensure the first field
+// is also the first data in the memory alignment.
+#[repr(C)]
 #[derive(Debug)]
 struct Node<K, V> {
     next: AtomicPtr<Node<K, V>>,
