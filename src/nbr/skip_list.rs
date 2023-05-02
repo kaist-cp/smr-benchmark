@@ -10,6 +10,9 @@ pub const MAX_HEIGHT: usize = 32;
 
 type Tower<K, V> = [AtomicPtr<Node<K, V>>; MAX_HEIGHT];
 
+// `#[repr(C)]` is used to ensure the first field
+// is also the first data in the memory alignment.
+#[repr(C)]
 struct Node<K, V> {
     next: Tower<K, V>,
     key: K,
