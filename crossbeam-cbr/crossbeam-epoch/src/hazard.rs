@@ -81,7 +81,9 @@ impl HazardNode {
 
         self.valid_bits
             .store(valid_bits | (1 << index), Ordering::Relaxed);
-        self.elements.get_unchecked(index).store(data, Ordering::Relaxed);
+        self.elements
+            .get_unchecked(index)
+            .store(data, Ordering::Relaxed);
         Some(index)
     }
 
@@ -96,7 +98,9 @@ impl HazardNode {
         let valid_bits = valid_bits & !(1 << index);
         fence(Ordering::Release);
         self.valid_bits.store(valid_bits, Ordering::Relaxed);
-        self.elements.get_unchecked(index).store(0, Ordering::Relaxed);
+        self.elements
+            .get_unchecked(index)
+            .store(0, Ordering::Relaxed);
 
         valid_bits == 0
     }
@@ -146,7 +150,12 @@ impl Iterator for HazardNodeIter {
             }
 
             self.valid_bits &= !(1 << index);
-            let value = unsafe { (*self.set).elements.get_unchecked(index).load(Ordering::Acquire) };
+            let value = unsafe {
+                (*self.set)
+                    .elements
+                    .get_unchecked(index)
+                    .load(Ordering::Acquire)
+            };
 
             if value != 0 {
                 return Some(value);
@@ -167,11 +176,7 @@ impl Drop for HazardSet {
             let guard = unprotected();
             let mut pred = Shield::null(guard);
             let mut curr = Shield::null(guard);
-            for node in self
-                .inner
-                .iter(&mut pred, &mut curr, true, guard)
-                .unwrap()
-            {
+            for node in self.inner.iter(&mut pred, &mut curr, true, guard).unwrap() {
                 let node = &*(node.unwrap());
                 node.entry.delete();
             }
@@ -182,9 +187,7 @@ impl Drop for HazardSet {
 impl HazardSet {
     /// Creates a new hazard set.
     pub fn new() -> Self {
-        Self {
-            inner: List::new(),
-        }
+        Self { inner: List::new() }
     }
 
     /// Creates an iterator over the hazard set.
@@ -236,22 +239,30 @@ impl HazardSet {
     /// The caller should be the "owner" of this set.
     #[must_use]
     #[inline]
-    pub unsafe fn acquire(
-        &self,
-        data: usize,
-        guard: &EpochGuard,
-    ) -> (*const HazardNode, usize) {
+    pub unsafe fn acquire(&self, data: usize, guard: &EpochGuard) -> (*const HazardNode, usize) {
         repeat_iter(|| self.acquire_inner(data, guard)).unwrap()
     }
 
     /// Creates an approximate summary of the hazard set.
     #[inline]
-    pub fn make_summary(&self, is_curr_thread: bool, guard: &EpochGuard) -> Result<Option<BloomFilter>, IterError> {
+    pub fn make_summary(
+        &self,
+        is_curr_thread: bool,
+        guard: &EpochGuard,
+    ) -> Result<Option<BloomFilter>, IterError> {
         let mut visited = false;
         let mut filter = BloomFilter::new();
 
-        let mut pred = Shield::null(if is_curr_thread { unsafe { unprotected() } } else { guard });
-        let mut curr = Shield::null(if is_curr_thread { unsafe { unprotected() } } else { guard });
+        let mut pred = Shield::null(if is_curr_thread {
+            unsafe { unprotected() }
+        } else {
+            guard
+        });
+        let mut curr = Shield::null(if is_curr_thread {
+            unsafe { unprotected() }
+        } else {
+            guard
+        });
 
         for hazard in self
             .iter(&mut pred, &mut curr, is_curr_thread, guard)
@@ -376,8 +387,7 @@ impl<T> Shield<T> {
             // Acquire a handle so that the underlying thread-local storage is not deallocated.
             local.acquire_handle();
 
-            let (node, index) =
-                unsafe { local.hazards.acquire(0, guard) };
+            let (node, index) = unsafe { local.hazards.acquire(0, guard) };
 
             Self {
                 data: 0,
@@ -589,7 +599,11 @@ impl<T> Shield<T> {
     ///
     /// [`Shield`]: struct.Shield.html
     #[must_use]
-    pub fn defend<'g>(&mut self, ptr: Shared<'g, T>, guard: &'g EpochGuard) -> Result<(), ShieldError> {
+    pub fn defend<'g>(
+        &mut self,
+        ptr: Shared<'g, T>,
+        guard: &'g EpochGuard,
+    ) -> Result<(), ShieldError> {
         let data = ptr.into_usize();
         self.data = data;
         unsafe {

@@ -7,7 +7,7 @@ use crate::deferred::Deferred;
 use crate::garbage::Garbage;
 use crate::internal::Local;
 
-use crate::rc_ptrs::Localizable;
+use crate::rc::Localizable;
 
 /// A guard that keeps the current thread pinned.
 ///
@@ -458,7 +458,7 @@ impl EpochGuard {
     pub fn read<'r, F, P>(&mut self, f: F) -> P::Localized
     where
         F: Fn(&'r mut ReadGuard) -> P,
-        P: Localizable<'r>
+        P: Localizable<'r>,
     {
         todo!()
     }
@@ -467,7 +467,7 @@ impl EpochGuard {
     where
         F1: Fn(&'r mut ReadGuard) -> P,
         F2: Fn(&mut P, &'r mut ReadGuard) -> ReadStatus,
-        P: Localizable<'r>
+        P: Localizable<'r>,
     {
         todo!()
     }
@@ -585,32 +585,22 @@ pub enum ReadStatus {
     Continue,
 }
 
-pub struct ReadGuard {
-
-}
+pub struct ReadGuard {}
 
 impl ReadGuard {
     pub fn write<'r, D, F>(&'r mut self, to_deref: D, f: F)
     where
         D: Localizable<'r>,
-        F: Fn(&D::Localized, &WriteGuard)
+        F: Fn(&D::Localized, &WriteGuard),
     {
         todo!()
     }
 }
 
-pub struct WriteGuard {
+pub struct WriteGuard {}
 
-}
+pub trait Writable {}
 
-pub trait Writable {
-    
-}
+impl Writable for EpochGuard {}
 
-impl Writable for EpochGuard {
-
-}
-
-impl Writable for WriteGuard {
-
-}
+impl Writable for WriteGuard {}

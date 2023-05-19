@@ -107,16 +107,13 @@ cfg_if! {
         mod sync;
         mod tag;
         mod recovery;
-        mod rc_utils;
-        mod rc_ptrs;
+        pub mod rc;
 
         pub use self::atomic::{Atomic, CompareAndSetError, CompareAndSetOrdering, Owned, Pointer, Shared};
         pub use self::collector::{Collector, LocalHandle};
         pub use self::guard::{unprotected, EpochGuard, ReadGuard, WriteGuard, Writable, ReadStatus};
         pub use self::hazard::{Shield, ShieldError};
         pub use self::recovery::{ejection_signal, set_ejection_signal};
-        pub use self::rc_utils::Counted;
-        pub use self::rc_ptrs::{AtomicRcPtr, ReadPtr, RcPtr, LocalPtr, AcquiredPtr, Localizable};
     }
 }
 

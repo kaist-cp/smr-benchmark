@@ -1,8 +1,5 @@
 use core::{mem, sync::atomic::AtomicU32};
-use static_assertions::const_assert;
-use std::{sync::atomic::Ordering, mem::ManuallyDrop, ptr, sync::atomic::compiler_fence};
-
-use crate::{Shared, tag::{low_bits, data_with_tag}};
+use std::{mem::ManuallyDrop, sync::atomic::compiler_fence, sync::atomic::Ordering};
 
 /// A wait-free atomic counter that supports increment and decrement,
 /// such that attempting to increment the counter from zero fails and
@@ -36,7 +33,9 @@ impl StickyCounter {
 
     #[inline(always)]
     pub fn new() -> Self {
-        Self { x: AtomicU32::new(1) }
+        Self {
+            x: AtomicU32::new(1),
+        }
     }
 
     /// Increment the counter by the given amount if the counter is not zero.

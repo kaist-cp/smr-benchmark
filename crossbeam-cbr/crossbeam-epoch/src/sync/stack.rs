@@ -1,6 +1,6 @@
 use std::mem::ManuallyDrop;
 use std::ptr;
-use std::sync::atomic::Ordering::{Acquire, Relaxed, AcqRel, Release};
+use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
 
 use crate::atomic::{Atomic, Owned};
 use crate::guard::{unprotected, EpochGuard};
@@ -64,15 +64,12 @@ impl<T> Stack<T> {
             head_shield.defend(head, guard)?;
             let head_ref = unsafe { head_shield.deref() };
             let next = head_ref.next.load(Acquire, guard);
-            match self
-                .head
-                .compare_and_set(head, next, AcqRel, guard)
-            {
+            match self.head.compare_and_set(head, next, AcqRel, guard) {
                 Ok(_) => unsafe {
                     let data = ManuallyDrop::into_inner(ptr::read(&(*head_ref).data));
                     guard.defer_destroy_internal(head);
                     return Ok(Some(data));
-                }
+                },
                 Err(e) => head = e.current,
             }
         }
@@ -89,8 +86,8 @@ impl<T> Drop for Stack<T> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crossbeam_utils::thread;
     use crate::pin;
+    use crossbeam_utils::thread;
 
     #[test]
     fn smoke() {

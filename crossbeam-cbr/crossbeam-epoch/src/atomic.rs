@@ -246,7 +246,12 @@ impl<T> Atomic<T> {
     /// let guard = &epoch::pin();
     /// let p = a.swap(Shared::null(), SeqCst, guard);
     /// ```
-    pub fn swap<'g, P: Pointer<T>>(&self, new: P, ord: Ordering, _: &'g EpochGuard) -> Shared<'g, T> {
+    pub fn swap<'g, P: Pointer<T>>(
+        &self,
+        new: P,
+        ord: Ordering,
+        _: &'g EpochGuard,
+    ) -> Shared<'g, T> {
         unsafe { Shared::from_usize(self.data.swap(new.into_usize(), ord)) }
     }
 

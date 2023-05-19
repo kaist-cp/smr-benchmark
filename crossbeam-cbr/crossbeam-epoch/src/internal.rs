@@ -38,9 +38,9 @@
 use core::cell::{Cell, UnsafeCell};
 use core::cmp;
 use core::mem::{self, ManuallyDrop};
-use core::ptr;
-use core::sync::atomic::{self, Ordering, AtomicUsize};
 use core::ops::Deref;
+use core::ptr;
+use core::sync::atomic::{self, AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
 use membarrier;
@@ -51,10 +51,10 @@ use crate::collector::{Collector, LocalHandle};
 use crate::garbage::{Bag, Garbage};
 use crate::guard::{unprotected, EpochGuard};
 use crate::hazard::{HazardSet, Shield, ShieldError};
-use nix::sys::pthread::{Pthread, pthread_self};
 use crate::sync::list::{repeat_iter, Entry, IsElement, IterError, List};
 use crate::sync::stack::Stack;
 use crate::tag::*;
+use nix::sys::pthread::{pthread_self, Pthread};
 
 use crate::recovery;
 
@@ -406,7 +406,10 @@ pub struct Local {
     pub(crate) pthread: Pthread,
 }
 
-const_assert_eq!(Local::COUNTS_BETWEEN_FORCE_ADVANCE % Local::COUNTS_BETWEEN_TRY_ADVANCE, 0);
+const_assert_eq!(
+    Local::COUNTS_BETWEEN_FORCE_ADVANCE % Local::COUNTS_BETWEEN_TRY_ADVANCE,
+    0
+);
 
 impl Local {
     /// Number of pinnings after which a participant will execute some deferred functions from the
@@ -491,9 +494,7 @@ impl Local {
         // HACK(@jeehoonkang): It is inside a very hot loop, but LLVM cannot optimize the above
         // lines...
         let tag = local_status.tag();
-        if tag & StatusFlags::PINNED.bits() != 0 &&
-            tag & StatusFlags::EJECTING.bits() == 0
-        {
+        if tag & StatusFlags::PINNED.bits() != 0 && tag & StatusFlags::EJECTING.bits() == 0 {
             Ok(tag & StatusFlags::EPOCH.bits())
         } else {
             Err(ShieldError::Ejected)
@@ -524,7 +525,9 @@ impl Local {
             let local_status = self.status.load(Ordering::Acquire, guard);
             let local_flags = StatusFlags::from_bits_truncate(local_status.tag());
             let is_forcing = advance_count % Self::COUNTS_BETWEEN_FORCE_ADVANCE == 0;
-            let _ = self.global().advance(local_flags.epoch(), is_forcing, &guard);
+            let _ = self
+                .global()
+                .advance(local_flags.epoch(), is_forcing, &guard);
         }
         // After every `COUNTS_BETWEEN_COLLECT` try collecting some old garbage bags.
         else if is_forcing || collect_count % Self::COUNTS_BETWEEN_COLLECT == 0 {
@@ -610,10 +613,12 @@ impl Local {
                     // very differently from SC accesses), but experimental evidence suggests that
                     // this works fine.  Using inline assembly would be a viable (and correct)
                     // alternative, but alas, that is not possible on stable Rust.
-                    if let Err(e) = self
-                        .status
-                        .compare_and_set(local_status, new_status, Ordering::SeqCst, &guard)
-                    {
+                    if let Err(e) = self.status.compare_and_set(
+                        local_status,
+                        new_status,
+                        Ordering::SeqCst,
+                        &guard,
+                    ) {
                         local_status = e.current;
                         continue;
                     } else {
@@ -625,10 +630,12 @@ impl Local {
                     // should go a long way.
                     atomic::compiler_fence(Ordering::SeqCst);
                 } else {
-                    if let Err(e) = self
-                        .status
-                        .compare_and_set(local_status, new_status, Ordering::AcqRel, &guard)
-                    {
+                    if let Err(e) = self.status.compare_and_set(
+                        local_status,
+                        new_status,
+                        Ordering::AcqRel,
+                        &guard,
+                    ) {
                         local_status = e.current;
                         continue;
                     } else {
@@ -679,7 +686,9 @@ impl Local {
                 // Update status only if `self` is not already unpinned.
                 if flags.is_pinned() {
                     // Creates a summary of the set of hazard pointers.
-                    let new_status = self.hazards.make_summary(true, guard)
+                    let new_status = self
+                        .hazards
+                        .make_summary(true, guard)
                         // `IterError` is impossible with the `unprotected()` guard.
                         .unwrap()
                         .map(|summary| Owned::new(CachePadded::new(summary)).into_shared(guard))
@@ -778,7 +787,9 @@ impl Local {
         }
 
         // Heavy fence to synchronize with `Self::get_epoch()`.
-        unsafe { membarrier::heavy_membarrier(); }
+        unsafe {
+            membarrier::heavy_membarrier();
+        }
 
         // Protects the current status to prevent the ABA problem.
         let _shield = Shield::new(status, guard)?;
@@ -802,23 +813,24 @@ impl Local {
             .with_tag(StatusFlags::new(true, false, flags.epoch()).bits());
 
         // Replaces the old status with the new one.
-        let return_status = match self
-            .status
-            .compare_and_set(status, new_status, Ordering::AcqRel, guard)
-        {
-            Ok(_) => unsafe {
-                if !status.is_null() {
-                    guard.defer_destroy(status);
-                }
-                new_status
-            },
-            Err(e) => unsafe {
-                if !e.new.is_null() {
-                    drop(e.new.into_owned());
-                }
-                e.current
-            },
-        };
+        let return_status =
+            match self
+                .status
+                .compare_and_set(status, new_status, Ordering::AcqRel, guard)
+            {
+                Ok(_) => unsafe {
+                    if !status.is_null() {
+                        guard.defer_destroy(status);
+                    }
+                    new_status
+                },
+                Err(e) => unsafe {
+                    if !e.new.is_null() {
+                        drop(e.new.into_owned());
+                    }
+                    e.current
+                },
+            };
 
         Ok(return_status)
     }

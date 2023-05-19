@@ -1,6 +1,7 @@
 use core::marker::PhantomData;
 
-use crate::{Shield, EpochGuard, rc_utils::Counted, Pointer, Shared, Atomic, ReadGuard, Writable};
+use super::utils::Counted;
+use crate::{Atomic, EpochGuard, Pointer, ReadGuard, Shared, Shield, Writable};
 
 pub struct AtomicRcPtr<T> {
     link: Atomic<Counted<T>>,
@@ -19,12 +20,12 @@ impl<T> AtomicRcPtr<T> {
     pub fn null() -> Self {
         todo!()
     }
-    
+
     #[inline]
     pub fn store<P, G>(&self, ptr: &P, guard: &G)
     where
         P: AcquiredPtr<T>,
-        G: Writable
+        G: Writable,
     {
         todo!()
     }
@@ -33,7 +34,7 @@ impl<T> AtomicRcPtr<T> {
     pub fn consume<P, G>(&self, ptr: P, guard: &G)
     where
         P: AcquiredPtr<T>,
-        G: Writable
+        G: Writable,
     {
         todo!()
     }
@@ -59,7 +60,12 @@ impl<T> AtomicRcPtr<T> {
     }
 
     #[inline]
-    pub fn compare_exchange<P1, P2, G>(&self, expected: &P1, desired: &P2, guard: &G) -> Result<(), LocalPtr<T>>
+    pub fn compare_exchange<P1, P2, G>(
+        &self,
+        expected: &P1,
+        desired: &P2,
+        guard: &G,
+    ) -> Result<(), LocalPtr<T>>
     where
         P1: AcquiredPtr<T>,
         P2: AcquiredPtr<T>,
@@ -79,7 +85,12 @@ impl<T> AtomicRcPtr<T> {
     }
 
     #[inline]
-    pub fn compare_exchange_tag<P, G>(&self, expected: &P, tag: usize, guard: &G) -> Result<(), LocalPtr<T>>
+    pub fn compare_exchange_tag<P, G>(
+        &self,
+        expected: &P,
+        tag: usize,
+        guard: &G,
+    ) -> Result<(), LocalPtr<T>>
     where
         P: AcquiredPtr<T>,
         G: Writable,
@@ -109,7 +120,9 @@ pub struct ReadPtr<'r, T> {
 
 impl<'r, T> Clone for ReadPtr<'r, T> {
     fn clone(&self) -> Self {
-        Self { ptr: self.ptr.clone() }
+        Self {
+            ptr: self.ptr.clone(),
+        }
     }
 }
 
@@ -123,7 +136,9 @@ impl<'r, T> ReadPtr<'r, T> {
 
     #[inline]
     pub fn null() -> Self {
-        Self { ptr: Shared::null() }
+        Self {
+            ptr: Shared::null(),
+        }
     }
 
     #[inline]
@@ -166,9 +181,7 @@ unsafe impl<T> Sync for LocalPtr<T> {}
 impl<T> LocalPtr<T> {
     #[inline]
     pub(crate) fn new(shield: Shield<Counted<T>>) -> Self {
-        Self {
-            shield,
-        }
+        Self { shield }
     }
 
     #[inline]
@@ -222,7 +235,7 @@ pub struct RcPtr<T> {
     // That is, the lifetime of the object is equal to or longer than
     // the lifetime of this object.
     ptr: *mut T,
-    _marker: PhantomData<T>
+    _marker: PhantomData<T>,
 }
 
 unsafe impl<T> Send for RcPtr<T> {}

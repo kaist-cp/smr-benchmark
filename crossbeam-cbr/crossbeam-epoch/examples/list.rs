@@ -1,7 +1,8 @@
 extern crate crossbeam_cbr_epoch;
 
 use crossbeam_cbr_epoch::{
-    AcquiredPtr, AtomicRcPtr, EpochGuard, LocalPtr, Localizable, RcPtr, ReadGuard, ReadPtr, ReadStatus,
+    rc::{AcquiredPtr, AtomicRcPtr, LocalPtr, Localizable, RcPtr, ReadPtr},
+    EpochGuard, ReadGuard, ReadStatus,
 };
 
 struct Node<K, V> {

@@ -301,10 +301,10 @@ impl<'g, T: 'g, C: IsElement<T>> Iterator for Iter<'g, T, C> {
 
             // Move one step forward.
             mem::swap(&mut self.pred, &mut self.curr);
-            if let Err(e) = self.curr.defend(
-                unsafe { element_of_shared::<T, C>(self.succ) },
-                self.guard,
-            ) {
+            if let Err(e) = self
+                .curr
+                .defend(unsafe { element_of_shared::<T, C>(self.succ) }, self.guard)
+            {
                 return Some(Err(IterError::ShieldError(e)));
             }
 
@@ -326,8 +326,7 @@ impl<'g, T: 'g, C: IsElement<T>> Iterator for Iter<'g, T, C> {
                         succ,
                         AcqRel,
                         self.guard,
-                    )
-                {
+                    ) {
                     Ok(_) => {
                         // We succeeded in unlinking this element from the list, so we have to
                         // schedule deallocation. Deferred drop is okay, because `list.delete()` can
@@ -393,9 +392,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Collector, Owned};
     use crossbeam_utils::thread;
     use std::sync::Barrier;
-    use crate::{Collector, Owned};
 
     impl IsElement<Entry> for Entry {
         fn entry_of(entry: &Entry) -> &Entry {
