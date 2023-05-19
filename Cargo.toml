@@ -29,6 +29,10 @@ path = "crossbeam-ebr/crossbeam-epoch"
 package = "crossbeam-pebr-epoch"
 path = "crossbeam-pebr/crossbeam-epoch"
 
+[dependencies.crossbeam-cbr]
+package = "crossbeam-cbr-epoch"
+path = "crossbeam-cbr/crossbeam-epoch"
+
 # TODO: remove this
 [profile.release]
 debug = true
