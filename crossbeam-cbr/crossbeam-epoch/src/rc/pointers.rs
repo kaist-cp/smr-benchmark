@@ -1,16 +1,16 @@
 use core::marker::PhantomData;
 
 use super::utils::Counted;
-use crate::{Atomic, EpochGuard, Pointer, ReadGuard, Shared, Shield, Writable};
+use crate::{EpochGuard, Pointer, ReadGuard, Writable};
 
-pub struct AtomicRcPtr<T> {
-    link: Atomic<Counted<T>>,
+pub struct Atomic<T> {
+    link: crate::Atomic<Counted<T>>,
 }
 
-unsafe impl<T> Send for AtomicRcPtr<T> {}
-unsafe impl<T> Sync for AtomicRcPtr<T> {}
+unsafe impl<T> Send for Atomic<T> {}
+unsafe impl<T> Sync for Atomic<T> {}
 
-impl<T> AtomicRcPtr<T> {
+impl<T> Atomic<T> {
     #[inline]
     pub fn new(init: T) -> Self {
         todo!()
@@ -40,22 +40,22 @@ impl<T> AtomicRcPtr<T> {
     }
 
     #[inline]
-    pub fn load_rc<G: Writable>(&self, guard: &G) -> RcPtr<T> {
+    pub fn load_rc<G: Writable>(&self, guard: &G) -> Rc<T> {
         todo!()
     }
 
     #[inline]
-    pub fn load_local<G: Writable>(&self, guard: &G) -> LocalPtr<T> {
+    pub fn load_local<G: Writable>(&self, guard: &G) -> Shield<T> {
         todo!()
     }
 
     #[inline]
-    pub fn load_local_with<G: Writable>(&self, dst: &mut LocalPtr<T>, guard: &G) {
+    pub fn load_local_with<G: Writable>(&self, dst: &mut Shield<T>, guard: &G) {
         todo!()
     }
 
     #[inline]
-    pub fn load_read<'r>(&self, guard: &'r ReadGuard) -> ReadPtr<'r, T> {
+    pub fn load_read<'r>(&self, guard: &'r ReadGuard) -> Shared<'r, T> {
         todo!()
     }
 
@@ -65,7 +65,7 @@ impl<T> AtomicRcPtr<T> {
         expected: &P1,
         desired: &P2,
         guard: &G,
-    ) -> Result<(), LocalPtr<T>>
+    ) -> Result<(), Shield<T>>
     where
         P1: AcquiredPtr<T>,
         P2: AcquiredPtr<T>,
@@ -90,7 +90,7 @@ impl<T> AtomicRcPtr<T> {
         expected: &P,
         tag: usize,
         guard: &G,
-    ) -> Result<(), LocalPtr<T>>
+    ) -> Result<(), Shield<T>>
     where
         P: AcquiredPtr<T>,
         G: Writable,
@@ -108,17 +108,17 @@ impl<T> AtomicRcPtr<T> {
     }
 }
 
-impl<T> Drop for AtomicRcPtr<T> {
+impl<T> Drop for Atomic<T> {
     fn drop(&mut self) {
         todo!()
     }
 }
 
-pub struct ReadPtr<'r, T> {
-    ptr: Shared<'r, T>,
+pub struct Shared<'r, T> {
+    ptr: crate::Shared<'r, T>,
 }
 
-impl<'r, T> Clone for ReadPtr<'r, T> {
+impl<'r, T> Clone for Shared<'r, T> {
     fn clone(&self) -> Self {
         Self {
             ptr: self.ptr.clone(),
@@ -126,18 +126,18 @@ impl<'r, T> Clone for ReadPtr<'r, T> {
     }
 }
 
-impl<'r, T> Copy for ReadPtr<'r, T> {}
+impl<'r, T> Copy for Shared<'r, T> {}
 
-impl<'r, T> ReadPtr<'r, T> {
+impl<'r, T> Shared<'r, T> {
     #[inline]
-    pub(crate) fn new(ptr: Shared<'r, T>) -> Self {
+    pub(crate) fn new(ptr: crate::Shared<'r, T>) -> Self {
         Self { ptr }
     }
 
     #[inline]
     pub fn null() -> Self {
         Self {
-            ptr: Shared::null(),
+            ptr: crate::Shared::null(),
         }
     }
 
@@ -172,22 +172,22 @@ impl<'r, T> ReadPtr<'r, T> {
     }
 }
 
-pub struct LocalPtr<T> {
-    shield: Shield<Counted<T>>,
+pub struct Shield<T> {
+    shield: crate::Shield<Counted<T>>,
 }
 
-unsafe impl<T> Sync for LocalPtr<T> {}
+unsafe impl<T> Sync for Shield<T> {}
 
-impl<T> LocalPtr<T> {
+impl<T> Shield<T> {
     #[inline]
-    pub(crate) fn new(shield: Shield<Counted<T>>) -> Self {
+    pub(crate) fn new(shield: crate::Shield<Counted<T>>) -> Self {
         Self { shield }
     }
 
     #[inline]
     pub fn null(guard: &EpochGuard) -> Self {
         Self {
-            shield: Shield::null(guard),
+            shield: crate::Shield::null(guard),
         }
     }
 
@@ -219,18 +219,18 @@ impl<T> LocalPtr<T> {
     #[inline]
     pub fn with_tag(mut self, tag: usize) -> Self {
         let modified = self.shield.shared().with_tag(tag).into_usize();
-        unsafe { self.shield.defend_fake(Shared::from_usize(modified)) };
+        unsafe { self.shield.defend_fake(crate::Shared::from_usize(modified)) };
         self
     }
 }
 
-impl<T> Drop for LocalPtr<T> {
+impl<T> Drop for Shield<T> {
     fn drop(&mut self) {
         todo!()
     }
 }
 
-pub struct RcPtr<T> {
+pub struct Rc<T> {
     // Safety: `ptr` is protected by a reference counter.
     // That is, the lifetime of the object is equal to or longer than
     // the lifetime of this object.
@@ -238,17 +238,17 @@ pub struct RcPtr<T> {
     _marker: PhantomData<T>,
 }
 
-unsafe impl<T> Send for RcPtr<T> {}
-unsafe impl<T> Sync for RcPtr<T> {}
+unsafe impl<T> Send for Rc<T> {}
+unsafe impl<T> Sync for Rc<T> {}
 
-impl<T> RcPtr<T> {
+impl<T> Rc<T> {
     #[inline]
-    pub fn from_shared<'g>(ptr: Shared<'g, T>, guard: &'g EpochGuard) -> Self {
+    pub fn from_shared<'g>(ptr: crate::Shared<'g, T>, guard: &'g EpochGuard) -> Self {
         todo!()
     }
 
     #[inline]
-    pub fn from_local(ptr: &LocalPtr<T>) -> Self {
+    pub fn from_local(ptr: &Shield<T>) -> Self {
         todo!()
     }
 
@@ -297,7 +297,7 @@ pub trait AcquiredPtr<T> {
     fn has_ref_count(&self) -> bool;
 }
 
-impl<T> AcquiredPtr<T> for LocalPtr<T> {
+impl<T> AcquiredPtr<T> for Shield<T> {
     fn as_raw(&self) -> *const Counted<T> {
         todo!()
     }
@@ -307,7 +307,7 @@ impl<T> AcquiredPtr<T> for LocalPtr<T> {
     }
 }
 
-impl<T> AcquiredPtr<T> for RcPtr<T> {
+impl<T> AcquiredPtr<T> for Rc<T> {
     fn as_raw(&self) -> *const Counted<T> {
         todo!()
     }
@@ -322,8 +322,8 @@ pub trait Localizable<'r> {
     fn protect_with(self, guard: &EpochGuard) -> Self::Localized;
 }
 
-impl<'r, T> Localizable<'r> for ReadPtr<'r, T> {
-    type Localized = LocalPtr<T>;
+impl<'r, T> Localizable<'r> for Shared<'r, T> {
+    type Localized = Shield<T>;
 
     fn protect_with(self, guard: &EpochGuard) -> Self::Localized {
         todo!()

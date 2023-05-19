@@ -1,18 +1,18 @@
 extern crate crossbeam_cbr_epoch;
 
 use crossbeam_cbr_epoch::{
-    rc::{AcquiredPtr, AtomicRcPtr, LocalPtr, Localizable, RcPtr, ReadPtr},
+    rc::{AcquiredPtr, Atomic, Shield, Localizable, Rc, Shared},
     EpochGuard, ReadGuard, ReadStatus,
 };
 
 struct Node<K, V> {
-    next: AtomicRcPtr<Self>,
+    next: Atomic<Self>,
     key: K,
     value: V,
 }
 
 struct List<K, V> {
-    head: AtomicRcPtr<Node<K, V>>,
+    head: Atomic<Node<K, V>>,
 }
 
 impl<K, V> Node<K, V>
@@ -23,7 +23,7 @@ where
     /// Creates a new node.
     fn new(key: K, value: V) -> Self {
         Self {
-            next: AtomicRcPtr::null(),
+            next: Atomic::null(),
             key,
             value,
         }
@@ -33,7 +33,7 @@ where
     /// We never deref key and value of this head node.
     fn head() -> Self {
         Self {
-            next: AtomicRcPtr::null(),
+            next: Atomic::null(),
             key: K::default(),
             value: V::default(),
         }
@@ -44,19 +44,19 @@ where
 /// so that `LocalizedCursor` and the trait implementation
 /// is generated automatically.
 struct Cursor<'r, K, V> {
-    prev: ReadPtr<'r, Node<K, V>>,
-    prev_next: ReadPtr<'r, Node<K, V>>,
+    prev: Shared<'r, Node<K, V>>,
+    prev_next: Shared<'r, Node<K, V>>,
     // Tag of `curr` should always be zero so when `curr` is stored in a `prev`, we don't store a
     // marked pointer and cause cleanup to fail.
-    curr: ReadPtr<'r, Node<K, V>>,
+    curr: Shared<'r, Node<K, V>>,
     found: bool,
 }
 
 /// This struct definition must be generated automatically by a `derive` macro.
 struct LocalizedCursor<K, V> {
-    prev: LocalPtr<Node<K, V>>,
-    prev_next: LocalPtr<Node<K, V>>,
-    curr: LocalPtr<Node<K, V>>,
+    prev: Shield<Node<K, V>>,
+    prev_next: Shield<Node<K, V>>,
+    curr: Shield<Node<K, V>>,
     found: bool,
 }
 
@@ -76,7 +76,7 @@ impl<'r, K, V> Localizable<'r> for Cursor<'r, K, V> {
 
 impl<'r, K: Ord, V> Cursor<'r, K, V> {
     /// Creates a cursor.
-    fn new(head: &'r AtomicRcPtr<Node<K, V>>, guard: &'r ReadGuard) -> Self {
+    fn new(head: &'r Atomic<Node<K, V>>, guard: &'r ReadGuard) -> Self {
         let prev = head.load_read(guard);
         let curr = prev.as_ref().unwrap().next.load_read(guard);
         Self {
@@ -95,7 +95,7 @@ where
 {
     pub fn new() -> Self {
         List {
-            head: AtomicRcPtr::new(Node::head()),
+            head: Atomic::new(Node::head()),
         }
     }
 
@@ -163,7 +163,7 @@ where
             }
 
             new_node.next.store(&cursor.curr, guard);
-            let new_node_ptr = RcPtr::from_obj(new_node);
+            let new_node_ptr = Rc::from_obj(new_node);
 
             if cursor.prev.as_ref().unwrap().next.try_compare_exchange(
                 &cursor.curr,

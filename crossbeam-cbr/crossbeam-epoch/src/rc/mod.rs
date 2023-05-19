@@ -3,4 +3,4 @@
 mod pointers;
 mod utils;
 
-pub use pointers::{AcquiredPtr, AtomicRcPtr, LocalPtr, Localizable, RcPtr, ReadPtr};
+pub use pointers::{AcquiredPtr, Atomic, Shield, Localizable, Rc, Shared};
