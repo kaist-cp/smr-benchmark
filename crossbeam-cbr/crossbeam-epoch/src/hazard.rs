@@ -3,12 +3,12 @@ use core::mem;
 use core::ptr;
 use core::sync::atomic::{fence, AtomicUsize, Ordering};
 
-use atomic::{Owned, Pointer, Shared};
-use bloom_filter::BloomFilter;
-use guard::{unprotected, Guard};
-use internal::Local;
-use sync::list::{repeat_iter, Entry, IsElement, Iter as ListIter, IterError, List};
-use tag::*;
+use crate::atomic::{Owned, Pointer, Shared};
+use crate::bloom_filter::BloomFilter;
+use crate::guard::{unprotected, Guard};
+use crate::internal::Local;
+use crate::sync::list::{repeat_iter, Entry, IsElement, Iter as ListIter, IterError, List};
+use crate::tag::*;
 
 /// Node in a linked list that represents a finite set of hazard pointers.
 #[derive(Debug)]

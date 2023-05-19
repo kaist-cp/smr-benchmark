@@ -7,7 +7,7 @@ use core::marker::PhantomData;
 use core::mem;
 use core::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
 
-use {unprotected, Atomic, Guard, Shared, Shield, ShieldError};
+use crate::{unprotected, Atomic, Guard, Shared, Shield, ShieldError};
 
 /// An entry in a linked list.
 ///
@@ -395,7 +395,7 @@ mod tests {
     use super::*;
     use crossbeam_utils::thread;
     use std::sync::Barrier;
-    use {Collector, Owned};
+    use crate::{Collector, Owned};
 
     impl IsElement<Entry> for Entry {
         fn entry_of(entry: &Entry) -> &Entry {

@@ -45,16 +45,16 @@ use core::ops::Deref;
 use crossbeam_utils::CachePadded;
 use membarrier;
 
-use atomic::{Atomic, Owned, Shared};
-use bloom_filter::BloomFilter;
-use collector::{Collector, LocalHandle};
-use garbage::{Bag, Garbage};
-use guard::{unprotected, Guard};
-use hazard::{HazardSet, Shield, ShieldError};
+use crate::atomic::{Atomic, Owned, Shared};
+use crate::bloom_filter::BloomFilter;
+use crate::collector::{Collector, LocalHandle};
+use crate::garbage::{Bag, Garbage};
+use crate::guard::{unprotected, Guard};
+use crate::hazard::{HazardSet, Shield, ShieldError};
 use nix::sys::pthread::{Pthread, pthread_self};
-use sync::list::{repeat_iter, Entry, IsElement, IterError, List};
-use sync::stack::Stack;
-use tag::*;
+use crate::sync::list::{repeat_iter, Entry, IsElement, IterError, List};
+use crate::sync::stack::Stack;
+use crate::tag::*;
 
 use crate::recovery;
 
@@ -893,7 +893,7 @@ impl IsElement<Local> for Local {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use deferred::Deferred;
+    use crate::deferred::Deferred;
 
     #[test]
     fn check_defer() {

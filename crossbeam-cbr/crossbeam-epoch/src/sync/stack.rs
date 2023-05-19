@@ -2,9 +2,9 @@ use std::mem::ManuallyDrop;
 use std::ptr;
 use std::sync::atomic::Ordering::{Acquire, Relaxed, AcqRel, Release};
 
-use atomic::{Atomic, Owned};
-use guard::{unprotected, Guard};
-use hazard::{Shield, ShieldError};
+use crate::atomic::{Atomic, Owned};
+use crate::guard::{unprotected, Guard};
+use crate::hazard::{Shield, ShieldError};
 
 /// 's lock-free stack.
 ///
@@ -90,7 +90,7 @@ impl<T> Drop for Stack<T> {
 mod test {
     use super::*;
     use crossbeam_utils::thread;
-    use pin;
+    use crate::pin;
 
     #[test]
     fn smoke() {

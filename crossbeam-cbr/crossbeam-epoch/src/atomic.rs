@@ -9,8 +9,8 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crossbeam_utils::atomic::AtomicConsume;
 
-use guard::Guard;
-use tag::*;
+use crate::guard::Guard;
+use crate::tag::*;
 
 /// Given ordering for the success case in a compare-exchange operation, returns the strongest
 /// appropriate ordering for the failure case.

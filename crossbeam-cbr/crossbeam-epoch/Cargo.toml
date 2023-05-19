@@ -4,6 +4,7 @@ name = "crossbeam-cbr-epoch"
 # - Update CHANGELOG.md
 # - Update README.md
 # - Create "crossbeam-epoch-X.Y.Z" git tag
+edition = "2021"
 version = "0.7.1"
 authors = ["The Crossbeam Project Developers"]
 license = "MIT/Apache-2.0"

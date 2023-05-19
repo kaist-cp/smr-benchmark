@@ -1,11 +1,11 @@
 use core::fmt;
 use core::mem;
 
-use atomic::Shared;
-use collector::Collector;
-use deferred::Deferred;
-use garbage::Garbage;
-use internal::Local;
+use crate::atomic::Shared;
+use crate::collector::Collector;
+use crate::deferred::Deferred;
+use crate::garbage::Garbage;
+use crate::internal::Local;
 
 use crate::rc_ptrs::Localizable;
 
