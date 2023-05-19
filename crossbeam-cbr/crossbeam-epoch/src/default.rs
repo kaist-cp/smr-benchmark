@@ -5,7 +5,7 @@
 //! destructed on thread exit, which in turn unregisters the thread.
 
 use crate::collector::{Collector, LocalHandle};
-use crate::guard::Guard;
+use crate::guard::EpochGuard;
 
 lazy_static! {
     /// The global data for the default garbage collector.
@@ -19,7 +19,7 @@ thread_local! {
 
 /// Pins the current thread.
 #[inline]
-pub fn pin() -> Guard {
+pub fn pin() -> EpochGuard {
     with_handle(|handle| handle.pin())
 }
 

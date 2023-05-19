@@ -1,6 +1,6 @@
 use core::marker::PhantomData;
 
-use crate::{Shield, Guard, rc_utils::Counted, Pointer, Shared, Atomic, ReadGuard, Writable};
+use crate::{Shield, EpochGuard, rc_utils::Counted, Pointer, Shared, Atomic, ReadGuard, Writable};
 
 pub struct AtomicRcPtr<T> {
     link: Atomic<Counted<T>>,
@@ -172,14 +172,14 @@ impl<T> LocalPtr<T> {
     }
 
     #[inline]
-    pub fn null(guard: &Guard) -> Self {
+    pub fn null(guard: &EpochGuard) -> Self {
         Self {
             shield: Shield::null(guard),
         }
     }
 
     #[inline]
-    pub fn clone(&self, guard: &Guard) -> Self {
+    pub fn clone(&self, guard: &EpochGuard) -> Self {
         todo!()
     }
 
@@ -230,7 +230,7 @@ unsafe impl<T> Sync for RcPtr<T> {}
 
 impl<T> RcPtr<T> {
     #[inline]
-    pub fn from_shared<'g>(ptr: Shared<'g, T>, guard: &'g Guard) -> Self {
+    pub fn from_shared<'g>(ptr: Shared<'g, T>, guard: &'g EpochGuard) -> Self {
         todo!()
     }
 
@@ -306,13 +306,13 @@ impl<T> AcquiredPtr<T> for RcPtr<T> {
 
 pub trait Localizable<'r> {
     type Localized;
-    fn protect_with(self, guard: &Guard) -> Self::Localized;
+    fn protect_with(self, guard: &EpochGuard) -> Self::Localized;
 }
 
 impl<'r, T> Localizable<'r> for ReadPtr<'r, T> {
     type Localized = LocalPtr<T>;
 
-    fn protect_with(self, guard: &Guard) -> Self::Localized {
+    fn protect_with(self, guard: &EpochGuard) -> Self::Localized {
         todo!()
     }
 }

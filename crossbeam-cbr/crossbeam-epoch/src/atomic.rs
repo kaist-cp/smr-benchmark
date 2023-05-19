@@ -9,7 +9,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crossbeam_utils::atomic::AtomicConsume;
 
-use crate::guard::Guard;
+use crate::guard::EpochGuard;
 use crate::tag::*;
 
 /// Given ordering for the success case in a compare-exchange operation, returns the strongest
@@ -178,7 +178,7 @@ impl<T> Atomic<T> {
     /// let guard = &epoch::pin();
     /// let p = a.load(SeqCst, guard);
     /// ```
-    pub fn load<'g>(&self, ord: Ordering, _: &'g Guard) -> Shared<'g, T> {
+    pub fn load<'g>(&self, ord: Ordering, _: &'g EpochGuard) -> Shared<'g, T> {
         unsafe { Shared::from_usize(self.data.load(ord)) }
     }
 
@@ -203,7 +203,7 @@ impl<T> Atomic<T> {
     /// let guard = &epoch::pin();
     /// let p = a.load_consume(guard);
     /// ```
-    pub fn load_consume<'g>(&self, _: &'g Guard) -> Shared<'g, T> {
+    pub fn load_consume<'g>(&self, _: &'g EpochGuard) -> Shared<'g, T> {
         unsafe { Shared::from_usize(self.data.load_consume()) }
     }
 
@@ -246,7 +246,7 @@ impl<T> Atomic<T> {
     /// let guard = &epoch::pin();
     /// let p = a.swap(Shared::null(), SeqCst, guard);
     /// ```
-    pub fn swap<'g, P: Pointer<T>>(&self, new: P, ord: Ordering, _: &'g Guard) -> Shared<'g, T> {
+    pub fn swap<'g, P: Pointer<T>>(&self, new: P, ord: Ordering, _: &'g EpochGuard) -> Shared<'g, T> {
         unsafe { Shared::from_usize(self.data.swap(new.into_usize(), ord)) }
     }
 
@@ -281,7 +281,7 @@ impl<T> Atomic<T> {
         current: Shared<T>,
         new: P,
         ord: O,
-        _: &'g Guard,
+        _: &'g EpochGuard,
     ) -> Result<Shared<'g, T>, CompareAndSetError<'g, T, P>>
     where
         O: CompareAndSetOrdering,
@@ -351,7 +351,7 @@ impl<T> Atomic<T> {
         current: Shared<T>,
         new: P,
         ord: O,
-        _: &'g Guard,
+        _: &'g EpochGuard,
     ) -> Result<Shared<'g, T>, CompareAndSetError<'g, T, P>>
     where
         O: CompareAndSetOrdering,
@@ -390,7 +390,7 @@ impl<T> Atomic<T> {
     /// assert_eq!(a.fetch_and(2, SeqCst, guard).tag(), 3);
     /// assert_eq!(a.load(SeqCst, guard).tag(), 2);
     /// ```
-    pub fn fetch_and<'g>(&self, val: usize, ord: Ordering, _: &'g Guard) -> Shared<'g, T> {
+    pub fn fetch_and<'g>(&self, val: usize, ord: Ordering, _: &'g EpochGuard) -> Shared<'g, T> {
         unsafe { Shared::from_usize(self.data.fetch_and(val | !low_bits::<T>(), ord)) }
     }
 
@@ -415,7 +415,7 @@ impl<T> Atomic<T> {
     /// assert_eq!(a.fetch_or(2, SeqCst, guard).tag(), 1);
     /// assert_eq!(a.load(SeqCst, guard).tag(), 3);
     /// ```
-    pub fn fetch_or<'g>(&self, val: usize, ord: Ordering, _: &'g Guard) -> Shared<'g, T> {
+    pub fn fetch_or<'g>(&self, val: usize, ord: Ordering, _: &'g EpochGuard) -> Shared<'g, T> {
         unsafe { Shared::from_usize(self.data.fetch_or(val & low_bits::<T>(), ord)) }
     }
 
@@ -440,7 +440,7 @@ impl<T> Atomic<T> {
     /// assert_eq!(a.fetch_xor(3, SeqCst, guard).tag(), 1);
     /// assert_eq!(a.load(SeqCst, guard).tag(), 2);
     /// ```
-    pub fn fetch_xor<'g>(&self, val: usize, ord: Ordering, _: &'g Guard) -> Shared<'g, T> {
+    pub fn fetch_xor<'g>(&self, val: usize, ord: Ordering, _: &'g EpochGuard) -> Shared<'g, T> {
         unsafe { Shared::from_usize(self.data.fetch_xor(val & low_bits::<T>(), ord)) }
     }
 
@@ -673,7 +673,7 @@ impl<T> Owned<T> {
     /// ```
     ///
     /// [`Shared`]: struct.Shared.html
-    pub fn into_shared<'g>(self, _: &'g Guard) -> Shared<'g, T> {
+    pub fn into_shared<'g>(self, _: &'g EpochGuard) -> Shared<'g, T> {
         unsafe { Shared::from_usize(self.into_usize()) }
     }
 

@@ -1,7 +1,7 @@
 extern crate crossbeam_cbr_epoch;
 
 use crossbeam_cbr_epoch::{
-    AcquiredPtr, AtomicRcPtr, Guard, LocalPtr, Localizable, RcPtr, ReadGuard, ReadPtr, ReadStatus,
+    AcquiredPtr, AtomicRcPtr, EpochGuard, LocalPtr, Localizable, RcPtr, ReadGuard, ReadPtr, ReadStatus,
 };
 
 struct Node<K, V> {
@@ -63,7 +63,7 @@ struct LocalizedCursor<K, V> {
 impl<'r, K, V> Localizable<'r> for Cursor<'r, K, V> {
     type Localized = LocalizedCursor<K, V>;
 
-    fn protect_with(self, guard: &Guard) -> Self::Localized {
+    fn protect_with(self, guard: &EpochGuard) -> Self::Localized {
         Self::Localized {
             prev: self.prev.protect_with(guard),
             prev_next: self.prev_next.protect_with(guard),
@@ -98,7 +98,7 @@ where
         }
     }
 
-    pub fn harris_find(&self, key: &K, guard: &mut Guard) -> LocalizedCursor<K, V> {
+    pub fn harris_find(&self, key: &K, guard: &mut EpochGuard) -> LocalizedCursor<K, V> {
         loop {
             let cursor = guard.read_loop(
                 |guard| Cursor::new(&self.head, guard),
@@ -144,7 +144,7 @@ where
         }
     }
 
-    pub fn get(&self, key: &K, guard: &mut Guard) -> Option<LocalizedCursor<K, V>> {
+    pub fn get(&self, key: &K, guard: &mut EpochGuard) -> Option<LocalizedCursor<K, V>> {
         let cursor = self.harris_find(key, guard);
         if cursor.found {
             Some(cursor)
@@ -153,7 +153,7 @@ where
         }
     }
 
-    pub fn insert(&self, key: K, value: V, guard: &mut Guard) -> Result<(), (K, V)> {
+    pub fn insert(&self, key: K, value: V, guard: &mut EpochGuard) -> Result<(), (K, V)> {
         let mut new_node = Node::new(key, value);
         loop {
             let cursor = self.harris_find(&new_node.key, guard);
@@ -178,7 +178,7 @@ where
         }
     }
 
-    pub fn remove(&self, key: &K, guard: &mut Guard) -> Option<LocalizedCursor<K, V>> {
+    pub fn remove(&self, key: &K, guard: &mut EpochGuard) -> Option<LocalizedCursor<K, V>> {
         loop {
             let cursor = self.harris_find(key, guard);
             if !cursor.found {

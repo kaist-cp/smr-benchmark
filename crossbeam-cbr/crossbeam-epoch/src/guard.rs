@@ -68,11 +68,11 @@ use crate::rc_ptrs::Localizable;
 /// ```
 ///
 /// [`pin`]: fn.pin.html
-pub struct Guard {
+pub struct EpochGuard {
     pub(crate) local: *const Local,
 }
 
-impl Guard {
+impl EpochGuard {
     #[inline]
     unsafe fn defer_garbage(&self, garbage: Garbage, internal: bool) {
         if let Some(local) = self.local.as_ref() {
@@ -473,7 +473,7 @@ impl Guard {
     }
 }
 
-impl Drop for Guard {
+impl Drop for EpochGuard {
     #[inline]
     fn drop(&mut self) {
         if let Some(local) = unsafe { self.local.as_ref() } {
@@ -482,7 +482,7 @@ impl Drop for Guard {
     }
 }
 
-impl fmt::Debug for Guard {
+impl fmt::Debug for EpochGuard {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.pad("Guard { .. }")
     }
@@ -569,7 +569,7 @@ impl fmt::Debug for Guard {
 /// [`Atomic`]: struct.Atomic.html
 /// [`defer`]: struct.Guard.html#method.defer
 #[inline]
-pub unsafe fn unprotected() -> &'static mut Guard {
+pub unsafe fn unprotected() -> &'static mut EpochGuard {
     // HACK(stjepang): An unprotected guard is just a `Guard` with its field `local` set to null.
     // Since this function returns a `'static` reference to a `Guard`, we must return a reference
     // to a global guard. However, it's not possible to create a `static` `Guard` because it does
@@ -577,7 +577,7 @@ pub unsafe fn unprotected() -> &'static mut Guard {
     // zero and then transmute it into a `Guard`. This is safe because `usize` and `Guard`
     // (consisting of a single pointer) have the same representation in memory.
     static UNPROTECTED: usize = 0;
-    &mut *(&UNPROTECTED as *const _ as *const _ as *mut Guard)
+    &mut *(&UNPROTECTED as *const _ as *const _ as *mut EpochGuard)
 }
 
 pub enum ReadStatus {
@@ -607,7 +607,7 @@ pub trait Writable {
     
 }
 
-impl Writable for Guard {
+impl Writable for EpochGuard {
 
 }
 

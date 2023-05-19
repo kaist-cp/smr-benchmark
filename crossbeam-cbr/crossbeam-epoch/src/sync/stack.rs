@@ -3,7 +3,7 @@ use std::ptr;
 use std::sync::atomic::Ordering::{Acquire, Relaxed, AcqRel, Release};
 
 use crate::atomic::{Atomic, Owned};
-use crate::guard::{unprotected, Guard};
+use crate::guard::{unprotected, EpochGuard};
 use crate::hazard::{Shield, ShieldError};
 
 /// 's lock-free stack.
@@ -53,7 +53,7 @@ impl<T> Stack<T> {
     ///
     /// Returns `None` if the stack is empty.
     #[must_use]
-    pub fn try_pop(&self, guard: &Guard) -> Result<Option<T>, ShieldError> {
+    pub fn try_pop(&self, guard: &EpochGuard) -> Result<Option<T>, ShieldError> {
         let mut head_shield = Shield::null(guard);
         let mut head = self.head.load(Acquire, guard);
         loop {

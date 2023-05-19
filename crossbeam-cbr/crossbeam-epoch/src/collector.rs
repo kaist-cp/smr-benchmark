@@ -15,7 +15,7 @@
 use alloc::sync::Arc;
 use core::fmt;
 
-use crate::guard::Guard;
+use crate::guard::EpochGuard;
 use crate::internal::{Global, Local};
 
 /// An epoch-based garbage collector.
@@ -71,7 +71,7 @@ pub struct LocalHandle {
 impl LocalHandle {
     /// Pins the handle.
     #[inline]
-    pub fn pin(&self) -> Guard {
+    pub fn pin(&self) -> EpochGuard {
         unsafe { (*self.local).pin() }
     }
 

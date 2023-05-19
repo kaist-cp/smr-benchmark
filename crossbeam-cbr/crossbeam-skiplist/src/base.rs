@@ -10,7 +10,7 @@ use core::ops::{Bound, Deref, Index, RangeBounds};
 use core::ptr;
 use core::sync::atomic::{fence, AtomicUsize, Ordering};
 
-use epoch::{self, Atomic, Collector, Guard, Shared};
+use epoch::{self, Atomic, Collector, EpochGuard, Shared};
 use scopeguard;
 use utils::CachePadded;
 
@@ -215,7 +215,7 @@ impl<K, V> Node<K, V> {
 
     /// Decrements the reference count of a node, destroying it if the count becomes zero.
     #[inline]
-    unsafe fn decrement(&self, guard: &Guard) {
+    unsafe fn decrement(&self, guard: &EpochGuard) {
         if self
             .refs_and_height
             .fetch_sub(1 << HEIGHT_BITS, Ordering::Release)
@@ -232,7 +232,7 @@ impl<K, V> Node<K, V> {
     #[inline]
     unsafe fn decrement_with_pin<F>(&self, parent: &SkipList<K, V>, pin: F)
     where
-        F: FnOnce() -> Guard,
+        F: FnOnce() -> EpochGuard,
     {
         if self
             .refs_and_height
@@ -368,7 +368,7 @@ impl<K, V> SkipList<K, V> {
 
     /// Ensures that all `Guard`s used with the skip list come from the same
     /// `Collector`.
-    fn check_guard(&self, guard: &Guard) {
+    fn check_guard(&self, guard: &EpochGuard) {
         if let Some(c) = guard.collector() {
             assert!(c == &self.collector);
         }
@@ -380,7 +380,7 @@ where
     K: Ord,
 {
     /// Returns the entry with the smallest key.
-    pub fn front<'a: 'g, 'g>(&'a self, guard: &'g Guard) -> Option<Entry<'a, 'g, K, V>> {
+    pub fn front<'a: 'g, 'g>(&'a self, guard: &'g EpochGuard) -> Option<Entry<'a, 'g, K, V>> {
         self.check_guard(guard);
         let n = self.next_node(&self.head, Bound::Unbounded, guard)?;
         Some(Entry {
@@ -391,7 +391,7 @@ where
     }
 
     /// Returns the entry with the largest key.
-    pub fn back<'a: 'g, 'g>(&'a self, guard: &'g Guard) -> Option<Entry<'a, 'g, K, V>> {
+    pub fn back<'a: 'g, 'g>(&'a self, guard: &'g EpochGuard) -> Option<Entry<'a, 'g, K, V>> {
         self.check_guard(guard);
         let n = self.search_bound(Bound::Unbounded, true, guard)?;
         Some(Entry {
@@ -402,7 +402,7 @@ where
     }
 
     /// Returns `true` if the map contains a value for the specified key.
-    pub fn contains_key<Q>(&self, key: &Q, guard: &Guard) -> bool
+    pub fn contains_key<Q>(&self, key: &Q, guard: &EpochGuard) -> bool
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -411,7 +411,7 @@ where
     }
 
     /// Returns an entry with the specified `key`.
-    pub fn get<'a: 'g, 'g, Q>(&'a self, key: &Q, guard: &'g Guard) -> Option<Entry<'a, 'g, K, V>>
+    pub fn get<'a: 'g, 'g, Q>(&'a self, key: &Q, guard: &'g EpochGuard) -> Option<Entry<'a, 'g, K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -434,7 +434,7 @@ where
     pub fn lower_bound<'a: 'g, 'g, Q>(
         &'a self,
         bound: Bound<&Q>,
-        guard: &'g Guard,
+        guard: &'g EpochGuard,
     ) -> Option<Entry<'a, 'g, K, V>>
     where
         K: Borrow<Q>,
@@ -455,7 +455,7 @@ where
     pub fn upper_bound<'a: 'g, 'g, Q>(
         &'a self,
         bound: Bound<&Q>,
-        guard: &'g Guard,
+        guard: &'g EpochGuard,
     ) -> Option<Entry<'a, 'g, K, V>>
     where
         K: Borrow<Q>,
@@ -471,12 +471,12 @@ where
     }
 
     /// Finds an entry with the specified key, or inserts a new `key`-`value` pair if none exist.
-    pub fn get_or_insert(&self, key: K, value: V, guard: &Guard) -> RefEntry<K, V> {
+    pub fn get_or_insert(&self, key: K, value: V, guard: &EpochGuard) -> RefEntry<K, V> {
         self.insert_internal(key, value, false, guard)
     }
 
     /// Returns an iterator over all entries in the skip list.
-    pub fn iter<'a: 'g, 'g>(&'a self, guard: &'g Guard) -> Iter<'a, 'g, K, V> {
+    pub fn iter<'a: 'g, 'g>(&'a self, guard: &'g EpochGuard) -> Iter<'a, 'g, K, V> {
         self.check_guard(guard);
         Iter {
             parent: self,
@@ -499,7 +499,7 @@ where
     pub fn range<'a: 'g, 'g, Q, R>(
         &'a self,
         range: R,
-        guard: &'g Guard,
+        guard: &'g EpochGuard,
     ) -> Range<'a, 'g, Q, R, K, V>
     where
         K: Borrow<Q>,
@@ -588,7 +588,7 @@ where
         pred: &'a Atomic<Node<K, V>>,
         curr: &'a Node<K, V>,
         succ: Shared<'a, Node<K, V>>,
-        guard: &'a Guard,
+        guard: &'a EpochGuard,
     ) -> Option<Shared<'a, Node<K, V>>> {
         // If `succ` is marked, that means `curr` is removed. Let's try
         // unlinking it from the skip list at this level.
@@ -614,7 +614,7 @@ where
         &'a self,
         pred: &'a Tower<K, V>,
         lower_bound: Bound<&K>,
-        guard: &'a Guard,
+        guard: &'a EpochGuard,
     ) -> Option<&'a Node<K, V>> {
         unsafe {
             // Load the level 0 successor of the current node.
@@ -660,7 +660,7 @@ where
         &'a self,
         bound: Bound<&Q>,
         upper_bound: bool,
-        guard: &'a Guard,
+        guard: &'a EpochGuard,
     ) -> Option<&'a Node<K, V>>
     where
         K: Borrow<Q>,
@@ -745,7 +745,7 @@ where
     }
 
     /// Searches for a key in the skip list and returns a list of all adjacent nodes.
-    fn search_position<'a, Q>(&'a self, key: &Q, guard: &'a Guard) -> Position<'a, K, V>
+    fn search_position<'a, Q>(&'a self, key: &Q, guard: &'a EpochGuard) -> Position<'a, K, V>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -832,7 +832,7 @@ where
     /// Inserts an entry with the specified `key` and `value`.
     ///
     /// If `replace` is `true`, then any existing entry with this key will first be removed.
-    fn insert_internal(&self, key: K, value: V, replace: bool, guard: &Guard) -> RefEntry<K, V> {
+    fn insert_internal(&self, key: K, value: V, replace: bool, guard: &EpochGuard) -> RefEntry<K, V> {
         self.check_guard(guard);
 
         unsafe {
@@ -1049,12 +1049,12 @@ where
     ///
     /// If there is an existing entry with this key, it will be removed before inserting the new
     /// one.
-    pub fn insert(&self, key: K, value: V, guard: &Guard) -> RefEntry<K, V> {
+    pub fn insert(&self, key: K, value: V, guard: &EpochGuard) -> RefEntry<K, V> {
         self.insert_internal(key, value, true, guard)
     }
 
     /// Removes an entry with the specified `key` from the map and returns it.
-    pub fn remove<Q>(&self, key: &Q, guard: &Guard) -> Option<RefEntry<K, V>>
+    pub fn remove<Q>(&self, key: &Q, guard: &EpochGuard) -> Option<RefEntry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -1119,7 +1119,7 @@ where
     }
 
     /// Removes an entry from the front of the skip list.
-    pub fn pop_front(&self, guard: &Guard) -> Option<RefEntry<K, V>> {
+    pub fn pop_front(&self, guard: &EpochGuard) -> Option<RefEntry<K, V>> {
         self.check_guard(guard);
         loop {
             let e = self.front(guard)?;
@@ -1132,7 +1132,7 @@ where
     }
 
     /// Removes an entry from the back of the skip list.
-    pub fn pop_back(&self, guard: &Guard) -> Option<RefEntry<K, V>> {
+    pub fn pop_back(&self, guard: &EpochGuard) -> Option<RefEntry<K, V>> {
         self.check_guard(guard);
         loop {
             let e = self.back(guard)?;
@@ -1145,7 +1145,7 @@ where
     }
 
     /// Iterates over the map and removes every entry.
-    pub fn clear(&self, guard: &mut Guard) {
+    pub fn clear(&self, guard: &mut EpochGuard) {
         self.check_guard(guard);
 
         /// Number of steps after which we repin the current thread and unlink removed nodes.
@@ -1256,7 +1256,7 @@ impl<K, V> IntoIterator for SkipList<K, V> {
 pub struct Entry<'a: 'g, 'g, K: 'a, V: 'a> {
     parent: &'a SkipList<K, V>,
     node: &'g Node<K, V>,
-    guard: &'g Guard,
+    guard: &'g EpochGuard,
 }
 
 impl<'a: 'g, 'g, K: 'a, V: 'a> Entry<'a, 'g, K, V> {
@@ -1422,7 +1422,7 @@ impl<'a, K: 'a, V: 'a> RefEntry<'a, K, V> {
     }
 
     /// Releases the reference on the entry.
-    pub fn release(self, guard: &Guard) {
+    pub fn release(self, guard: &EpochGuard) {
         self.parent.check_guard(guard);
         unsafe { self.node.decrement(guard) }
     }
@@ -1431,7 +1431,7 @@ impl<'a, K: 'a, V: 'a> RefEntry<'a, K, V> {
     /// the reference count of the node becomes 0.
     pub fn release_with_pin<F>(self, pin: F)
     where
-        F: FnOnce() -> Guard,
+        F: FnOnce() -> EpochGuard,
     {
         unsafe { self.node.decrement_with_pin(self.parent, pin) }
     }
@@ -1464,7 +1464,7 @@ where
     /// Removes the entry from the skip list.
     ///
     /// Returns `true` if this call removed the entry and `false` if it was already removed.
-    pub fn remove(&self, guard: &Guard) -> bool {
+    pub fn remove(&self, guard: &EpochGuard) -> bool {
         self.parent.check_guard(guard);
 
         // Try marking the tower.
@@ -1514,7 +1514,7 @@ where
     K: Ord,
 {
     /// Moves to the next entry in the skip list.
-    pub fn move_next(&mut self, guard: &Guard) -> bool {
+    pub fn move_next(&mut self, guard: &EpochGuard) -> bool {
         match self.next(guard) {
             None => false,
             Some(e) => {
@@ -1525,7 +1525,7 @@ where
     }
 
     /// Returns the next entry in the skip list.
-    pub fn next(&self, guard: &Guard) -> Option<RefEntry<'a, K, V>> {
+    pub fn next(&self, guard: &EpochGuard) -> Option<RefEntry<'a, K, V>> {
         self.parent.check_guard(guard);
         unsafe {
             let mut n = self.node;
@@ -1540,7 +1540,7 @@ where
         }
     }
     /// Moves to the previous entry in the skip list.
-    pub fn move_prev(&mut self, guard: &Guard) -> bool {
+    pub fn move_prev(&mut self, guard: &EpochGuard) -> bool {
         match self.prev(guard) {
             None => false,
             Some(e) => {
@@ -1551,7 +1551,7 @@ where
     }
 
     /// Returns the previous entry in the skip list.
-    pub fn prev(&self, guard: &Guard) -> Option<RefEntry<'a, K, V>> {
+    pub fn prev(&self, guard: &EpochGuard) -> Option<RefEntry<'a, K, V>> {
         self.parent.check_guard(guard);
         unsafe {
             let mut n = self.node;
@@ -1572,7 +1572,7 @@ pub struct Iter<'a: 'g, 'g, K: 'a, V: 'a> {
     parent: &'a SkipList<K, V>,
     head: Option<&'g Node<K, V>>,
     tail: Option<&'g Node<K, V>>,
-    guard: &'g Guard,
+    guard: &'g EpochGuard,
 }
 
 impl<'a: 'g, 'g, K: 'a, V: 'a> Iterator for Iter<'a, 'g, K, V>
@@ -1673,7 +1673,7 @@ where
     K: Ord,
 {
     /// TODO
-    pub fn next(&mut self, guard: &Guard) -> Option<RefEntry<'a, K, V>> {
+    pub fn next(&mut self, guard: &EpochGuard) -> Option<RefEntry<'a, K, V>> {
         self.parent.check_guard(guard);
         self.head = match self.head {
             Some(ref e) => {
@@ -1699,7 +1699,7 @@ where
     }
 
     /// TODO
-    pub fn next_back(&mut self, guard: &Guard) -> Option<RefEntry<'a, K, V>> {
+    pub fn next_back(&mut self, guard: &EpochGuard) -> Option<RefEntry<'a, K, V>> {
         self.parent.check_guard(guard);
         self.tail = match self.tail {
             Some(ref e) => {
@@ -1736,7 +1736,7 @@ where
     head: Option<&'g Node<K, V>>,
     tail: Option<&'g Node<K, V>>,
     range: R,
-    guard: &'g Guard,
+    guard: &'g EpochGuard,
     _marker: PhantomData<fn() -> Q>, // covariant over `Q`
 }
 
@@ -1877,7 +1877,7 @@ where
     Q: Ord + ?Sized,
 {
     /// TODO
-    pub fn next(&mut self, guard: &Guard) -> Option<RefEntry<'a, K, V>> {
+    pub fn next(&mut self, guard: &EpochGuard) -> Option<RefEntry<'a, K, V>> {
         self.parent.check_guard(guard);
         self.head = match self.head {
             Some(ref e) => e.next(guard),
@@ -1901,7 +1901,7 @@ where
     }
 
     /// TODO: docs
-    pub fn next_back(&mut self, guard: &Guard) -> Option<RefEntry<'a, K, V>> {
+    pub fn next_back(&mut self, guard: &EpochGuard) -> Option<RefEntry<'a, K, V>> {
         self.parent.check_guard(guard);
         self.tail = match self.tail {
             Some(ref e) => e.prev(guard),

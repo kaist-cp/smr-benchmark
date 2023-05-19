@@ -5,7 +5,7 @@ use core::sync::atomic::{fence, AtomicUsize, Ordering};
 
 use crate::atomic::{Owned, Pointer, Shared};
 use crate::bloom_filter::BloomFilter;
-use crate::guard::{unprotected, Guard};
+use crate::guard::{unprotected, EpochGuard};
 use crate::internal::Local;
 use crate::sync::list::{repeat_iter, Entry, IsElement, Iter as ListIter, IterError, List};
 use crate::tag::*;
@@ -38,7 +38,7 @@ impl IsElement<HazardNode> for HazardNode {
         &*node_ptr
     }
 
-    unsafe fn finalize(entry: &Entry, guard: &Guard) {
+    unsafe fn finalize(entry: &Entry, guard: &EpochGuard) {
         guard.defer_destroy(Shared::from(Self::element_of(entry) as *const _));
     }
 }
@@ -194,7 +194,7 @@ impl HazardSet {
         pred: &'g mut Shield<HazardNode>,
         curr: &'g mut Shield<HazardNode>,
         is_detaching: bool,
-        guard: &'g Guard,
+        guard: &'g EpochGuard,
     ) -> Result<HazardSetIter<'g>, ShieldError> {
         Ok(HazardSetIter {
             list_iter: self.inner.iter(pred, curr, is_detaching, guard)?,
@@ -205,7 +205,7 @@ impl HazardSet {
     unsafe fn acquire_inner(
         &self,
         data: usize,
-        guard: &Guard,
+        guard: &EpochGuard,
     ) -> Result<(*const HazardNode, usize), IterError> {
         // It is safe not to protect the traversal of hazard lists because the other threads do not
         // detach and `defer_destroy` those nodes marked as deleted.
@@ -239,14 +239,14 @@ impl HazardSet {
     pub unsafe fn acquire(
         &self,
         data: usize,
-        guard: &Guard,
+        guard: &EpochGuard,
     ) -> (*const HazardNode, usize) {
         repeat_iter(|| self.acquire_inner(data, guard)).unwrap()
     }
 
     /// Creates an approximate summary of the hazard set.
     #[inline]
-    pub fn make_summary(&self, is_curr_thread: bool, guard: &Guard) -> Result<Option<BloomFilter>, IterError> {
+    pub fn make_summary(&self, is_curr_thread: bool, guard: &EpochGuard) -> Result<Option<BloomFilter>, IterError> {
         let mut visited = false;
         let mut filter = BloomFilter::new();
 
@@ -360,7 +360,7 @@ impl<T> Shield<T> {
     /// [`Shield`]: struct.Shield.html
     #[inline]
     #[must_use]
-    pub fn new<'g>(ptr: Shared<'g, T>, guard: &Guard) -> Result<Self, ShieldError> {
+    pub fn new<'g>(ptr: Shared<'g, T>, guard: &EpochGuard) -> Result<Self, ShieldError> {
         let mut shield = Self::null(guard);
         shield.defend(ptr, guard)?;
         Ok(shield)
@@ -371,7 +371,7 @@ impl<T> Shield<T> {
     /// See [`Shield::new`] for more details.
     ///
     /// [`Shield::new`]: struct.Shield.html#method.new
-    pub fn null<'g>(guard: &Guard) -> Self {
+    pub fn null<'g>(guard: &EpochGuard) -> Self {
         if let Some(local) = unsafe { guard.local.as_ref() } {
             // Acquire a handle so that the underlying thread-local storage is not deallocated.
             local.acquire_handle();
@@ -589,7 +589,7 @@ impl<T> Shield<T> {
     ///
     /// [`Shield`]: struct.Shield.html
     #[must_use]
-    pub fn defend<'g>(&mut self, ptr: Shared<'g, T>, guard: &'g Guard) -> Result<(), ShieldError> {
+    pub fn defend<'g>(&mut self, ptr: Shared<'g, T>, guard: &'g EpochGuard) -> Result<(), ShieldError> {
         let data = ptr.into_usize();
         self.data = data;
         unsafe {

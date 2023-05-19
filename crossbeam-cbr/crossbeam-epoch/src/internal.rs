@@ -49,7 +49,7 @@ use crate::atomic::{Atomic, Owned, Shared};
 use crate::bloom_filter::BloomFilter;
 use crate::collector::{Collector, LocalHandle};
 use crate::garbage::{Bag, Garbage};
-use crate::guard::{unprotected, Guard};
+use crate::guard::{unprotected, EpochGuard};
 use crate::hazard::{HazardSet, Shield, ShieldError};
 use nix::sys::pthread::{Pthread, pthread_self};
 use crate::sync::list::{repeat_iter, Entry, IsElement, IterError, List};
@@ -193,7 +193,7 @@ impl Global {
     pub fn collect_inner<'g>(
         &'g self,
         status: Shared<'g, CachePadded<BloomFilter>>,
-        guard: &'g Guard,
+        guard: &'g EpochGuard,
     ) -> Result<bool, ShieldError> {
         let shield = Shield::new(status, guard)?;
         let summary = unsafe { shield.as_ref() }.map(Deref::deref);
@@ -236,7 +236,7 @@ impl Global {
     /// `collect()` is not called.
     #[cold]
     #[must_use]
-    pub fn collect(&self, guard: &Guard) -> Result<(), ShieldError> {
+    pub fn collect(&self, guard: &EpochGuard) -> Result<(), ShieldError> {
         let global_status = self.status.load(Ordering::Acquire, guard);
         let global_flags = StatusFlags::from_bits_truncate(global_status.tag());
         if self.collect_inner(global_status, guard)? {
@@ -259,7 +259,7 @@ impl Global {
         &self,
         epoch: usize,
         is_forcing: bool,
-        guard: &Guard,
+        guard: &EpochGuard,
     ) -> Result<(), ShieldError> {
         let global_status = self.status.load(Ordering::Relaxed, guard);
         let global_flags = StatusFlags::from_bits_truncate(global_status.tag());
@@ -478,7 +478,7 @@ impl Local {
     /// Returns the current epoch if `self` is not ejected yet.
     #[must_use]
     #[inline]
-    pub fn get_epoch(&self, guard: &Guard) -> Result<usize, ShieldError> {
+    pub fn get_epoch(&self, guard: &EpochGuard) -> Result<usize, ShieldError> {
         // Light fence to synchronize with `Self::eject()`.
         membarrier::light_membarrier();
 
@@ -500,7 +500,7 @@ impl Local {
         }
     }
 
-    fn get_epoch_resilient(&self, guard: &Guard) -> usize {
+    fn get_epoch_resilient(&self, guard: &EpochGuard) -> usize {
         self.get_epoch(guard).unwrap_or_else(|_| {
             atomic::fence(Ordering::SeqCst);
             let global_status = self
@@ -513,7 +513,7 @@ impl Local {
     }
 
     // TODO: name
-    fn incr_counts(&self, is_forcing: bool, guard: &Guard) {
+    fn incr_counts(&self, is_forcing: bool, guard: &EpochGuard) {
         let collect_count = self.collect_count.get().wrapping_add(1);
         self.collect_count.set(collect_count);
 
@@ -537,7 +537,7 @@ impl Local {
     /// # Safety
     ///
     /// It should be safe for another thread to execute the given function.
-    pub unsafe fn defer(&self, mut garbage: Garbage, guard: &Guard, internal: bool) {
+    pub unsafe fn defer(&self, mut garbage: Garbage, guard: &EpochGuard, internal: bool) {
         let bag = &mut *self.bag.get();
 
         while let Err(g) = bag.try_push(garbage) {
@@ -551,7 +551,7 @@ impl Local {
         }
     }
 
-    pub fn flush(&self, guard: &Guard) {
+    pub fn flush(&self, guard: &EpochGuard) {
         let epoch = self.get_epoch_resilient(guard);
 
         let bag = unsafe { &mut *self.bag.get() };
@@ -564,8 +564,8 @@ impl Local {
 
     /// Pins the `Local`.
     #[inline]
-    pub fn pin(&self) -> Guard {
-        let guard = Guard { local: self };
+    pub fn pin(&self) -> EpochGuard {
+        let guard = EpochGuard { local: self };
 
         let guard_count = self.guard_count.get();
         self.guard_count.set(guard_count.checked_add(1).unwrap());
@@ -692,7 +692,7 @@ impl Local {
                     // Defers to destroy the old summary with a "fake" guard, and returns the new
                     // status.
                     if !old_status.is_null() {
-                        let guard = ManuallyDrop::new(Guard { local: self });
+                        let guard = ManuallyDrop::new(EpochGuard { local: self });
                         guard.defer_destroy(old_status);
                     }
                 }
@@ -740,7 +740,7 @@ impl Local {
         &self,
         mut status: Shared<'g, CachePadded<BloomFilter>>,
         target_epoch: usize,
-        guard: &'g Guard,
+        guard: &'g EpochGuard,
     ) -> Result<Shared<'g, CachePadded<BloomFilter>>, ShieldError> {
         // Marks `self` as ejected.
         loop {
@@ -833,7 +833,7 @@ impl Local {
         // doesn't call `finalize` again.
         self.handle_count.set(1);
         {
-            let guard = ManuallyDrop::new(Guard { local: self });
+            let guard = ManuallyDrop::new(EpochGuard { local: self });
 
             // Flushes the local garbages.
             self.flush(&guard);
@@ -884,7 +884,7 @@ impl IsElement<Local> for Local {
         &*local_ptr
     }
 
-    unsafe fn finalize(entry: &Entry, guard: &Guard) {
+    unsafe fn finalize(entry: &Entry, guard: &EpochGuard) {
         guard.defer_destroy(Shared::from(Self::element_of(entry) as *const _));
     }
 }

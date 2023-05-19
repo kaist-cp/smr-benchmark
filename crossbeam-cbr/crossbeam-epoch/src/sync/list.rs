@@ -7,7 +7,7 @@ use core::marker::PhantomData;
 use core::mem;
 use core::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
 
-use crate::{unprotected, Atomic, Guard, Shared, Shield, ShieldError};
+use crate::{unprotected, Atomic, EpochGuard, Shared, Shield, ShieldError};
 
 /// An entry in a linked list.
 ///
@@ -89,7 +89,7 @@ pub trait IsElement<T> {
     ///
     /// The caller has to guarantee that the `Entry` is called with was retrieved from an instance
     /// of the element type (`T`).
-    unsafe fn finalize(_: &Entry, _: &Guard);
+    unsafe fn finalize(_: &Entry, _: &EpochGuard);
 }
 
 unsafe fn entry_of_shared<'g, T, C: IsElement<T>>(element: Shared<'g, T>) -> Shared<'g, Entry> {
@@ -114,7 +114,7 @@ pub struct List<T, C: IsElement<T> = T> {
 #[derive(Debug)]
 pub struct Iter<'g, T: 'g, C: IsElement<T>> {
     /// The guard that protects the iteration.
-    guard: &'g Guard,
+    guard: &'g EpochGuard,
 
     /// Pointer from the predecessor to the current entry.
     pred: &'g mut Shield<T>,
@@ -181,7 +181,7 @@ impl Entry {
         pred: &'g mut Shield<T>,
         curr: &'g mut Shield<T>,
         is_detaching: bool,
-        guard: &'g Guard,
+        guard: &'g EpochGuard,
     ) -> Result<Iter<'g, T, C>, ShieldError> {
         curr.defend_fake(Shared::from(C::element_of(self) as *const _));
 
@@ -261,7 +261,7 @@ impl<T, C: IsElement<T>> List<T, C> {
         pred: &'g mut Shield<T>,
         curr: &'g mut Shield<T>,
         is_detaching: bool,
-        guard: &'g Guard,
+        guard: &'g EpochGuard,
     ) -> Result<Iter<'g, T, C>, ShieldError> {
         unsafe {
             // @PR(jeehoonkang): document why it's safe.
@@ -406,7 +406,7 @@ mod tests {
             entry
         }
 
-        unsafe fn finalize(entry: &Entry, guard: &Guard) {
+        unsafe fn finalize(entry: &Entry, guard: &EpochGuard) {
             guard.defer_destroy(Shared::from(Self::element_of(entry) as *const _));
         }
     }
@@ -513,7 +513,7 @@ mod tests {
                     b.wait();
 
                     let handle = collector.register();
-                    let guard: Guard = handle.pin();
+                    let guard: EpochGuard = handle.pin();
                     let mut v = Vec::with_capacity(ITERS);
 
                     for _ in 0..ITERS {
@@ -558,7 +558,7 @@ mod tests {
                     b.wait();
 
                     let handle = collector.register();
-                    let mut guard: Guard = handle.pin();
+                    let mut guard: EpochGuard = handle.pin();
                     let mut v = Vec::with_capacity(ITERS);
 
                     for _ in 0..ITERS {
@@ -573,7 +573,7 @@ mod tests {
                         l: &List<Entry>,
                         pred: &mut Shield<Entry>,
                         curr: &mut Shield<Entry>,
-                        guard: &Guard,
+                        guard: &EpochGuard,
                     ) -> Result<(), ShieldError> {
                         let mut iter = l.iter(pred, curr, true, &guard)?;
 
