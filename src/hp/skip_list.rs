@@ -47,13 +47,10 @@ impl<K, V> Node<K, V> {
         height
     }
 
-    pub fn decrement<F>(&self, on_zero: F)
-    where
-        F: FnOnce(*mut Self),
-    {
+    pub fn decrement(&self, handle: &mut Handle) {
         if self.refs.fetch_sub(1, Ordering::Release) == 1 {
             fence(Ordering::Acquire);
-            on_zero(self as *const _ as _);
+            unsafe { handle.thread.retire(self as *const _ as *mut Node<K, V>) };
         }
     }
 
@@ -234,7 +231,7 @@ where
             .is_ok();
 
         if success {
-            unsafe { (&*untagged(curr)).decrement(|ptr| handle.thread.retire(ptr)) };
+            unsafe { (&*untagged(curr)).decrement(handle) };
         }
         success
     }
@@ -324,7 +321,7 @@ where
             self.find(&new_node_ref.key, handle);
         }
 
-        new_node_ref.decrement(|ptr| unsafe { handle.thread.retire(ptr) });
+        new_node_ref.decrement(handle);
         true
     }
 
@@ -356,7 +353,7 @@ where
                         )
                         .is_ok()
                     {
-                        node.decrement(|ptr| unsafe { handle.thread.retire(ptr) });
+                        node.decrement(handle);
                     } else {
                         self.find(key, handle);
                         break;
