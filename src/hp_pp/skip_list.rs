@@ -1,6 +1,6 @@
 use std::mem::transmute;
 use std::ptr;
-use std::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering};
+use std::sync::atomic::{fence, AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 
 use hp_pp::{
     decompose_ptr, light_membarrier, tag, tagged, untagged, HazardPointer, ProtectError, Thread,
@@ -18,6 +18,7 @@ type Tower<K, V> = [AtomicPtr<Node<K, V>>; MAX_HEIGHT];
 #[repr(C)]
 struct Node<K, V> {
     next: Tower<K, V>,
+    invalidated: AtomicBool,
     key: K,
     value: V,
     height: usize,
@@ -29,6 +30,7 @@ impl<K, V> Node<K, V> {
         let height = Self::generate_height();
         Self {
             next: Default::default(),
+            invalidated: AtomicBool::new(false),
             key,
             value,
             height,
@@ -61,7 +63,7 @@ impl<K, V> Node<K, V> {
         for level in (0..self.height).rev() {
             let tag = tag(self.next[level].fetch_or(1, Ordering::SeqCst));
             // If the level 0 pointer was already marked, somebody else removed the node.
-            if level == 0 && (tag & 1) != 0 {
+            if level == 0 && tag == 1 {
                 return false;
             }
         }
@@ -77,7 +79,7 @@ impl<K, V> Node<K, V> {
         let mut next = self.next[index].load(Ordering::Relaxed);
         loop {
             match hazptr.try_protect_pp(untagged(next), &self, &self.next[index], &|src| {
-                (tag(src.next[index].load(Ordering::Acquire)) & 2) != 0
+                src.invalidated.load(Ordering::Relaxed)
             }) {
                 Ok(_) => return Ok(next),
                 Err(ProtectError::Changed(new_next)) => {
@@ -117,9 +119,9 @@ impl<K, V> Cursor<K, V>
 where
     K: Ord,
 {
-    fn new(head: &Tower<K, V>) -> Self {
+    fn new(head: *mut Node<K, V>) -> Self {
         Self {
-            preds: [head as *const _ as *mut _; MAX_HEIGHT],
+            preds: [head; MAX_HEIGHT],
             succs: [ptr::null_mut(); MAX_HEIGHT],
         }
     }
@@ -134,8 +136,10 @@ where
     }
 }
 
+#[repr(C)]
 pub struct SkipList<K, V> {
     head: Tower<K, V>,
+    dummy: AtomicBool, // Dummy for Node.invalidated. They layout should match.
 }
 
 impl<K, V> Drop for SkipList<K, V> {
@@ -158,6 +162,7 @@ where
     pub fn new() -> Self {
         Self {
             head: Default::default(),
+            dummy: AtomicBool::new(false),
         }
     }
 
@@ -167,14 +172,15 @@ where
         handle: &'hp mut Handle<'domain>,
     ) -> Option<Cursor<K, V>> {
         'search: loop {
-            let mut cursor = Cursor::new(&self.head);
+            let head = &self.head as *const _ as *mut Node<K, V>;
+            let mut cursor = Cursor::new(head);
 
             let mut level = MAX_HEIGHT;
             while level >= 1 && self.head[level - 1].load(Ordering::Relaxed).is_null() {
                 level -= 1;
             }
 
-            let mut pred = &self.head as *const _ as *mut Node<K, V>;
+            let mut pred = head;
             while level >= 1 {
                 level -= 1;
                 let mut curr =
@@ -190,12 +196,12 @@ where
                     // Inlined version of hp++ protection, without duplicate load
                     handle.succs_h[level].protect_raw(curr);
                     light_membarrier();
+                    if pred_ref.invalidated.load(Ordering::Relaxed) {
+                        continue 'search;
+                    }
                     let (curr_new_base, curr_new_tag) =
                         decompose_ptr(pred_ref.next[level].load(Ordering::Acquire));
-                    if (curr_new_tag & 2) != 0 {
-                        // Stopped. Restart from head.
-                        continue 'search;
-                    } else if curr_new_base != curr {
+                    if curr_new_base != curr {
                         // If link changed but not stopped, retry protecting the new node.
                         curr = curr_new_base;
                         continue;
@@ -230,14 +236,15 @@ where
 
     fn find<'domain, 'hp>(&self, key: &K, handle: &'hp mut Handle<'domain>) -> Cursor<K, V> {
         'search: loop {
-            let mut cursor = Cursor::new(&self.head);
+            let head = &self.head as *const _ as *mut Node<K, V>;
+            let mut cursor = Cursor::new(head);
 
             let mut level = MAX_HEIGHT;
             while level >= 1 && self.head[level - 1].load(Ordering::Relaxed).is_null() {
                 level -= 1;
             }
 
-            let mut pred = &self.head as *const _ as *mut Node<K, V>;
+            let mut pred = head;
             let mut curr;
 
             while level >= 1 {
@@ -249,7 +256,7 @@ where
                         continue 'search
                     );
 
-                    if (tag(curr) & 1) != 0 {
+                    if tag(curr) == 1 {
                         continue 'search;
                     }
                     if untagged(curr).is_null() {
@@ -263,7 +270,7 @@ where
                         continue 'search;
                     }
 
-                    if (tag(succ) & 1) != 0 {
+                    if tag(succ) == 1 {
                         let frontier = &mut [ptr::null_mut(); MAX_HEIGHT][0..curr_ref.height];
                         for level in 0..curr_ref.height {
                             frontier[level] = curr_ref.next[level].load(Ordering::Acquire);
@@ -348,7 +355,7 @@ where
                 // If the current pointer is marked, that means another thread is already
                 // removing the node we've just inserted. In that case, let's just stop
                 // building the tower.
-                if (tag(next) & 1) != 0 {
+                if tag(next) == 1 {
                     break 'build;
                 }
 
@@ -382,12 +389,16 @@ where
             }
         }
 
-        if (tag(new_node_ref.next[height - 1].load(Ordering::SeqCst)) & 1) != 0 {
+        if tag(new_node_ref.next[height - 1].load(Ordering::SeqCst)) == 1 {
             self.find(&new_node_ref.key, handle);
         }
 
         if new_node_ref.decrement() {
-            unsafe { handle.thread.retire(new_node) }
+            unsafe {
+                handle
+                    .thread
+                    .retire(new_node_ref as *const _ as *mut Node<K, V>)
+            }
         }
         true
     }
@@ -439,10 +450,7 @@ where
 
 impl<K, V> hp_pp::Invalidate for Node<K, V> {
     fn invalidate(&self) {
-        for level in 0..self.height {
-            let a = self.next[level].load(Ordering::Acquire);
-            self.next[level].store(tagged(a, 3), Ordering::Release);
-        }
+        self.invalidated.store(true, Ordering::Relaxed);
     }
 }
 
