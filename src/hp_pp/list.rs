@@ -11,7 +11,7 @@ use hp_pp::{decompose_ptr, light_membarrier, tag, tagged, try_unlink, untagged, 
 #[repr(C)]
 #[derive(Debug)]
 pub struct Node<K, V> {
-    /// tag 1: logically deleted, tag 2: stopped
+    /// tag 1: logically deleted, tag 2: invalidated
     next: AtomicPtr<Node<K, V>>,
     key: K,
     value: V,
@@ -231,10 +231,10 @@ where
             light_membarrier();
             let (curr_new_base, curr_new_tag) = decompose_ptr(prev.load(Ordering::Acquire));
             if curr_new_tag == 3 {
-                // Stopped. Restart from head.
+                // Invalidated. Restart from head.
                 return Err(());
             } else if curr_new_base != self.curr {
-                // If link changed but not stopped, retry protecting the new node.
+                // If link changed but not invalidated, retry protecting the new node.
                 self.curr = curr_new_base;
                 continue;
             }
@@ -281,10 +281,10 @@ where
             light_membarrier();
             let (curr_new_base, curr_new_tag) = decompose_ptr(prev.load(Ordering::Acquire));
             if curr_new_tag == 3 {
-                // Stopped. Restart from head.
+                // Invalidated. Restart from head.
                 return Err(());
             } else if curr_new_base != self.curr {
-                // If link changed but not stopped, retry protecting the new node.
+                // If link changed but not invalidated, retry protecting the new node.
                 self.curr = curr_new_base;
                 continue;
             }
@@ -452,7 +452,7 @@ where
             light_membarrier();
             let (curr_new_base, curr_new_tag) = decompose_ptr(prev.load(Ordering::Acquire));
             if curr_new_tag == 3 || curr_new_base != cursor.curr {
-                // Stopped or link changed. Restart from head.
+                // Invalidated or link changed. Restart from head.
                 continue;
             }
 

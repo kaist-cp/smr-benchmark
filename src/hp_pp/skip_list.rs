@@ -84,7 +84,7 @@ impl<K, V> Node<K, V> {
                     next = new_next;
                     continue;
                 }
-                Err(ProtectError::Stopped) => return Err(()),
+                Err(ProtectError::Invalidated) => return Err(()),
             }
         }
     }
@@ -192,11 +192,11 @@ where
                     light_membarrier();
                     let (curr_new_base, curr_new_tag) =
                         decompose_ptr(pred_ref.next[level].load(Ordering::Acquire));
-                    if (curr_new_tag & 2) != 0 {
-                        // Stopped. Restart from head.
+                    if curr_new_tag == 3 {
+                        // Invalidated. Restart from head.
                         continue 'search;
                     } else if curr_new_base != curr {
-                        // If link changed but not stopped, retry protecting the new node.
+                        // If link changed but not invalidated, retry protecting the new node.
                         curr = curr_new_base;
                         continue;
                     }
@@ -417,7 +417,7 @@ where
                     if unsafe { &(*cursor.preds[level]).next[level] }
                         .compare_exchange(
                             node_ptr,
-                            tagged(succ, 0),
+                            untagged(succ),
                             Ordering::SeqCst,
                             Ordering::SeqCst,
                         )
@@ -461,8 +461,8 @@ where
         if self
             .pred
             .compare_exchange(
-                tagged(self.curr, 0),
-                tagged(self.succ, 0),
+                untagged(self.curr),
+                untagged(self.succ),
                 Ordering::SeqCst,
                 Ordering::SeqCst,
             )

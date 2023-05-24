@@ -413,7 +413,7 @@ where
                 ) {
                     Ok(_) => break,
                     Err(ProtectError::Changed(curr_base_new)) => curr_base = curr_base_new,
-                    Err(ProtectError::Stopped) => return Err(()),
+                    Err(ProtectError::Invalidated) => return Err(()),
                 }
             }
 
@@ -480,7 +480,7 @@ where
                 ) {
                     Ok(_) => break,
                     Err(ProtectError::Changed(curr_base_new)) => curr_base = curr_base_new,
-                    Err(ProtectError::Stopped) => return Err(()),
+                    Err(ProtectError::Invalidated) => return Err(()),
                 }
             }
 

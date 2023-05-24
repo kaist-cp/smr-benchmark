@@ -3,7 +3,7 @@ use std::ptr;
 use std::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering};
 
 use hp_pp::{light_membarrier, Thread};
-use hp_pp::{tag, tagged, untagged, HazardPointer, DEFAULT_DOMAIN};
+use hp_pp::{tag, untagged, HazardPointer, DEFAULT_DOMAIN};
 
 use super::concurrent_map::ConcurrentMap;
 
@@ -223,8 +223,8 @@ where
     ) -> bool {
         let success = pred
             .compare_exchange(
-                tagged(curr, 0),
-                tagged(succ, 0),
+                untagged(curr),
+                untagged(succ),
                 Ordering::Release,
                 Ordering::Relaxed,
             )
@@ -347,7 +347,7 @@ where
                     if unsafe { &*cursor.preds[level] }.next[level]
                         .compare_exchange(
                             node as *const _ as _,
-                            tagged(succ, 0),
+                            untagged(succ),
                             Ordering::SeqCst,
                             Ordering::SeqCst,
                         )
