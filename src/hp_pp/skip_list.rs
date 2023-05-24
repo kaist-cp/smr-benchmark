@@ -3,8 +3,7 @@ use std::ptr;
 use std::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering};
 
 use hp_pp::{
-    decompose_ptr, light_membarrier, tag, tagged, untagged, HazardPointer, ProtectError, Thread,
-    DEFAULT_DOMAIN,
+    decompose_ptr, light_membarrier, tag, tagged, untagged, HazardPointer, Thread, DEFAULT_DOMAIN,
 };
 
 use crate::hp::concurrent_map::ConcurrentMap;
@@ -74,18 +73,21 @@ impl<K, V> Node<K, V> {
         index: usize,
         hazptr: &mut HazardPointer<'domain>,
     ) -> Result<*mut Node<K, V>, ()> {
-        let mut next = self.next[index].load(Ordering::Relaxed);
+        let mut next = untagged(self.next[index].load(Ordering::Relaxed));
         loop {
-            match hazptr.try_protect_pp(untagged(next), &self, &self.next[index], &|src| {
-                (tag(src.next[index].load(Ordering::Acquire)) & 2) != 0
-            }) {
-                Ok(_) => return Ok(next),
-                Err(ProtectError::Changed(new_next)) => {
-                    next = new_next;
-                    continue;
-                }
-                Err(ProtectError::Invalidated) => return Err(()),
+            // Inlined version of hp++ protection, without duplicate load
+            hazptr.protect_raw(next);
+            light_membarrier();
+            let (new_next_base, new_next_tag) =
+                decompose_ptr(self.next[index].load(Ordering::Acquire));
+            if new_next_tag == 3 {
+                // invalidated
+                return Err(());
+            } else if new_next_base != next {
+                next = new_next_base;
+                continue;
             }
+            return Ok(next);
         }
     }
 }
@@ -177,8 +179,8 @@ where
             let mut pred = &self.head as *const _ as *mut Node<K, V>;
             while level >= 1 {
                 level -= 1;
-                let mut curr =
-                    untagged(unsafe { &*untagged(pred) }.next[level].load(Ordering::Acquire));
+                // untagged
+                let mut curr = untagged(unsafe { &*pred }.next[level].load(Ordering::Acquire));
 
                 loop {
                     if curr.is_null() {
@@ -206,7 +208,7 @@ where
                     match curr_node.key.cmp(key) {
                         std::cmp::Ordering::Less => {
                             pred = curr;
-                            curr = curr_node.next[level].load(Ordering::Acquire);
+                            curr = untagged(curr_node.next[level].load(Ordering::Acquire));
                             HazardPointer::swap(
                                 &mut handle.preds_h[level],
                                 &mut handle.succs_h[level],
