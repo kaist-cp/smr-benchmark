@@ -604,7 +604,12 @@ impl<T> Shield<T> {
         ptr: Shared<'g, T>,
         guard: &'g EpochGuard,
     ) -> Result<(), ShieldError> {
-        let data = ptr.into_usize();
+        self.defend_usize(ptr.into_usize(), guard)
+    }
+
+    #[must_use]
+    #[inline]
+    pub fn defend_usize(&mut self, data: usize, guard: &EpochGuard) -> Result<(), ShieldError> {
         self.data = data;
         unsafe {
             if let Some(node) = self.node.as_ref() {
@@ -620,6 +625,17 @@ impl<T> Shield<T> {
         }
 
         Ok(())
+    }
+
+    #[inline]
+    pub unsafe fn defend_unchecked<'g>(&mut self, ptr: Shared<'g, T>) {
+        let data = ptr.into_usize();
+        self.data = data;
+        unsafe {
+            if let Some(node) = self.node.as_ref() {
+                node.update(self.index, data_with_tag::<T>(data, 0), Ordering::Relaxed);
+            }
+        }
     }
 
     #[inline]

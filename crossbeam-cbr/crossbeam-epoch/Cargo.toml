@@ -30,7 +30,6 @@ static_assertions = "1.1.0"
 bitflags = "1.0"
 nix = "0.26.2"
 setjmp = { git = "https://github.com/powergee/setjmp.rs.git" }
-atomic = "0.5"
 
 [dependencies.membarrier]
 git = "https://github.com/jeehoonkang/membarrier-rs.git"

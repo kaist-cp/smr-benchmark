@@ -1,5 +1,7 @@
-use core::{mem, sync::atomic::AtomicU32};
+use core::{cell::UnsafeCell, mem, sync::atomic::AtomicU32};
 use std::{mem::ManuallyDrop, sync::atomic::compiler_fence, sync::atomic::Ordering};
+
+use crate::{pin, Writable};
 
 /// A wait-free atomic counter that supports increment and decrement,
 /// such that attempting to increment the counter from zero fails and
@@ -121,7 +123,7 @@ pub enum EjectAction {
 
 /// An instance of an object of type T with an atomic reference count.
 pub struct Counted<T> {
-    storage: ManuallyDrop<T>,
+    storage: UnsafeCell<ManuallyDrop<T>>,
     ref_cnt: StickyCounter,
     weak_cnt: StickyCounter,
 }
@@ -130,7 +132,7 @@ impl<T> Counted<T> {
     #[inline(always)]
     pub fn new(val: T) -> Self {
         Self {
-            storage: ManuallyDrop::new(val),
+            storage: UnsafeCell::new(ManuallyDrop::new(val)),
             ref_cnt: StickyCounter::new(),
             weak_cnt: StickyCounter::new(),
         }
@@ -138,18 +140,13 @@ impl<T> Counted<T> {
 
     #[inline(always)]
     pub fn data(&self) -> &T {
-        &self.storage
-    }
-
-    #[inline(always)]
-    pub fn data_mut(&mut self) -> &mut T {
-        &mut self.storage
+        unsafe { &*self.storage.get() }
     }
 
     /// Destroy the managed object, but keep the control data intact
     #[inline(always)]
-    pub unsafe fn dispose(&mut self) {
-        ManuallyDrop::drop(&mut self.storage)
+    pub unsafe fn dispose(&self) {
+        ManuallyDrop::drop(&mut *self.storage.get());
     }
 
     #[inline(always)]
@@ -172,7 +169,7 @@ impl<T> Counted<T> {
     /// by one. If this causes the weak reference count to hit zero, returns true, indicating
     /// that the caller should delete this object.
     #[inline(always)]
-    pub fn release_refs(&mut self, count: u32) -> EjectAction {
+    pub fn release_refs<G: Writable>(&self, count: u32, _: &G) -> EjectAction {
         // A decrement-release + an acquire fence is recommended by Boost's documentation:
         // https://www.boost.org/doc/libs/1_57_0/doc/html/atomic/usage_examples.html
         // Alternatively, an acquire-release decrement would work, but might be less efficient since the
@@ -207,7 +204,87 @@ impl<T> Counted<T> {
     // Release weak references to the object. If this causes the weak reference count
     // to hit zero, returns true, indicating that the caller should delete this object.
     #[inline(always)]
-    pub fn release_weak_refs(&self, count: u32) -> bool {
+    pub fn release_weak_refs<G: Writable>(&self, count: u32, _: &G) -> bool {
         self.weak_cnt.decrement(count, Ordering::Release)
     }
+
+    pub fn into_owned(self) -> T {
+        ManuallyDrop::into_inner(self.storage.into_inner())
+    }
+}
+
+#[inline]
+pub unsafe fn dispose<T, G: Writable>(ptr: *const Counted<T>, guard: &G) {
+    debug_assert!((*ptr).use_count() == 0);
+    (*ptr).dispose();
+    if (*ptr).release_weak_refs(1, guard) {
+        destory(ptr);
+    }
+}
+
+#[inline]
+pub unsafe fn destory<T>(ptr: *const Counted<T>) {
+    debug_assert!((*ptr).use_count() == 0);
+    drop(unsafe { Box::from_raw(ptr.cast_mut()) });
+}
+
+#[inline]
+pub unsafe fn eject<T, G: Writable>(ptr: *const Counted<T>, ret_type: RetireType, guard: &G) {
+    debug_assert!(!ptr.is_null());
+
+    match ret_type {
+        RetireType::DecrementStrongCount => decrement_ref_cnt(ptr, guard),
+        RetireType::DecrementWeakCount => decrement_weak_cnt(ptr, guard),
+        RetireType::Dispose => dispose(ptr, guard),
+    }
+}
+
+#[inline]
+pub unsafe fn decrement_ref_cnt<T, G: Writable>(ptr: *const Counted<T>, guard: &G) {
+    debug_assert!(!ptr.is_null());
+    let counted = unsafe { &*ptr };
+    debug_assert!(counted.use_count() >= 1);
+
+    match counted.release_refs(1, guard) {
+        EjectAction::Nothing => {}
+        EjectAction::Delay => retire(ptr, RetireType::Dispose, guard),
+        EjectAction::Destroy => destory(ptr),
+    }
+}
+
+#[inline]
+pub unsafe fn decrement_weak_cnt<T, G: Writable>(ptr: *const Counted<T>, guard: &G) {
+    debug_assert!(!ptr.is_null());
+    let counted = unsafe { &*ptr };
+    debug_assert!(counted.weak_count() >= 1);
+
+    if counted.release_weak_refs(1, guard) {
+        destory(ptr);
+    }
+}
+
+#[inline]
+pub unsafe fn delayed_decrement_ref_cnt<T, G: Writable>(ptr: *const Counted<T>, guard: &G) {
+    debug_assert!((*ptr).use_count() >= 1);
+    retire(ptr, RetireType::DecrementStrongCount, guard);
+}
+
+#[inline]
+pub unsafe fn delayed_decrement_weak_cnt<T, G: Writable>(ptr: *const Counted<T>, guard: &G) {
+    debug_assert!((*ptr).weak_count() >= 1);
+    retire(ptr, RetireType::DecrementWeakCount, guard);
+}
+
+#[inline]
+pub unsafe fn retire<T, G: Writable>(ptr: *const Counted<T>, ret_type: RetireType, guard: &G) {
+    guard.defer(move || {
+        let inner_guard = pin();
+        eject(ptr, ret_type, &inner_guard);
+    });
+}
+
+pub enum RetireType {
+    DecrementStrongCount,
+    DecrementWeakCount,
+    Dispose,
 }

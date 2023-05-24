@@ -13,6 +13,8 @@ static mut SIG_ACTION: MaybeUninit<SigAction> = MaybeUninit::uninit();
 thread_local! {
     static JMP_BUF: RefCell<MaybeUninit<sigjmp_buf>> = RefCell::new(MaybeUninit::uninit());
     static RESTARTABLE: AtomicBool = AtomicBool::new(false);
+    static IN_WRITE: AtomicBool = AtomicBool::new(false);
+    static DEFERRING_RESTART: AtomicBool = AtomicBool::new(false);
 }
 
 /// Install a signal handler.
@@ -48,17 +50,29 @@ pub(crate) fn is_restartable() -> bool {
 }
 
 #[inline]
-pub(crate) fn set_restartable(set_rest: bool) {
-    // On the original paper, RESTARTABLE variable is modified by CAS.
-    // This is because, on x86 devices, CAS prevents instruction reordering
-    // so that additional memory fences are not necessary.
-    //
-    // However, a memory fence is needed
-    // in other environments with relaxed memory model.
-    // In this implementation, we use atomic storing and a fence
-    // instead of a single CAS.
-    RESTARTABLE.with(|rest| rest.store(set_rest, Ordering::Release));
+pub(crate) fn initialize_before_read() {
+    RESTARTABLE.with(|rest| rest.store(true, Ordering::Relaxed));
+    IN_WRITE.with(|wrt| wrt.store(false, Ordering::Relaxed));
+    DEFERRING_RESTART.with(|def| def.store(false, Ordering::Relaxed));
     fence(Ordering::SeqCst);
+}
+
+#[inline]
+pub(crate) fn set_restartable(set_rest: bool) {
+    RESTARTABLE.with(|rest| rest.store(set_rest, Ordering::Relaxed));
+    fence(Ordering::SeqCst);
+}
+
+#[inline]
+pub(crate) fn set_in_write(in_write: bool) {
+    compiler_fence(Ordering::SeqCst);
+    IN_WRITE.with(|wrt| wrt.store(in_write, Ordering::SeqCst));
+    compiler_fence(Ordering::SeqCst);
+}
+
+#[inline]
+pub(crate) fn deferring_restart() -> bool {
+    DEFERRING_RESTART.with(|def| def.load(Ordering::Acquire))
 }
 
 /// Get a current ejection signal.

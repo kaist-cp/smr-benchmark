@@ -162,7 +162,6 @@ name = "crossbeam-cbr-epoch"
 version = "0.7.1"
 dependencies = [
  "arrayvec",
- "atomic",
  "bitflags",
  "cfg-if 0.1.10",
  "crossbeam-cbr-utils",

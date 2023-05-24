@@ -1,13 +1,26 @@
 use core::fmt;
 use core::mem;
+use core::mem::MaybeUninit;
+use core::ptr::drop_in_place;
+use core::ptr::read_volatile;
+use core::ptr::write_volatile;
+use core::sync::atomic::compiler_fence;
+use core::sync::atomic::fence;
+use core::sync::atomic::AtomicUsize;
+use core::sync::atomic::Ordering;
+
+use nix::sys::signal::pthread_sigmask;
+use nix::sys::signal::SigmaskHow;
+use nix::sys::signalfd::SigSet;
 
 use crate::atomic::Shared;
 use crate::collector::Collector;
 use crate::deferred::Deferred;
 use crate::garbage::Garbage;
+use crate::hazard::Shield;
 use crate::internal::Local;
-
 use crate::rc::Localizable;
+use crate::recovery;
 
 /// A guard that keeps the current thread pinned.
 ///
@@ -455,21 +468,191 @@ impl EpochGuard {
         unsafe { self.local.as_ref().map(|local| local.collector()) }
     }
 
+    #[inline(never)]
     pub fn read<'r, F, P>(&mut self, f: F) -> P::Localized
     where
         F: Fn(&'r mut ReadGuard) -> P,
         P: Localizable<'r>,
     {
-        todo!()
+        // TODO(@jeonghyeon): Those lots of `compiler_fence`s are really necessary?
+
+        // Make a checkpoint with `sigsetjmp` for recovering in read phase.
+        compiler_fence(Ordering::SeqCst);
+        let buf = recovery::jmp_buf();
+        if unsafe { setjmp::sigsetjmp(buf, 0) } == 1 {
+            fence(Ordering::SeqCst);
+
+            // Repin the current epoch.
+            self.repin();
+
+            // Unblock the signal before restarting the phase.
+            let mut oldset = SigSet::empty();
+            oldset.add(unsafe { recovery::ejection_signal() });
+            if pthread_sigmask(SigmaskHow::SIG_UNBLOCK, Some(&oldset), None).is_err() {
+                panic!("Failed to unblock signal");
+            }
+        }
+        compiler_fence(Ordering::SeqCst);
+
+        let mut guard = ReadGuard::new(self);
+
+        // Get ready to open the phase by setting atomic indicators.
+        assert!(
+            !recovery::is_restartable(),
+            "restartable value should be false before starting read phase"
+        );
+        recovery::initialize_before_read();
+        compiler_fence(Ordering::SeqCst);
+
+        // Execute the body of this read phase.
+        //
+        // Here, `transmute` is needed to bypass a lifetime parameter error.
+        //
+        // Although `Localizable` is depends on the lifetime of the `ReadGuard`,
+        // the `Localizable<'_>::Localized` is independent on it.
+        // However, Rust compiler cannot understand this semantics, so we need to
+        // lengthen the lifetime of the `guard` to trick the compiler that
+        // returned `localized` has sufficient lifetime.
+        let result = f(unsafe { mem::transmute(&mut guard) });
+        compiler_fence(Ordering::SeqCst);
+
+        // Protecting must be conducted in a crash-free section.
+        // Otherwise it may forget to drop acquired hazard slot on crashing.
+        recovery::set_in_write(true);
+        let localized = result.protect_with(self);
+        compiler_fence(Ordering::SeqCst);
+        if recovery::deferring_restart() {
+            drop(localized);
+            recovery::set_restartable(false);
+            unsafe { recovery::longjmp_manually() };
+        }
+        // Finaly, close this read phase by unsetting the `RESTARTABLE`.
+        recovery::set_restartable(false);
+
+        localized
     }
 
-    pub fn read_loop<'r, F1, F2, P>(&mut self, init_cursor: F1, step_forward: F2) -> P::Localized
+    #[inline(never)]
+    pub fn read_loop<'r, F1, F2, P>(&mut self, init_result: F1, step_forward: F2) -> P::Localized
     where
         F1: Fn(&'r mut ReadGuard) -> P,
         F2: Fn(&mut P, &'r mut ReadGuard) -> ReadStatus,
-        P: Localizable<'r>,
+        P: Localizable<'r> + Clone + Copy,
     {
-        todo!()
+        const ITER_BETWEEN_CHECKPOINTS: usize = 4096;
+
+        // TODO(@jeonghyeon): Those lots of `compiler_fence`s are really necessary?
+
+        // Pre-allocate a raw backup storage on a heap.
+        // TODO(@jeonghyeon): Answer those questions.
+        // * Why not on a stack? -> it may optimize to a register
+        // * Why a raw pointer, instead of just a `Box`? -> to use volatile
+        let backup_result = Box::into_raw(Box::new(unsafe { mem::zeroed::<P>() }));
+        let backup_exist = Box::into_raw(Box::new(false));
+        let backup_shield = Box::into_raw(Box::new(MaybeUninit::new(unsafe {
+            mem::zeroed::<P::Localized>()
+        })));
+
+        // Make a checkpoint with `sigsetjmp` for recovering in read phase.
+        compiler_fence(Ordering::SeqCst);
+        let buf = recovery::jmp_buf();
+        if unsafe { setjmp::sigsetjmp(buf, 0) } == 1 {
+            fence(Ordering::SeqCst);
+
+            // Repin the current epoch.
+            self.repin();
+
+            // Unblock the signal before restarting the phase.
+            let mut oldset = SigSet::empty();
+            oldset.add(unsafe { recovery::ejection_signal() });
+            if pthread_sigmask(SigmaskHow::SIG_UNBLOCK, Some(&oldset), None).is_err() {
+                panic!("Failed to unblock signal");
+            }
+        }
+        compiler_fence(Ordering::SeqCst);
+
+        let mut guard = ReadGuard::new(self);
+
+        // Load the saved intermediate result, if one exists.
+        let mut result = if unsafe { *backup_exist } {
+            unsafe { read_volatile(backup_result.cast_const()) }
+        } else {
+            init_result(unsafe { mem::transmute(&mut guard) })
+        };
+
+        // Get ready to open the phase by setting atomic indicators.
+        assert!(
+            !recovery::is_restartable(),
+            "restartable value should be false before starting read phase"
+        );
+        recovery::initialize_before_read();
+        compiler_fence(Ordering::SeqCst);
+
+        for iter in 0.. {
+            match step_forward(&mut result, unsafe { mem::transmute(&mut guard) }) {
+                ReadStatus::Finished => break,
+                ReadStatus::Continue => {
+                    // TODO(@jeonghyeon): Apply an adaptive checkpointing.
+                    if iter % ITER_BETWEEN_CHECKPOINTS == 0 {
+                        // Protecting must be conducted in a crash-free section.
+                        // Otherwise it may forget to drop acquired hazard slot on crashing.
+                        recovery::set_in_write(true);
+                        unsafe {
+                            let localized = result.protect_with(self);
+                            compiler_fence(Ordering::SeqCst);
+
+                            if recovery::deferring_restart() {
+                                // While protecting, we are ejected.
+                                // Then the protection may not be valid.
+                                // Drop the shields and restart this read phase manually.
+                                drop(localized);
+                                recovery::set_restartable(false);
+                                recovery::longjmp_manually();
+                            } else {
+                                // We are not ejected so the protection was valid!
+                                // Drop the previous shields and save the current one on the backup storage.
+                                if *backup_exist {
+                                    // TODO(@jeonghyeon): On each checkpointing, we drop the previous shields and
+                                    //                    create shields again. Optimize this by recycling them.
+                                    drop_in_place((*backup_shield).as_mut_ptr());
+                                }
+                                *backup_result = result.clone();
+                                *backup_exist = true;
+                                write_volatile((*backup_shield).as_mut_ptr(), localized);
+                            }
+                        }
+                        recovery::set_in_write(false);
+                    }
+                }
+            }
+        }
+        compiler_fence(Ordering::SeqCst);
+
+        // Protecting must be conducted in a crash-free section.
+        // Otherwise it may forget to drop acquired hazard slot on crashing.
+        recovery::set_in_write(true);
+        let localized = result.protect_with(self);
+        compiler_fence(Ordering::SeqCst);
+        if recovery::deferring_restart() {
+            drop(localized);
+            recovery::set_restartable(false);
+            unsafe { recovery::longjmp_manually() };
+        }
+        // Finaly, close this read phase by unsetting the `RESTARTABLE`.
+        recovery::set_restartable(false);
+
+        // Free the memory location for the backup storage.
+        // If there are backup shields, drop them.
+        unsafe {
+            let backup_exist = *Box::from_raw(backup_exist);
+            if backup_exist {
+                drop_in_place((*backup_shield).as_mut_ptr());
+            }
+            drop(Box::from_raw(backup_result));
+            drop(Box::from_raw(backup_shield));
+        }
+
+        localized
     }
 }
 
@@ -585,22 +768,127 @@ pub enum ReadStatus {
     Continue,
 }
 
-pub struct ReadGuard {}
+pub struct ReadGuard {
+    inner: *const EpochGuard,
+}
 
 impl ReadGuard {
-    pub fn write<'r, D, F>(&'r mut self, to_deref: D, f: F)
+    fn new(guard: &EpochGuard) -> Self {
+        Self { inner: guard }
+    }
+
+    pub fn write<'r, F, P>(&'r self, to_deref: P, f: F)
     where
-        D: Localizable<'r>,
-        F: Fn(&D::Localized, &WriteGuard),
+        F: Fn(&P::Localized, &WriteGuard),
+        P: Localizable<'r>,
     {
-        todo!()
+        // Protecting must be conducted in a crash-free section.
+        // Otherwise it may forget to drop acquired hazard slot on crashing.
+        recovery::set_in_write(true);
+        let localized = to_deref.protect_with(unsafe { &*self.inner });
+        compiler_fence(Ordering::SeqCst);
+        if recovery::deferring_restart() {
+            // While protecting, we are ejected.
+            // Then the protection may not be valid.
+            // Drop the shields and restart this read phase manually.
+            drop(localized);
+            recovery::set_restartable(false);
+            unsafe { recovery::longjmp_manually() };
+        }
+
+        // We are not ejected so the protection was valid!
+        // Now we are free to call the write phase body.
+        let guard = WriteGuard::new::<P>(&localized, unsafe { &*self.inner });
+        f(&localized, &guard);
+        compiler_fence(Ordering::SeqCst);
+
+        drop(localized);
+        recovery::set_in_write(false);
+
+        if recovery::deferring_restart() {
+            recovery::set_restartable(false);
+            unsafe { recovery::longjmp_manually() };
+        }
     }
 }
 
-pub struct WriteGuard {}
+pub struct WriteGuard {
+    inner: *mut EpochGuard,
+    localized_ptr: *mut u8,
+    localized_drop: unsafe fn(*mut u8),
+}
 
-pub trait Writable {}
+impl WriteGuard {
+    fn new<'r, P>(localized: &P::Localized, guard: &EpochGuard) -> Self
+    where
+        P: Localizable<'r>,
+    {
+        unsafe fn drop_localized<T>(ptr: *mut u8) {
+            drop_in_place(ptr as *mut T);
+        }
+        Self {
+            inner: unsafe { guard as *const EpochGuard }.cast_mut(),
+            localized_ptr: localized as *const _ as *mut _,
+            localized_drop: drop_localized::<P::Localized>,
+        }
+    }
 
-impl Writable for EpochGuard {}
+    pub fn restart_read(&self) -> ! {
+        unsafe {
+            (self.localized_drop)(self.localized_ptr);
+            recovery::set_restartable(false);
+            recovery::longjmp_manually()
+        }
+    }
+}
 
-impl Writable for WriteGuard {}
+pub trait Writable {
+    unsafe fn defer<F: FnOnce()>(&self, f: F);
+    fn defend<T>(&mut self, link: &AtomicUsize, shield: &mut Shield<T>);
+    fn copy<T>(&mut self, src: &Shield<T>, dst: &mut Shield<T>);
+    unsafe fn as_epoch_guard<'g>(&'g mut self) -> &'g mut EpochGuard;
+}
+
+impl Writable for EpochGuard {
+    unsafe fn defer<F: FnOnce()>(&self, f: F) {
+        self.defer_unchecked(f);
+    }
+
+    fn defend<T>(&mut self, link: &AtomicUsize, shield: &mut Shield<T>) {
+        loop {
+            let ptr = link.load(Ordering::Acquire);
+            if shield.defend_usize(ptr, self).is_ok() {
+                return;
+            }
+            self.repin();
+        }
+    }
+
+    fn copy<T>(&mut self, src: &Shield<T>, dst: &mut Shield<T>) {
+        while dst.defend_usize(src.data, self).is_err() {
+            self.repin();
+        }
+    }
+
+    unsafe fn as_epoch_guard<'g>(&'g mut self) -> &'g mut EpochGuard {
+        self
+    }
+}
+
+impl Writable for WriteGuard {
+    unsafe fn defer<F: FnOnce()>(&self, f: F) {
+        unsafe { &mut *self.inner }.defer_unchecked(f);
+    }
+
+    fn defend<T>(&mut self, link: &AtomicUsize, shield: &mut Shield<T>) {
+        unsafe { &mut *self.inner }.defend(link, shield)
+    }
+
+    fn copy<T>(&mut self, src: &Shield<T>, dst: &mut Shield<T>) {
+        unsafe { &mut *self.inner }.copy(src, dst)
+    }
+
+    unsafe fn as_epoch_guard<'g>(&'g mut self) -> &'g mut EpochGuard {
+        unsafe { &mut *self.inner }
+    }
+}
