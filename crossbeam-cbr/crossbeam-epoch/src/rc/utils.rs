@@ -277,7 +277,7 @@ pub unsafe fn delayed_decrement_weak_cnt<T, G: Writable>(ptr: *const Counted<T>,
 
 #[inline]
 pub unsafe fn retire<T, G: Writable>(ptr: *const Counted<T>, ret_type: RetireType, guard: &G) {
-    guard.defer(move || {
+    guard.defer_decrement(move || {
         let inner_guard = pin();
         eject(ptr, ret_type, &inner_guard);
     });

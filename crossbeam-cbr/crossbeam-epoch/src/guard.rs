@@ -468,6 +468,13 @@ impl EpochGuard {
         unsafe { self.local.as_ref().map(|local| local.collector()) }
     }
 
+    unsafe fn is_ejected(&self) -> bool {
+        if let Some(local) = self.local.as_ref() {
+            return local.get_epoch(self).is_err();
+        }
+        false
+    }
+
     #[inline(never)]
     pub fn read<'r, F, P>(&mut self, f: F) -> P::Localized
     where
@@ -516,19 +523,17 @@ impl EpochGuard {
         let result = f(unsafe { mem::transmute(&mut guard) });
         compiler_fence(Ordering::SeqCst);
 
-        // Protecting must be conducted in a crash-free section.
-        // Otherwise it may forget to drop acquired hazard slot on crashing.
-        recovery::set_in_write(true);
-        let localized = result.protect_with(self);
-        compiler_fence(Ordering::SeqCst);
-        if recovery::deferring_restart() {
-            drop(localized);
-            recovery::set_restartable(false);
-            unsafe { recovery::perform_longjmp() };
-        }
         // Finaly, close this read phase by unsetting the `RESTARTABLE`.
         recovery::set_restartable(false);
 
+        // Protecting must be conducted in a crash-free section.
+        // Otherwise it may forget to drop acquired hazard slot on crashing.
+        let localized = result.protect_with(self);
+        compiler_fence(Ordering::SeqCst);
+        if unsafe { self.is_ejected() } {
+            drop(localized);
+            unsafe { recovery::perform_longjmp() };
+        }
         localized
     }
 
@@ -601,7 +606,7 @@ impl EpochGuard {
                             let localized = result.protect_with(self);
                             compiler_fence(Ordering::SeqCst);
 
-                            if recovery::deferring_restart() {
+                            if self.is_ejected() {
                                 // While protecting, we are ejected.
                                 // Then the protection may not be valid.
                                 // Drop the shields and restart this read phase manually.
@@ -628,18 +633,18 @@ impl EpochGuard {
         }
         compiler_fence(Ordering::SeqCst);
 
+        // Finaly, close this read phase by unsetting the `RESTARTABLE`.
+        recovery::set_restartable(false);
+
         // Protecting must be conducted in a crash-free section.
         // Otherwise it may forget to drop acquired hazard slot on crashing.
         recovery::set_in_write(true);
         let localized = result.protect_with(self);
         compiler_fence(Ordering::SeqCst);
-        if recovery::deferring_restart() {
+        if unsafe { self.is_ejected() } {
             drop(localized);
-            recovery::set_restartable(false);
             unsafe { recovery::perform_longjmp() };
         }
-        // Finaly, close this read phase by unsetting the `RESTARTABLE`.
-        recovery::set_restartable(false);
 
         // Free the memory location for the backup storage.
         // If there are backup shields, drop them.
@@ -787,7 +792,7 @@ impl ReadGuard {
         recovery::set_in_write(true);
         let localized = to_deref.protect_with(unsafe { &*self.inner });
         compiler_fence(Ordering::SeqCst);
-        if recovery::deferring_restart() {
+        if unsafe { (&*self.inner).is_ejected() } {
             // While protecting, we are ejected.
             // Then the protection may not be valid.
             // Drop the shields and restart this read phase manually.
@@ -805,7 +810,7 @@ impl ReadGuard {
         drop(localized);
         recovery::set_in_write(false);
 
-        if recovery::deferring_restart() {
+        if unsafe { (&*self.inner).is_ejected() } {
             recovery::set_restartable(false);
             unsafe { recovery::perform_longjmp() };
         }
@@ -843,14 +848,14 @@ impl WriteGuard {
 }
 
 pub trait Writable {
-    unsafe fn defer<F: FnOnce()>(&self, f: F);
+    unsafe fn defer_decrement<F: FnOnce()>(&self, f: F);
     fn defend<T>(&mut self, link: &AtomicUsize, shield: &mut Shield<T>);
     fn copy<T>(&mut self, src: &Shield<T>, dst: &mut Shield<T>);
     unsafe fn as_epoch_guard<'g>(&'g mut self) -> &'g mut EpochGuard;
 }
 
 impl Writable for EpochGuard {
-    unsafe fn defer<F: FnOnce()>(&self, f: F) {
+    unsafe fn defer_decrement<F: FnOnce()>(&self, f: F) {
         self.defer_unchecked(f);
     }
 
@@ -876,7 +881,7 @@ impl Writable for EpochGuard {
 }
 
 impl Writable for WriteGuard {
-    unsafe fn defer<F: FnOnce()>(&self, f: F) {
+    unsafe fn defer_decrement<F: FnOnce()>(&self, f: F) {
         unsafe { &mut *self.inner }.defer_unchecked(f);
     }
 

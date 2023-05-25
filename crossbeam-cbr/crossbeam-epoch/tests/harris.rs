@@ -132,9 +132,7 @@ where
             cursor.found = loop {
                 let curr_node = match cursor.curr.as_ref() {
                     Some(node) => node,
-                    None => {
-                        break false;
-                    }
+                    None => break false,
                 };
 
                 curr_node.next.defend_with(&mut next, guard);
@@ -334,17 +332,26 @@ where
 
 #[test]
 fn smoke_harris_naive() {
-    smoke_with(&List::<i32, String>::find_naive);
+    for i in 0..50 {
+        smoke_with(&List::<i32, String>::find_naive);
+        println!("{i}");
+    }
 }
 
 #[test]
 fn smoke_harris_read() {
-    smoke_with(&List::<i32, String>::find_read);
+    for i in 0..50 {
+        smoke_with(&List::<i32, String>::find_read);
+        println!("{i}");
+    }
 }
 
 #[test]
 fn smoke_harris_read_loop() {
-    smoke_with(&List::<i32, String>::find_read_loop);
+    for i in 0..50 {
+        smoke_with(&List::<i32, String>::find_read_loop);
+        println!("{i}");
+    }
 }
 
 fn smoke_with<F>(find: &F)
@@ -354,6 +361,7 @@ where
     extern crate rand;
     use crossbeam_cbr_epoch::pin;
     use rand::prelude::*;
+    use std::sync::atomic::{compiler_fence, Ordering};
     use std::thread::scope;
 
     const THREADS: i32 = 30;
@@ -382,10 +390,12 @@ where
                 let mut keys: Vec<i32> =
                     (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
                 keys.shuffle(&mut rng);
+                let mut guard = pin();
                 for i in keys {
-                    let guard = &mut pin();
-                    let cursor = map.remove(find, &i, guard).unwrap();
+                    let cursor = map.remove(find, &i, &mut guard).unwrap();
                     assert_eq!(i.to_string(), cursor.curr.as_ref().unwrap().value);
+                    compiler_fence(Ordering::SeqCst);
+                    guard.repin();
                 }
             });
         }
@@ -398,10 +408,12 @@ where
                 let mut keys: Vec<i32> =
                     (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
                 keys.shuffle(&mut rng);
+                let mut guard = pin();
                 for i in keys {
-                    let guard = &mut pin();
-                    let cursor = map.get(find, &i, guard).unwrap();
+                    let cursor = map.get(find, &i, &mut guard).unwrap();
                     assert_eq!(i.to_string(), cursor.curr.as_ref().unwrap().value);
+                    compiler_fence(Ordering::SeqCst);
+                    guard.repin();
                 }
             });
         }

@@ -608,7 +608,6 @@ impl<T> Shield<T> {
     }
 
     #[must_use]
-    #[inline]
     pub fn defend_usize(&mut self, data: usize, guard: &EpochGuard) -> Result<(), ShieldError> {
         self.data = data;
         unsafe {
@@ -627,7 +626,6 @@ impl<T> Shield<T> {
         Ok(())
     }
 
-    #[inline]
     pub unsafe fn defend_unchecked<'g>(&mut self, ptr: Shared<'g, T>) {
         let data = ptr.into_usize();
         self.data = data;

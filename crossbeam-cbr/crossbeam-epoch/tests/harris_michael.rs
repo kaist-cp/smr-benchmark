@@ -280,12 +280,18 @@ where
 
 #[test]
 fn smoke_harris_michael_naive() {
-    smoke_with(&List::<i32, String>::find_naive);
+    for i in 0..50 {
+        smoke_with(&List::<i32, String>::find_naive);
+        println!("{i}");
+    }
 }
 
 #[test]
 fn smoke_harris_michael_read_loop() {
-    smoke_with(&List::<i32, String>::find_read_loop);
+    for i in 0..50 {
+        smoke_with(&List::<i32, String>::find_read_loop);
+        println!("{i}");
+    }
 }
 
 fn smoke_with<F>(find: &F)

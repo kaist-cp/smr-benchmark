@@ -363,7 +363,6 @@ impl<T> Rc<T> {
     #[inline]
     pub unsafe fn into_owned(mut self) -> T {
         let result = Box::from_raw(self.as_untagged_raw().cast_mut()).into_owned();
-        unsafe { drop_in_place((&mut self.ptr) as *mut usize) };
         forget(self);
         result
     }
@@ -406,7 +405,6 @@ impl<T> Rc<T> {
     #[must_use]
     pub(crate) fn release(mut self) -> usize {
         let ptr = self.ptr;
-        unsafe { drop_in_place((&mut self.ptr) as *mut usize) };
         forget(self);
         ptr
     }
