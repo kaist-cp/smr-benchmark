@@ -509,7 +509,7 @@ impl EpochGuard {
             !recovery::is_restartable(),
             "restartable value should be false before starting read phase"
         );
-        recovery::initialize_before_read();
+        recovery::set_restartable(true);
         compiler_fence(Ordering::SeqCst);
 
         // Execute the body of this read phase.
@@ -526,6 +526,7 @@ impl EpochGuard {
 
         // Finaly, close this read phase by unsetting the `RESTARTABLE`.
         recovery::set_restartable(false);
+        compiler_fence(Ordering::SeqCst);
 
         // Protecting must be conducted in a crash-free section.
         // Otherwise it may forget to drop acquired hazard slot on crashing.
@@ -613,7 +614,7 @@ impl EpochGuard {
             !recovery::is_restartable(),
             "restartable value should be false before starting read phase"
         );
-        recovery::initialize_before_read();
+        recovery::set_restartable(true);
         compiler_fence(Ordering::SeqCst);
 
         for iter in 0.. {
@@ -624,21 +625,23 @@ impl EpochGuard {
                     if iter % ITER_BETWEEN_CHECKPOINTS == 0 {
                         // Protecting must be conducted in a crash-free section.
                         // Otherwise it may forget to drop acquired hazard slot on crashing.
-                        recovery::set_in_write(true);
-                        unsafe {
-                            let localized = result.protect_with(self);
-                            compiler_fence(Ordering::SeqCst);
+                        recovery::set_restartable(false);
+                        compiler_fence(Ordering::SeqCst);
+                        
+                        let localized = result.protect_with(self);
+                        compiler_fence(Ordering::SeqCst);
 
-                            if self.is_ejected() {
-                                // While protecting, we are ejected.
-                                // Then the protection may not be valid.
-                                // Drop the shields and restart this read phase manually.
-                                drop(localized);
-                                recovery::set_restartable(false);
-                                recovery::perform_longjmp();
-                            } else {
-                                // We are not ejected so the protection was valid!
-                                // Drop the previous shields and save the current one on the backup storage.
+                        if unsafe { self.is_ejected() } {
+                            // While protecting, we are ejected.
+                            // Then the protection may not be valid.
+                            // Drop the shields and restart this read phase manually.
+                            drop(localized);
+                            recovery::set_restartable(false);
+                            unsafe { recovery::perform_longjmp() };
+                        } else {
+                            // We are not ejected so the protection was valid!
+                            // Drop the previous shields and save the current one on the backup storage.
+                            unsafe {
                                 if *backup_exist {
                                     // TODO(@jeonghyeon): On each checkpointing, we drop the previous shields and
                                     //                    create shields again. Optimize this by recycling them.
@@ -649,7 +652,9 @@ impl EpochGuard {
                                 write_volatile((*backup_shield).as_mut_ptr(), localized);
                             }
                         }
-                        recovery::set_in_write(false);
+                        compiler_fence(Ordering::SeqCst);
+
+                        recovery::set_restartable(true);
                     }
                 }
             }
@@ -658,6 +663,7 @@ impl EpochGuard {
 
         // Finaly, close this read phase by unsetting the `RESTARTABLE`.
         recovery::set_restartable(false);
+        compiler_fence(Ordering::SeqCst);
 
         // Protecting must be conducted in a crash-free section.
         // Otherwise it may forget to drop acquired hazard slot on crashing.
@@ -811,7 +817,9 @@ impl ReadGuard {
     {
         // Protecting must be conducted in a crash-free section.
         // Otherwise it may forget to drop acquired hazard slot on crashing.
-        recovery::set_in_write(true);
+        recovery::set_restartable(false);
+        compiler_fence(Ordering::SeqCst);
+        
         let localized = to_deref.protect_with(unsafe { &*self.inner });
         compiler_fence(Ordering::SeqCst);
         if unsafe { (&*self.inner).is_ejected() } {
@@ -832,7 +840,7 @@ impl ReadGuard {
 
         match result {
             WriteResult::Finished => {
-                recovery::set_in_write(false);
+                recovery::set_restartable(true);
 
                 if unsafe { (&*self.inner).is_ejected() } {
                     recovery::set_restartable(false);

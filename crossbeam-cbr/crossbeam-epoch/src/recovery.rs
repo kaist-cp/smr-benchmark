@@ -13,8 +13,6 @@ static mut SIG_ACTION: MaybeUninit<SigAction> = MaybeUninit::uninit();
 thread_local! {
     static JMP_BUF: RefCell<MaybeUninit<sigjmp_buf>> = RefCell::new(MaybeUninit::uninit());
     static RESTARTABLE: AtomicBool = AtomicBool::new(false);
-    static IN_WRITE: AtomicBool = AtomicBool::new(false);
-    static DEFERRING_RESTART: AtomicBool = AtomicBool::new(false);
     static INVALIDATE_BACKUP: AtomicBool = AtomicBool::new(false);
 }
 
@@ -51,39 +49,8 @@ pub(crate) fn is_restartable() -> bool {
 }
 
 #[inline]
-pub(crate) fn initialize_before_read() {
-    RESTARTABLE.with(|rest| rest.store(true, Ordering::Relaxed));
-    IN_WRITE.with(|wrt| wrt.store(false, Ordering::Relaxed));
-    DEFERRING_RESTART.with(|def| def.store(false, Ordering::Relaxed));
-    fence(Ordering::SeqCst);
-}
-
-#[inline]
 pub(crate) fn set_restartable(set_rest: bool) {
     RESTARTABLE.with(|rest| rest.store(set_rest, Ordering::Relaxed));
-    fence(Ordering::SeqCst);
-}
-
-#[inline]
-pub(crate) fn set_in_write(in_write: bool) {
-    compiler_fence(Ordering::SeqCst);
-    IN_WRITE.with(|wrt| wrt.store(in_write, Ordering::SeqCst));
-    compiler_fence(Ordering::SeqCst);
-}
-
-#[inline]
-pub(crate) fn is_in_write() -> bool {
-    IN_WRITE.with(|wrt| wrt.load(Ordering::Acquire))
-}
-
-#[inline]
-pub(crate) fn defer_restart() {
-    DEFERRING_RESTART.with(|def| def.store(true, Ordering::Release));
-}
-
-#[inline]
-pub(crate) fn deferring_restart() -> bool {
-    DEFERRING_RESTART.with(|def| def.load(Ordering::Acquire))
 }
 
 #[inline]
@@ -134,10 +101,6 @@ pub(crate) fn jmp_buf() -> *mut sigjmp_buf {
 }
 
 extern "C" fn handle_signal(_: i32, _: *mut siginfo_t, _: *mut c_void) {
-    if is_in_write() {
-        defer_restart();
-        return;
-    }
     if !is_restartable() {
         return;
     }
