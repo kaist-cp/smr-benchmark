@@ -2,7 +2,7 @@ extern crate crossbeam_cbr_epoch;
 
 use crossbeam_cbr_epoch::{
     rc::{Atomic, Localizable, Rc, Shared, Shield},
-    EpochGuard, ReadGuard, ReadStatus,
+    EpochGuard, ReadGuard, ReadStatus, WriteResult,
 };
 use std::mem;
 
@@ -174,13 +174,15 @@ where
                         guard.write(
                             [cursor.prev, cursor.curr, next],
                             |[prev, curr, next], guard| {
-                                if !prev
+                                if prev
                                     .as_ref()
                                     .unwrap()
                                     .next
                                     .try_compare_exchange(curr, next, guard)
                                 {
-                                    guard.restart_read();
+                                    return WriteResult::Finished;
+                                } else {
+                                    return WriteResult::RestartRead;
                                 }
                             },
                         );

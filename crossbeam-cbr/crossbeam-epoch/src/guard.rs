@@ -1,5 +1,6 @@
 use core::fmt;
 use core::mem;
+use core::mem::zeroed;
 use core::mem::MaybeUninit;
 use core::ptr::drop_in_place;
 use core::ptr::read_volatile;
@@ -544,19 +545,30 @@ impl EpochGuard {
         F2: Fn(&mut P, &'r mut ReadGuard) -> ReadStatus,
         P: Localizable<'r> + Clone + Copy,
     {
-        const ITER_BETWEEN_CHECKPOINTS: usize = 4096;
+        const ITER_BETWEEN_CHECKPOINTS: usize = 512;
 
         // TODO(@jeonghyeon): Those lots of `compiler_fence`s are really necessary?
 
-        // Pre-allocate a raw backup storage on a heap.
-        // TODO(@jeonghyeon): Answer those questions.
-        // * Why not on a stack? -> it may optimize to a register
-        // * Why a raw pointer, instead of just a `Box`? -> to use volatile
-        let backup_result = Box::into_raw(Box::new(unsafe { mem::zeroed::<P>() }));
-        let backup_exist = Box::into_raw(Box::new(false));
-        let backup_shield = Box::into_raw(Box::new(MaybeUninit::new(unsafe {
-            mem::zeroed::<P::Localized>()
-        })));
+        // Allocate a raw pointers to backup storages.
+        // These pointers MUST be on the STACK, so that the pointer values
+        // are preserved across the crashes.
+        let mut backup_result = unsafe { zeroed() };
+        let mut backup_exist = unsafe { zeroed() };
+        let mut backup_shield = unsafe { zeroed() };
+
+        // Allocate backup storages on the HEAP,
+        // and write their pointers on `backup_*`, which are on the STACK.
+        unsafe {
+            write_volatile(
+                &mut backup_result,
+                Box::into_raw(Box::new(mem::zeroed::<P>())),
+            );
+            write_volatile(&mut backup_exist, Box::into_raw(Box::new(false)));
+            write_volatile(
+                &mut backup_shield,
+                Box::into_raw(Box::new(MaybeUninit::new(mem::zeroed::<P::Localized>()))),
+            );
+        }
 
         // Make a checkpoint with `sigsetjmp` for recovering in read phase.
         compiler_fence(Ordering::SeqCst);
@@ -573,6 +585,17 @@ impl EpochGuard {
             if pthread_sigmask(SigmaskHow::SIG_UNBLOCK, Some(&oldset), None).is_err() {
                 panic!("Failed to unblock signal");
             }
+        }
+        compiler_fence(Ordering::SeqCst);
+
+        if recovery::is_invalidated() {
+            unsafe {
+                if *backup_exist {
+                    *backup_exist = false;
+                    drop_in_place((*backup_shield).as_mut_ptr());
+                }
+            }
+            recovery::set_invalidate_backup(false);
         }
         compiler_fence(Ordering::SeqCst);
 
@@ -638,7 +661,6 @@ impl EpochGuard {
 
         // Protecting must be conducted in a crash-free section.
         // Otherwise it may forget to drop acquired hazard slot on crashing.
-        recovery::set_in_write(true);
         let localized = result.protect_with(self);
         compiler_fence(Ordering::SeqCst);
         if unsafe { self.is_ejected() } {
@@ -784,7 +806,7 @@ impl ReadGuard {
 
     pub fn write<'r, F, P>(&'r self, to_deref: P, f: F)
     where
-        F: Fn(&P::Localized, &WriteGuard),
+        F: Fn(&P::Localized, &WriteGuard) -> WriteResult,
         P: Localizable<'r>,
     {
         // Protecting must be conducted in a crash-free section.
@@ -803,46 +825,42 @@ impl ReadGuard {
 
         // We are not ejected so the protection was valid!
         // Now we are free to call the write phase body.
-        let guard = WriteGuard::new::<P>(&localized, unsafe { &*self.inner });
-        f(&localized, &guard);
+        let guard = WriteGuard::new(self.inner);
+        let result = f(&localized, &guard);
+        drop(localized);
         compiler_fence(Ordering::SeqCst);
 
-        drop(localized);
-        recovery::set_in_write(false);
+        match result {
+            WriteResult::Finished => {
+                recovery::set_in_write(false);
 
-        if unsafe { (&*self.inner).is_ejected() } {
-            recovery::set_restartable(false);
-            unsafe { recovery::perform_longjmp() };
+                if unsafe { (&*self.inner).is_ejected() } {
+                    recovery::set_restartable(false);
+                    unsafe { recovery::perform_longjmp() };
+                }
+            }
+            WriteResult::RestartRead => {
+                recovery::set_invalidate_backup(true);
+                recovery::set_restartable(false);
+                unsafe { recovery::perform_longjmp() };
+            }
         }
     }
+}
+
+pub enum WriteResult {
+    Finished,
+    RestartRead,
 }
 
 pub struct WriteGuard {
     inner: *mut EpochGuard,
-    localized_ptr: *mut u8,
-    localized_drop: unsafe fn(*mut u8),
 }
 
 impl WriteGuard {
-    fn new<'r, P>(localized: &P::Localized, guard: &EpochGuard) -> Self
-    where
-        P: Localizable<'r>,
-    {
-        unsafe fn drop_localized<T>(ptr: *mut u8) {
-            drop_in_place(ptr as *mut T);
-        }
+    fn new(guard: *const EpochGuard) -> Self {
         Self {
-            inner: unsafe { guard as *const EpochGuard }.cast_mut(),
-            localized_ptr: localized as *const _ as *mut _,
-            localized_drop: drop_localized::<P::Localized>,
-        }
-    }
-
-    pub fn restart_read(&self) -> ! {
-        unsafe {
-            (self.localized_drop)(self.localized_ptr);
-            recovery::set_restartable(false);
-            recovery::perform_longjmp()
+            inner: guard as *mut EpochGuard,
         }
     }
 }

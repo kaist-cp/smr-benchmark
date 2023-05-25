@@ -15,6 +15,7 @@ thread_local! {
     static RESTARTABLE: AtomicBool = AtomicBool::new(false);
     static IN_WRITE: AtomicBool = AtomicBool::new(false);
     static DEFERRING_RESTART: AtomicBool = AtomicBool::new(false);
+    static INVALIDATE_BACKUP: AtomicBool = AtomicBool::new(false);
 }
 
 /// Install a signal handler.
@@ -83,6 +84,16 @@ pub(crate) fn defer_restart() {
 #[inline]
 pub(crate) fn deferring_restart() -> bool {
     DEFERRING_RESTART.with(|def| def.load(Ordering::Acquire))
+}
+
+#[inline]
+pub(crate) fn set_invalidate_backup(invalidate: bool) {
+    INVALIDATE_BACKUP.with(|inv| inv.store(invalidate, Ordering::Release));
+}
+
+#[inline]
+pub(crate) fn is_invalidated() -> bool {
+    INVALIDATE_BACKUP.with(|inv| inv.load(Ordering::Acquire))
 }
 
 /// Get a current ejection signal.
