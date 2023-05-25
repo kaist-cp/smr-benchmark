@@ -71,6 +71,16 @@ pub(crate) fn set_in_write(in_write: bool) {
 }
 
 #[inline]
+pub(crate) fn is_in_write() -> bool {
+    IN_WRITE.with(|wrt| wrt.load(Ordering::Acquire))
+}
+
+#[inline]
+pub(crate) fn defer_restart() {
+    DEFERRING_RESTART.with(|def| def.store(true, Ordering::Release));
+}
+
+#[inline]
 pub(crate) fn deferring_restart() -> bool {
     DEFERRING_RESTART.with(|def| def.load(Ordering::Acquire))
 }
@@ -113,15 +123,16 @@ pub(crate) fn jmp_buf() -> *mut sigjmp_buf {
 }
 
 extern "C" fn handle_signal(_: i32, _: *mut siginfo_t, _: *mut c_void) {
+    if is_in_write() {
+        defer_restart();
+        return;
+    }
     if !is_restartable() {
         return;
     }
 
-    let buf = jmp_buf();
     set_restartable(false);
-    compiler_fence(Ordering::SeqCst);
-
-    unsafe { siglongjmp(buf, 1) };
+    unsafe { perform_longjmp() };
 }
 
 /// Perform `siglongjmp` without changing any phase-related variables
@@ -130,7 +141,7 @@ extern "C" fn handle_signal(_: i32, _: *mut siginfo_t, _: *mut c_void) {
 /// It assume that the `jmp_buf` is properly initialized
 /// by calling `siglongjmp`
 #[inline]
-pub(crate) unsafe fn longjmp_manually() -> ! {
+pub(crate) unsafe fn perform_longjmp() -> ! {
     let buf = jmp_buf();
     compiler_fence(Ordering::SeqCst);
 

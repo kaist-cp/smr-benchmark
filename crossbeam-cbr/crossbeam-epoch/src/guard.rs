@@ -524,7 +524,7 @@ impl EpochGuard {
         if recovery::deferring_restart() {
             drop(localized);
             recovery::set_restartable(false);
-            unsafe { recovery::longjmp_manually() };
+            unsafe { recovery::perform_longjmp() };
         }
         // Finaly, close this read phase by unsetting the `RESTARTABLE`.
         recovery::set_restartable(false);
@@ -607,7 +607,7 @@ impl EpochGuard {
                                 // Drop the shields and restart this read phase manually.
                                 drop(localized);
                                 recovery::set_restartable(false);
-                                recovery::longjmp_manually();
+                                recovery::perform_longjmp();
                             } else {
                                 // We are not ejected so the protection was valid!
                                 // Drop the previous shields and save the current one on the backup storage.
@@ -636,7 +636,7 @@ impl EpochGuard {
         if recovery::deferring_restart() {
             drop(localized);
             recovery::set_restartable(false);
-            unsafe { recovery::longjmp_manually() };
+            unsafe { recovery::perform_longjmp() };
         }
         // Finaly, close this read phase by unsetting the `RESTARTABLE`.
         recovery::set_restartable(false);
@@ -793,7 +793,7 @@ impl ReadGuard {
             // Drop the shields and restart this read phase manually.
             drop(localized);
             recovery::set_restartable(false);
-            unsafe { recovery::longjmp_manually() };
+            unsafe { recovery::perform_longjmp() };
         }
 
         // We are not ejected so the protection was valid!
@@ -807,7 +807,7 @@ impl ReadGuard {
 
         if recovery::deferring_restart() {
             recovery::set_restartable(false);
-            unsafe { recovery::longjmp_manually() };
+            unsafe { recovery::perform_longjmp() };
         }
     }
 }
@@ -837,7 +837,7 @@ impl WriteGuard {
         unsafe {
             (self.localized_drop)(self.localized_ptr);
             recovery::set_restartable(false);
-            recovery::longjmp_manually()
+            recovery::perform_longjmp()
         }
     }
 }
