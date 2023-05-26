@@ -512,6 +512,13 @@ impl EpochGuard {
         recovery::set_restartable(true);
         compiler_fence(Ordering::SeqCst);
 
+        // After setting `RESTARTABLE` up, we must check if the current
+        // epoch is ejected.
+        if unsafe { self.is_ejected() } {
+            recovery::set_restartable(false);
+            unsafe { recovery::perform_longjmp() };
+        }
+
         // Execute the body of this read phase.
         //
         // Here, `transmute` is needed to bypass a lifetime parameter error.
@@ -589,6 +596,8 @@ impl EpochGuard {
         }
         compiler_fence(Ordering::SeqCst);
 
+        // If we have reached here by restarting this read phase in a write phase,
+        // we should drop previous backups.
         if recovery::is_invalidated() {
             unsafe {
                 if *backup_exist {
@@ -598,7 +607,23 @@ impl EpochGuard {
             }
             recovery::set_invalidate_backup(false);
         }
+
         compiler_fence(Ordering::SeqCst);
+
+        // Get ready to open the phase by setting atomic indicators.
+        assert!(
+            !recovery::is_restartable(),
+            "restartable value should be false before starting read phase"
+        );
+        recovery::set_restartable(true);
+        compiler_fence(Ordering::SeqCst);
+
+        // After setting `RESTARTABLE` up, we must check if the current
+        // epoch is ejected.
+        if unsafe { self.is_ejected() } {
+            recovery::set_restartable(false);
+            unsafe { recovery::perform_longjmp() };
+        }
 
         let mut guard = ReadGuard::new(self);
 
@@ -608,14 +633,6 @@ impl EpochGuard {
         } else {
             init_result(unsafe { mem::transmute(&mut guard) })
         };
-
-        // Get ready to open the phase by setting atomic indicators.
-        assert!(
-            !recovery::is_restartable(),
-            "restartable value should be false before starting read phase"
-        );
-        recovery::set_restartable(true);
-        compiler_fence(Ordering::SeqCst);
 
         for iter in 0.. {
             match step_forward(&mut result, unsafe { mem::transmute(&mut guard) }) {
@@ -627,7 +644,7 @@ impl EpochGuard {
                         // Otherwise it may forget to drop acquired hazard slot on crashing.
                         recovery::set_restartable(false);
                         compiler_fence(Ordering::SeqCst);
-                        
+
                         let localized = result.protect_with(self);
                         compiler_fence(Ordering::SeqCst);
 
@@ -819,7 +836,7 @@ impl ReadGuard {
         // Otherwise it may forget to drop acquired hazard slot on crashing.
         recovery::set_restartable(false);
         compiler_fence(Ordering::SeqCst);
-        
+
         let localized = to_deref.protect_with(unsafe { &*self.inner });
         compiler_fence(Ordering::SeqCst);
         if unsafe { (&*self.inner).is_ejected() } {
