@@ -477,6 +477,8 @@ impl EpochGuard {
     }
 
     /// Conducts a read phase, and returns a result which is protected with hazard pointers.
+    /// 
+    /// It takes a mutable borrow from `EpochGuard`. This prevents accessing `EpochGuard` in a read phase.
     #[inline(never)]
     pub fn read<'r, F, P>(&mut self, f: F) -> P::Localized
     where
@@ -551,6 +553,8 @@ impl EpochGuard {
     /// 
     /// This function saves intermeditate results on a backup storage periodically, so that
     /// it avoids a starvation on crash-intensive workloads.
+    /// 
+    /// It takes a mutable borrow from `EpochGuard`. This prevents accessing `EpochGuard` in a read phase.
     #[inline(never)]
     pub fn read_loop<'r, F1, F2, P>(&mut self, init_result: F1, step_forward: F2) -> P::Localized
     where

@@ -11,6 +11,8 @@ use crate::{
     EpochGuard, Pointer, ReadGuard, Writable,
 };
 
+/// An reference counting atomic pointer that can be safely shared between threads.
+#[derive(Debug)]
 pub struct Atomic<T> {
     link: AtomicUsize,
     _marker: PhantomData<*mut T>,
@@ -20,6 +22,7 @@ unsafe impl<T> Send for Atomic<T> {}
 unsafe impl<T> Sync for Atomic<T> {}
 
 impl<T> Atomic<T> {
+    /// Allocates `init` on the heap and returns a new atomic pointer pointing to it.
     #[inline]
     pub fn new(init: T) -> Self {
         let counted = Counted::new(init);
@@ -30,6 +33,7 @@ impl<T> Atomic<T> {
         }
     }
 
+    /// Returns a new null atomic pointer.
     #[inline]
     pub const fn null() -> Self {
         Self {
@@ -38,6 +42,7 @@ impl<T> Atomic<T> {
         }
     }
 
+    /// Stores a `Rc` or `Shield` pointer into the atomic pointer.
     #[inline]
     pub fn store<P, G>(&self, ptr: &P, guard: &G)
     where
@@ -57,6 +62,10 @@ impl<T> Atomic<T> {
         }
     }
 
+    /// Consums a `Rc` pointer, and store its pointer value into the atomic pointer.
+    ///
+    /// This is more efficient than normal `store` function, as it doesn't have to
+    /// modify a reference count of the new object.
     #[inline]
     pub fn consume<G: Writable>(&self, ptr: Rc<T>, guard: &G) {
         let new = ptr.release();
@@ -67,6 +76,10 @@ impl<T> Atomic<T> {
         }
     }
 
+    /// Loads a pointer from the atomic pointer, and defend it with a new `Shield`.
+    /// 
+    /// Although this function is more convinient than `defend_with`, it is better to use
+    /// `defend_with` to reuse a pre-allocated `Shield`.
     #[inline]
     pub fn defend<G: Writable>(&self, guard: &mut G) -> Shield<T> {
         let mut shield = Shield::null(unsafe { guard.as_epoch_guard() });
@@ -74,16 +87,28 @@ impl<T> Atomic<T> {
         shield
     }
 
+    /// Loads a pointer from the atomic pointer, and defend it with a provided `Shield`.
     #[inline]
     pub fn defend_with<G: Writable>(&self, dst: &mut Shield<T>, guard: &mut G) {
         guard.defend(&self.link, &mut dst.shield);
     }
 
+    /// Loads a `Shared` from the atomic pointer. This can be called only in a read phase.
     #[inline]
     pub fn load<'r>(&self, _guard: &'r ReadGuard) -> Shared<'r, T> {
         Shared::new(unsafe { crate::Shared::from_usize(self.link.load(Ordering::Acquire)) })
     }
 
+    /// Stores the pointer `desired` (either `Rc` or `Shield`) into the atomic pointer if the current
+    /// value is the same as `expected`. The tag is also taken into account, so two pointers to the
+    /// same object, but with different tags, will not be considered equal.
+    /// 
+    /// The return value is a result indicating whether the new pointer was written. On success a `true`
+    /// is returned. On failure the actual current value is protected with `err_shield` and a `false` is
+    /// returned.
+    /// 
+    /// **Note that this function is not wait-free, to protect and return a precise pointer on a failure.**
+    /// If you don't need an actual pointer on a failure, use `try_compare_exchange` which is wait-free.
     #[inline]
     pub fn compare_exchange<P1, P2, G>(
         &self,
@@ -123,6 +148,14 @@ impl<T> Atomic<T> {
         }
     }
 
+    /// Stores the pointer `desired` (either `Rc` or `Shield`) into the atomic pointer if the current
+    /// value is the same as `expected`. The tag is also taken into account, so two pointers to the
+    /// same object, but with different tags, will not be considered equal.
+    /// 
+    /// The return value is a result indicating whether the new pointer was written. On success a `true`
+    /// is returned. On failure a `false` is returned.
+    /// 
+    /// If you need an actual pointer on a failure, use `compare_exchange`.
     #[inline]
     pub fn try_compare_exchange<P1, P2, G>(&self, expected: &P1, desired: &P2, guard: &G) -> bool
     where
@@ -149,6 +182,27 @@ impl<T> Atomic<T> {
         }
     }
 
+    /// Stores the pointer `expected` (either `Rc` or `Shield`) with a given tag, into the atomic
+    /// pointer if the current value is the same as `expected`. The tag is also taken into account,
+    /// so two pointers to the same object, but with different tags, will not be considered equal.
+    /// 
+    /// The return value is a result indicating whether the new pointer was written. On success a `true`
+    /// is returned. On failure the actual current value is protected with `err_shield` and a `false` is
+    /// returned.
+    /// 
+    /// **Note that this function is not wait-free, to protect and return a precise pointer on a failure.**
+    /// If you don't need an actual pointer on a failure, use `try_compare_exchange_tag` which is wait-free.
+    /// 
+    /// # Why do we need CAS-tag variants?
+    /// 
+    /// Sometimes we just want to switch a tag of a atomic pointer. (for example when logically
+    /// removing a node from Harris's List)
+    /// 
+    /// To implement it with `compare_exchange`, we must clone the pointer (either `Rc` or `Shield`)
+    /// and feed it as a `desired` argument. However, cloning causes an a non-negligible overhead
+    /// for both `Rc` and `Shield`.
+    /// 
+    /// For this reason, it is desirable to provide a tagging operation without an additional cloning.
     #[inline]
     pub fn compare_exchange_tag<P, G>(
         &self,
@@ -184,6 +238,26 @@ impl<T> Atomic<T> {
         }
     }
 
+    /// Stores the pointer `expected` (either `Rc` or `Shield`) with a given tag, into the atomic
+    /// pointer if the current value is the same as `expected`. The tag is also taken into account,
+    /// so two pointers to the same object, but with different tags, will not be considered equal.
+    /// 
+    /// The return value is a result indicating whether the new pointer was written. On success a `true`
+    /// is returned. On failure a `false` is returned.
+    /// 
+    /// **Note that this function is not wait-free, to protect and return a precise pointer on a failure.**
+    /// If you don't need an actual pointer on a failure, use `try_compare_exchange_tag` which is wait-free.
+    /// 
+    /// # Why do we need CAS-tag variants?
+    /// 
+    /// Sometimes we just want to switch a tag of a atomic pointer. (for example when logically
+    /// removing a node from Harris's List)
+    /// 
+    /// To implement it with `compare_exchange`, we must clone the pointer (either `Rc` or `Shield`)
+    /// and feed it as a `desired` argument. However, cloning causes an a non-negligible overhead
+    /// for both `Rc` and `Shield`.
+    /// 
+    /// For this reason, it is desirable to provide a tagging operation without an additional cloning.
     #[inline]
     pub fn try_compare_exchange_tag<P, G>(&self, expected: &P, tag: usize, _guard: &G) -> bool
     where
@@ -457,6 +531,8 @@ impl<T> AcquiredPtr<T> for Rc<T> {
     }
 }
 
+/// A trait for objects which can be protected by replacing `Shared` with `Shield`.
+/// 
 /// TODO(@jeonghyeon): Why don't we use `Localized` trait instead of this one?
 /// 
 /// ```no_run
@@ -467,6 +543,13 @@ impl<T> AcquiredPtr<T> for Rc<T> {
 ///     fn localize(&mut self, read: Localizable);
 /// }
 /// ```
+/// 
+/// * disadvantages of `Localizable` pattern
+///   * Difficult to reuse shields.
+///   * Localizable cursor is only used in `read`, and most of the codes
+///     use Localized one.
+///   * A lifetime parameter must be appended even on the localized one.
+///     `Localizable<'_>::Localized`
 pub trait Localizable<'r> {
     type Localized;
     fn protect_with(self, guard: &EpochGuard) -> Self::Localized;
