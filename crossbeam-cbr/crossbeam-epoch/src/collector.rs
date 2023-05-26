@@ -112,8 +112,6 @@ mod tests {
 
     use crate::{Collector, Owned};
 
-    const NUM_THREADS: usize = 8;
-
     #[test]
     fn pin_reentrant() {
         let collector = Collector::new();
@@ -195,7 +193,7 @@ mod tests {
             last = curr;
 
             let guard = &handle.pin();
-            collector.global.collect(guard);
+            let _ = collector.global.collect(guard);
         }
         assert!(DESTROYS.load(Ordering::Relaxed) == 100_000);
     }
@@ -219,7 +217,7 @@ mod tests {
             }
         }
 
-        collector.global.collect(&handle.pin());
+        let _ = collector.global.collect(&handle.pin());
 
         assert!(DESTROYS.load(Ordering::Relaxed) < COUNT);
 
@@ -227,7 +225,7 @@ mod tests {
 
         while DESTROYS.load(Ordering::Relaxed) < COUNT {
             let guard = &handle.pin();
-            collector.global.collect(guard);
+            let _ = collector.global.collect(guard);
         }
         assert_eq!(DESTROYS.load(Ordering::Relaxed), COUNT);
     }
@@ -260,7 +258,7 @@ mod tests {
 
         while DROPS.load(Ordering::Relaxed) < COUNT {
             let guard = &handle.pin();
-            collector.global.collect(guard);
+            let _ = collector.global.collect(guard);
         }
         assert_eq!(DROPS.load(Ordering::Relaxed), COUNT);
     }
@@ -288,7 +286,7 @@ mod tests {
 
         while DESTROYS.load(Ordering::Relaxed) < COUNT {
             let guard = &handle.pin();
-            collector.global.collect(guard);
+            let _ = collector.global.collect(guard);
         }
         assert_eq!(DESTROYS.load(Ordering::Relaxed), COUNT);
     }
@@ -326,7 +324,7 @@ mod tests {
 
         while DROPS.load(Ordering::Relaxed) < COUNT {
             guard.repin();
-            collector.global.collect(&guard);
+            let _ = collector.global.collect(&guard);
         }
         assert_eq!(DROPS.load(Ordering::Relaxed), COUNT);
     }
@@ -360,7 +358,7 @@ mod tests {
 
         while DESTROYS.load(Ordering::Relaxed) < COUNT {
             let guard = &handle.pin();
-            collector.global.collect(guard);
+            let _ = collector.global.collect(guard);
         }
         assert_eq!(DESTROYS.load(Ordering::Relaxed), COUNT);
     }
@@ -400,7 +398,7 @@ mod tests {
         let handle = collector.register();
         while DROPS.load(Ordering::Relaxed) < COUNT * THREADS {
             let guard = &handle.pin();
-            collector.global.collect(guard);
+            let _ = collector.global.collect(guard);
         }
         assert_eq!(DROPS.load(Ordering::Relaxed), COUNT * THREADS);
     }

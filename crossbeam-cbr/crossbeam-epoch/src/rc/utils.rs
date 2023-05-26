@@ -18,6 +18,7 @@ use crate::{pin, Writable};
 /// Note: The counter steals the top two bits of the integer for book-
 /// keeping purposes. Hence the maximum representable value in the
 /// counter is 2^(8*32-2) - 1
+#[derive(Debug)]
 pub(crate) struct StickyCounter {
     x: AtomicU32,
 }
@@ -115,6 +116,7 @@ impl From<u32> for StickyCounter {
     }
 }
 
+#[derive(Debug)]
 pub enum EjectAction {
     Nothing,
     Delay,
@@ -122,6 +124,7 @@ pub enum EjectAction {
 }
 
 /// An instance of an object of type T with an atomic reference count.
+#[derive(Debug)]
 pub struct Counted<T> {
     storage: UnsafeCell<ManuallyDrop<T>>,
     ref_cnt: StickyCounter,
@@ -270,6 +273,7 @@ pub unsafe fn delayed_decrement_ref_cnt<T, G: Writable>(ptr: *const Counted<T>, 
 }
 
 #[inline]
+#[allow(unused)] // TODO(@jeonghyeon): Remove this after implementing weak pointers.
 pub unsafe fn delayed_decrement_weak_cnt<T, G: Writable>(ptr: *const Counted<T>, guard: &G) {
     debug_assert!((*ptr).weak_count() >= 1);
     retire(ptr, RetireType::DecrementWeakCount, guard);
@@ -277,7 +281,7 @@ pub unsafe fn delayed_decrement_weak_cnt<T, G: Writable>(ptr: *const Counted<T>,
 
 #[inline]
 pub unsafe fn retire<T, G: Writable>(ptr: *const Counted<T>, ret_type: RetireType, guard: &G) {
-    guard.defer_decrement(move || {
+    guard.defer(move || {
         let inner_guard = pin();
         eject(ptr, ret_type, &inner_guard);
     });

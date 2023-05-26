@@ -476,6 +476,7 @@ impl EpochGuard {
         false
     }
 
+    /// Conducts a read phase, and returns a result which is protected with hazard pointers.
     #[inline(never)]
     pub fn read<'r, F, P>(&mut self, f: F) -> P::Localized
     where
@@ -546,6 +547,10 @@ impl EpochGuard {
         localized
     }
 
+    /// Conducts a iterative read phase, and returns a result which is protected with hazard pointers.
+    /// 
+    /// This function saves intermeditate results on a backup storage periodically, so that
+    /// it avoids a starvation on crash-intensive workloads.
     #[inline(never)]
     pub fn read_loop<'r, F1, F2, P>(&mut self, init_result: F1, step_forward: F2) -> P::Localized
     where
@@ -813,11 +818,17 @@ pub unsafe fn unprotected() -> &'static mut EpochGuard {
     &mut *(&UNPROTECTED as *const _ as *const _ as *mut EpochGuard)
 }
 
+/// A result of a single step of an iterative read phase.
+#[derive(Debug)]
 pub enum ReadStatus {
+    /// The current read phase is finished.
     Finished,
+    /// We need to take one or more steps.
     Continue,
 }
 
+/// A read phase guard which allows to load `Shared` from reference counting `Atomic`.
+#[derive(Debug)]
 pub struct ReadGuard {
     inner: *const EpochGuard,
 }
@@ -827,6 +838,7 @@ impl ReadGuard {
         Self { inner: guard }
     }
 
+    /// Starts an auxiliary write phase where writing on a localized shared memory is allowed.
     pub fn write<'r, F, P>(&'r self, to_deref: P, f: F)
     where
         F: Fn(&P::Localized, &WriteGuard) -> WriteResult,
@@ -873,11 +885,17 @@ impl ReadGuard {
     }
 }
 
+/// A result of a write phase.
+#[derive(Debug)]
 pub enum WriteResult {
+    /// The current read phase is finished. Resume the read phase.
     Finished,
+    /// Give up the current read phase and epoch and restart the whole read phase.
     RestartRead,
 }
 
+/// A write phase guard which allows to mutate localized pointers.
+#[derive(Debug)]
 pub struct WriteGuard {
     inner: *mut EpochGuard,
 }
@@ -890,15 +908,30 @@ impl WriteGuard {
     }
 }
 
+/// A common trait for `Guard` types which allow mutating shared memory locations.
+/// 
+/// `EpochGuard` and `WriteGuard` implement this trait.
 pub trait Writable {
-    unsafe fn defer_decrement<F: FnOnce()>(&self, f: F);
+    /// Stores a function so that it can be executed at some point after all currently pinned threads get unpinned.
+    unsafe fn defer<F: FnOnce()>(&self, f: F);
+
+    /// Loads a pointer from the given `link` and defends it with `Shield`.
+    /// 
+    /// It may repin the epoch if it is ejected by a reclaimer.
     fn defend<T>(&mut self, link: &AtomicUsize, shield: &mut Shield<T>);
+
+    /// Copies a `Shield` to another by storing a pointer of `src` in `dst`.
     fn copy<T>(&mut self, src: &Shield<T>, dst: &mut Shield<T>);
+
+    /// Returns a mutable reference to `EpochGuard`.
+    /// 
+    /// # Safety
+    /// The returned `EpochGuard` MUST NOT be used to open a nested read phase in a write phase.
     unsafe fn as_epoch_guard<'g>(&'g mut self) -> &'g mut EpochGuard;
 }
 
 impl Writable for EpochGuard {
-    unsafe fn defer_decrement<F: FnOnce()>(&self, f: F) {
+    unsafe fn defer<F: FnOnce()>(&self, f: F) {
         self.defer_unchecked(f);
     }
 
@@ -924,7 +957,7 @@ impl Writable for EpochGuard {
 }
 
 impl Writable for WriteGuard {
-    unsafe fn defer_decrement<F: FnOnce()>(&self, f: F) {
+    unsafe fn defer<F: FnOnce()>(&self, f: F) {
         unsafe { &mut *self.inner }.defer_unchecked(f);
     }
 

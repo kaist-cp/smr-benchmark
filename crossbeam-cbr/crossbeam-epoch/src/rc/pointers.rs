@@ -1,7 +1,6 @@
 use core::{
     marker::PhantomData,
     mem::{forget, transmute, zeroed, MaybeUninit},
-    ptr::drop_in_place,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -81,7 +80,7 @@ impl<T> Atomic<T> {
     }
 
     #[inline]
-    pub fn load<'r>(&self, guard: &'r ReadGuard) -> Shared<'r, T> {
+    pub fn load<'r>(&self, _guard: &'r ReadGuard) -> Shared<'r, T> {
         Shared::new(unsafe { crate::Shared::from_usize(self.link.load(Ordering::Acquire)) })
     }
 
@@ -146,7 +145,7 @@ impl<T> Atomic<T> {
                 }
                 true
             }
-            Err(actual) => false,
+            Err(_actual) => false,
         }
     }
 
@@ -186,7 +185,7 @@ impl<T> Atomic<T> {
     }
 
     #[inline]
-    pub fn try_compare_exchange_tag<P, G>(&self, expected: &P, tag: usize, guard: &G) -> bool
+    pub fn try_compare_exchange_tag<P, G>(&self, expected: &P, tag: usize, _guard: &G) -> bool
     where
         P: AcquiredPtr<T>,
         G: Writable,
@@ -311,7 +310,7 @@ impl<T> Shield<T> {
     }
 
     #[inline]
-    pub fn untagged(mut self) -> Self {
+    pub fn untagged(self) -> Self {
         self.with_tag(0)
     }
 
@@ -361,7 +360,7 @@ impl<T> Rc<T> {
     }
 
     #[inline]
-    pub unsafe fn into_owned(mut self) -> T {
+    pub unsafe fn into_owned(self) -> T {
         let result = Box::from_raw(self.as_untagged_raw().cast_mut()).into_owned();
         forget(self);
         result
@@ -391,7 +390,7 @@ impl<T> Rc<T> {
     }
 
     #[inline]
-    pub fn untagged(mut self) -> Self {
+    pub fn untagged(self) -> Self {
         self.with_tag(0)
     }
 
@@ -403,7 +402,7 @@ impl<T> Rc<T> {
 
     #[inline]
     #[must_use]
-    pub(crate) fn release(mut self) -> usize {
+    pub(crate) fn release(self) -> usize {
         let ptr = self.ptr;
         forget(self);
         ptr
@@ -458,6 +457,16 @@ impl<T> AcquiredPtr<T> for Rc<T> {
     }
 }
 
+/// TODO(@jeonghyeon): Why don't we use `Localized` trait instead of this one?
+/// 
+/// ```no_run
+/// pub trait Localized {
+///     type Localizable;
+/// 
+///     /// It can reuse shields with ease!
+///     fn localize(&mut self, read: Localizable);
+/// }
+/// ```
 pub trait Localizable<'r> {
     type Localized;
     fn protect_with(self, guard: &EpochGuard) -> Self::Localized;

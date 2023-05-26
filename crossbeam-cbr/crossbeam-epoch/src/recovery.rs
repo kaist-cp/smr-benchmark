@@ -5,7 +5,7 @@ use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal
 use setjmp::{sigjmp_buf, siglongjmp};
 use std::cell::RefCell;
 use std::mem::MaybeUninit;
-use std::sync::atomic::{compiler_fence, fence, AtomicBool, Ordering};
+use std::sync::atomic::{compiler_fence, AtomicBool, Ordering};
 
 static mut EJECTION_SIGNAL: Signal = Signal::SIGUSR1;
 static mut SIG_ACTION: MaybeUninit<SigAction> = MaybeUninit::uninit();

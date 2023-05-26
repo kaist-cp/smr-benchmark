@@ -607,6 +607,40 @@ impl<T> Shield<T> {
         self.defend_usize(ptr.into_usize(), guard)
     }
 
+    /// Defends a hazard pointer, interpreting the given `usize` as a pointer.
+    ///
+    /// This method registers a shared pointer as hazardous so that other threads will not destroy
+    /// the pointer, and returns a [`Shield`] pointer as a handle for the registration.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use crossbeam_cbr_epoch::{self as epoch, Atomic, Shared, Shield, Pointer};
+    /// use std::sync::atomic::Ordering::SeqCst;
+    ///
+    /// // Create a heap-allocated number.
+    /// let a = Atomic::new(777);
+    ///
+    /// // Pin the current thread.
+    /// let guard = epoch::pin();
+    ///
+    /// // Create a new shield.
+    /// let mut shield: Shield<usize> = Shield::null(&guard);
+    ///
+    /// // Defend the heap-allocated object.
+    /// shield.defend_usize(a.load(SeqCst, &guard).into_usize(), &guard);
+    ///
+    /// // Drop the guard.
+    /// drop(guard);
+    ///
+    /// // Even though the guard is dropped, you can still dereference the shield and print the
+    /// // value:
+    /// if let Some(num) = unsafe { shield.as_ref() } {
+    ///     println!("The number is {}.", num);
+    /// }
+    /// ```
+    ///
+    /// [`Shield`]: struct.Shield.html
     #[must_use]
     pub fn defend_usize(&mut self, data: usize, guard: &EpochGuard) -> Result<(), ShieldError> {
         self.data = data;
@@ -626,6 +660,12 @@ impl<T> Shield<T> {
         Ok(())
     }
 
+    /// Defends a hazard pointer, without checking if `local` is no ejected.
+    /// 
+    /// # Safety
+    /// 
+    /// To ensure that the given pointer is protected properly, we must check it manually
+    /// by calling `is_ejected` from `EpochGuard`.
     pub unsafe fn defend_unchecked<'g>(&mut self, ptr: Shared<'g, T>) {
         let data = ptr.into_usize();
         self.data = data;
