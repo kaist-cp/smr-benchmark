@@ -77,20 +77,26 @@ impl<T> Atomic<T> {
     }
 
     /// Loads a pointer from the atomic pointer, and defend it with a new `Shield`.
-    /// 
+    ///
     /// Although this function is more convinient than `defend_with`, it is better to use
     /// `defend_with` to reuse a pre-allocated `Shield`.
     #[inline]
-    pub fn defend<G: Writable>(&self, guard: &mut G) -> Shield<T> {
-        let mut shield = Shield::null(unsafe { guard.as_epoch_guard() });
+    pub fn defend(&self, guard: &mut EpochGuard) -> Shield<T> {
+        let mut shield = Shield::null(guard);
         self.defend_with(&mut shield, guard);
         shield
     }
 
     /// Loads a pointer from the atomic pointer, and defend it with a provided `Shield`.
     #[inline]
-    pub fn defend_with<G: Writable>(&self, dst: &mut Shield<T>, guard: &mut G) {
-        guard.defend(&self.link, &mut dst.shield);
+    pub fn defend_with(&self, dst: &mut Shield<T>, guard: &mut EpochGuard) {
+        loop {
+            let ptr = self.link.load(Ordering::Acquire);
+            if dst.hazptr.defend_usize(ptr, guard).is_ok() {
+                return;
+            }
+            guard.repin();
+        }
     }
 
     /// Loads a `Shared` from the atomic pointer. This can be called only in a read phase.
@@ -102,11 +108,11 @@ impl<T> Atomic<T> {
     /// Stores the pointer `desired` (either `Rc` or `Shield`) into the atomic pointer if the current
     /// value is the same as `expected`. The tag is also taken into account, so two pointers to the
     /// same object, but with different tags, will not be considered equal.
-    /// 
+    ///
     /// The return value is a result indicating whether the new pointer was written. On success a `true`
     /// is returned. On failure the actual current value is protected with `err_shield` and a `false` is
     /// returned.
-    /// 
+    ///
     /// **Note that this function is not wait-free, to protect and return a precise pointer on a failure.**
     /// If you don't need an actual pointer on a failure, use `try_compare_exchange` which is wait-free.
     #[inline]
@@ -115,7 +121,7 @@ impl<T> Atomic<T> {
         expected: &P1,
         desired: &P2,
         err_shield: &mut Shield<T>,
-        guard: &mut G,
+        guard: &mut EpochGuard,
     ) -> bool
     where
         P1: AcquiredPtr<T>,
@@ -151,10 +157,10 @@ impl<T> Atomic<T> {
     /// Stores the pointer `desired` (either `Rc` or `Shield`) into the atomic pointer if the current
     /// value is the same as `expected`. The tag is also taken into account, so two pointers to the
     /// same object, but with different tags, will not be considered equal.
-    /// 
+    ///
     /// The return value is a result indicating whether the new pointer was written. On success a `true`
     /// is returned. On failure a `false` is returned.
-    /// 
+    ///
     /// If you need an actual pointer on a failure, use `compare_exchange`.
     #[inline]
     pub fn try_compare_exchange<P1, P2, G>(&self, expected: &P1, desired: &P2, guard: &G) -> bool
@@ -185,23 +191,23 @@ impl<T> Atomic<T> {
     /// Stores the pointer `expected` (either `Rc` or `Shield`) with a given tag, into the atomic
     /// pointer if the current value is the same as `expected`. The tag is also taken into account,
     /// so two pointers to the same object, but with different tags, will not be considered equal.
-    /// 
+    ///
     /// The return value is a result indicating whether the new pointer was written. On success a `true`
     /// is returned. On failure the actual current value is protected with `err_shield` and a `false` is
     /// returned.
-    /// 
+    ///
     /// **Note that this function is not wait-free, to protect and return a precise pointer on a failure.**
     /// If you don't need an actual pointer on a failure, use `try_compare_exchange_tag` which is wait-free.
-    /// 
+    ///
     /// # Why do we need CAS-tag variants?
-    /// 
+    ///
     /// Sometimes we just want to switch a tag of a atomic pointer. (for example when logically
     /// removing a node from Harris's List)
-    /// 
+    ///
     /// To implement it with `compare_exchange`, we must clone the pointer (either `Rc` or `Shield`)
     /// and feed it as a `desired` argument. However, cloning causes an a non-negligible overhead
     /// for both `Rc` and `Shield`.
-    /// 
+    ///
     /// For this reason, it is desirable to provide a tagging operation without an additional cloning.
     #[inline]
     pub fn compare_exchange_tag<P, G>(
@@ -209,7 +215,7 @@ impl<T> Atomic<T> {
         expected: &P,
         tag: usize,
         err_shield: &mut Shield<T>,
-        guard: &mut G,
+        guard: &mut EpochGuard,
     ) -> bool
     where
         P: AcquiredPtr<T>,
@@ -241,22 +247,22 @@ impl<T> Atomic<T> {
     /// Stores the pointer `expected` (either `Rc` or `Shield`) with a given tag, into the atomic
     /// pointer if the current value is the same as `expected`. The tag is also taken into account,
     /// so two pointers to the same object, but with different tags, will not be considered equal.
-    /// 
+    ///
     /// The return value is a result indicating whether the new pointer was written. On success a `true`
     /// is returned. On failure a `false` is returned.
-    /// 
+    ///
     /// **Note that this function is not wait-free, to protect and return a precise pointer on a failure.**
     /// If you don't need an actual pointer on a failure, use `try_compare_exchange_tag` which is wait-free.
-    /// 
+    ///
     /// # Why do we need CAS-tag variants?
-    /// 
+    ///
     /// Sometimes we just want to switch a tag of a atomic pointer. (for example when logically
     /// removing a node from Harris's List)
-    /// 
+    ///
     /// To implement it with `compare_exchange`, we must clone the pointer (either `Rc` or `Shield`)
     /// and feed it as a `desired` argument. However, cloning causes an a non-negligible overhead
     /// for both `Rc` and `Shield`.
-    /// 
+    ///
     /// For this reason, it is desirable to provide a tagging operation without an additional cloning.
     #[inline]
     pub fn try_compare_exchange_tag<P, G>(&self, expected: &P, tag: usize, _guard: &G) -> bool
@@ -324,7 +330,7 @@ impl<'r, T> Shared<'r, T> {
     }
 
     #[inline]
-    pub fn as_ref(&self) -> Option<&'r T> {
+    pub fn as_ref(&self, _guard: &ReadGuard) -> Option<&'r T> {
         unsafe { self.ptr.as_ref().map(|cnt| cnt.data()) }
     }
 
@@ -345,7 +351,7 @@ impl<'r, T> Shared<'r, T> {
 }
 
 pub struct Shield<T> {
-    shield: crate::Shield<Counted<T>>,
+    hazptr: crate::Shield<Counted<T>>,
 }
 
 unsafe impl<T> Sync for Shield<T> {}
@@ -353,34 +359,36 @@ unsafe impl<T> Sync for Shield<T> {}
 impl<T> Shield<T> {
     #[inline]
     pub(crate) fn new(shield: crate::Shield<Counted<T>>) -> Self {
-        Self { shield }
+        Self { hazptr: shield }
     }
 
     #[inline]
     pub fn null(guard: &EpochGuard) -> Self {
         Self {
-            shield: crate::Shield::null(guard),
+            hazptr: crate::Shield::null(guard),
         }
     }
 
     #[inline]
-    pub fn copy_to<G: Writable>(&self, dst: &mut Shield<T>, guard: &mut G) {
-        guard.copy(&self.shield, &mut dst.shield)
+    pub fn copy_to(&self, dst: &mut Shield<T>, guard: &mut EpochGuard) {
+        while dst.hazptr.defend_usize(self.hazptr.data, guard).is_err() {
+            guard.repin();
+        }
     }
 
     #[inline]
     pub fn as_ref<'s>(&'s self) -> Option<&'s T> {
-        unsafe { self.shield.as_ref().map(|cnt| cnt.data()) }
+        unsafe { self.hazptr.as_ref().map(|cnt| cnt.data()) }
     }
 
     #[inline]
     pub fn is_null(&self) -> bool {
-        self.shield.shared().is_null()
+        self.hazptr.shared().is_null()
     }
 
     #[inline]
     pub fn tag(&self) -> usize {
-        self.shield.tag()
+        self.hazptr.tag()
     }
 
     #[inline]
@@ -390,15 +398,20 @@ impl<T> Shield<T> {
 
     #[inline]
     pub fn with_tag(mut self, tag: usize) -> Self {
-        let modified = self.shield.shared().with_tag(tag).into_usize();
-        unsafe { self.shield.defend_fake(crate::Shared::from_usize(modified)) };
+        let modified = self.hazptr.shared().with_tag(tag).into_usize();
+        unsafe { self.hazptr.defend_fake(crate::Shared::from_usize(modified)) };
         self
+    }
+
+    #[inline]
+    pub fn release(&mut self) {
+        self.hazptr.release();
     }
 }
 
 impl<T> Drop for Shield<T> {
     fn drop(&mut self) {
-        self.shield.release()
+        self.hazptr.release()
     }
 }
 
@@ -510,7 +523,7 @@ pub trait AcquiredPtr<T> {
 impl<T> AcquiredPtr<T> for Shield<T> {
     #[inline]
     fn as_raw(&self) -> usize {
-        self.shield.data
+        self.hazptr.data
     }
 
     #[inline]
@@ -531,63 +544,97 @@ impl<T> AcquiredPtr<T> for Rc<T> {
     }
 }
 
-/// A trait for objects which can be protected by replacing `Shared` with `Shield`.
-/// 
-/// TODO(@jeonghyeon): Why don't we use `Localized` trait instead of this one?
-/// 
-/// ```no_run
-/// pub trait Localized {
-///     type Localizable;
-/// 
-///     /// It can reuse shields with ease!
-///     fn localize(&mut self, read: Localizable);
-/// }
-/// ```
-/// 
-/// * disadvantages of `Localizable` pattern
-///   * Difficult to reuse shields.
-///   * Localizable cursor is only used in `read`, and most of the codes
-///     use Localized one.
-///   * A lifetime parameter must be appended even on the localized one.
-///     `Localizable<'_>::Localized`
-pub trait Localizable<'r> {
-    type Localized;
-    fn protect_with(self, guard: &EpochGuard) -> Self::Localized;
+/// A trait for `Shield` which can protect `Shared`.
+pub trait Defender {
+    type Read<'r>: Clone + Copy;
+
+    /// Returns a default `Defender` with empty hazard pointers.
+    fn default(guard: &EpochGuard) -> Self;
+
+    /// Note: This function MUST be called by the PEBR library only in the read phase,
+    /// as it may be optimized to skip checking the epoch.
+    ///
+    /// Do not call this function to manually defend shared pointers.
+    unsafe fn defend_unchecked(&mut self, read: &Self::Read<'_>);
+
+    /// Loads currently protected pointers and composes a new `Shared` bag.
+    unsafe fn as_read<'r>(&mut self) -> Self::Read<'r>;
+
+    /// Resets the pointer to `null`, allowing the previous memory block to be reclaimed.
+    fn release(&mut self);
 }
 
-impl<'r, T> Localizable<'r> for Shared<'r, T> {
-    type Localized = Shield<T>;
+impl<T: 'static> Defender for Shield<T> {
+    type Read<'r> = Shared<'r, T>;
 
     #[inline]
-    fn protect_with(self, guard: &EpochGuard) -> Self::Localized {
-        let mut localized = Shield::null(guard);
-        unsafe { localized.shield.defend_unchecked(self.ptr) };
-        localized
+    fn default(guard: &EpochGuard) -> Self {
+        Self::null(guard)
+    }
+
+    #[inline]
+    unsafe fn defend_unchecked(&mut self, read: &Self::Read<'_>) {
+        self.hazptr.defend_unchecked(read.ptr);
+    }
+
+    #[inline]
+    unsafe fn as_read<'r>(&mut self) -> Self::Read<'r> {
+        Shared {
+            ptr: crate::Shared::from_usize(self.hazptr.shared().as_raw() as _),
+        }
+    }
+
+    #[inline]
+    fn release(&mut self) {
+        self.hazptr.release();
     }
 }
 
-macro_rules! impl_localizable_for_array {(
+macro_rules! impl_defender_for_array {(
     $($N:literal)*
 ) => (
     $(
-        impl<'r, T> Localizable<'r> for [Shared<'r, T>; $N] {
-            type Localized = [Shield<T>; $N];
+        impl<T: 'static> Defender for [Shield<T>; $N] {
+            type Read<'r> = [Shared<'r, T>; $N];
 
             #[inline]
-            fn protect_with(self, guard: &EpochGuard) -> Self::Localized {
-                let mut shields: [MaybeUninit<Shield<T>>; $N] = unsafe { zeroed() };
-                for (shield, shared) in shields.iter_mut().zip(self) {
-                    let mut localized = Shield::null(guard);
-                    unsafe { localized.shield.defend_unchecked(shared.ptr) };
-                    shield.write(localized);
+            fn default(guard: &EpochGuard) -> Self {
+                let mut result: [MaybeUninit<Shield<T>>; $N] = unsafe { zeroed() };
+                for shield in &mut result {
+                    shield.write(Shield::null(guard));
                 }
-                unsafe { transmute(shields) }
+                unsafe { transmute(result) }
+            }
+
+            #[inline]
+            unsafe fn defend_unchecked(&mut self, read: &Self::Read<'_>) {
+                for (shield, shared) in self.iter_mut().zip(read) {
+                    shield.hazptr.defend_unchecked(shared.ptr);
+                }
+            }
+
+            #[inline]
+            unsafe fn as_read<'r>(&mut self) -> Self::Read<'r> {
+                let mut result: [MaybeUninit<Shared<'r, T>>; $N] = zeroed();
+                for (shield, shared) in self.iter().zip(result.iter_mut()) {
+                    shared.write(Shared {
+                        ptr: crate::Shared::from_usize(shield.hazptr.shared().as_raw() as _)
+                    });
+                }
+                transmute(result)
+            }
+
+            #[inline]
+            fn release(&mut self) {
+                for shield in self {
+                    shield.release();
+                }
             }
         }
     )*
 )}
 
-impl_localizable_for_array! {
+impl_defender_for_array! {
     00
     01 02 03 04 05 06 07 08
     09 10 11 12 13 14 15 16

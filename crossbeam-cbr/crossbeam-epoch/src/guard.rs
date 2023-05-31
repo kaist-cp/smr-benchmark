@@ -1,10 +1,7 @@
 use core::fmt;
 use core::mem;
-use core::mem::zeroed;
-use core::mem::MaybeUninit;
-use core::ptr::drop_in_place;
-use core::ptr::read_volatile;
-use core::ptr::write_volatile;
+use core::mem::transmute;
+use core::ptr;
 use core::sync::atomic::compiler_fence;
 use core::sync::atomic::fence;
 use core::sync::atomic::AtomicUsize;
@@ -20,7 +17,7 @@ use crate::deferred::Deferred;
 use crate::garbage::Garbage;
 use crate::hazard::Shield;
 use crate::internal::Local;
-use crate::rc::Localizable;
+use crate::rc::Defender;
 use crate::recovery;
 
 /// A guard that keeps the current thread pinned.
@@ -476,14 +473,14 @@ impl EpochGuard {
         false
     }
 
-    /// Conducts a read phase, and returns a result which is protected with hazard pointers.
-    /// 
+    /// Conducts a read phase, and stores a result with protecting with hazard pointers.
+    ///
     /// It takes a mutable borrow from `EpochGuard`. This prevents accessing `EpochGuard` in a read phase.
     #[inline(never)]
-    pub fn read<'r, F, P>(&mut self, f: F) -> P::Localized
+    pub fn read<'r, F, D>(&mut self, defender: &mut D, f: F)
     where
-        F: Fn(&'r mut ReadGuard) -> P,
-        P: Localizable<'r>,
+        F: Fn(&'r mut ReadGuard) -> D::Read<'r>,
+        D: Defender,
     {
         // TODO(@jeonghyeon): Those lots of `compiler_fence`s are really necessary?
 
@@ -505,8 +502,6 @@ impl EpochGuard {
         }
         compiler_fence(Ordering::SeqCst);
 
-        let mut guard = ReadGuard::new(self);
-
         // Get ready to open the phase by setting atomic indicators.
         assert!(
             !recovery::is_restartable(),
@@ -522,70 +517,57 @@ impl EpochGuard {
             unsafe { recovery::perform_longjmp() };
         }
 
+        let mut guard = ReadGuard::new(self);
+
         // Execute the body of this read phase.
         //
         // Here, `transmute` is needed to bypass a lifetime parameter error.
-        //
-        // Although `Localizable` is depends on the lifetime of the `ReadGuard`,
-        // the `Localizable<'_>::Localized` is independent on it.
-        // However, Rust compiler cannot understand this semantics, so we need to
-        // lengthen the lifetime of the `guard` to trick the compiler that
-        // returned `localized` has sufficient lifetime.
-        let result = f(unsafe { mem::transmute(&mut guard) });
+        let result = f(unsafe { transmute(&mut guard) });
         compiler_fence(Ordering::SeqCst);
 
         // Finaly, close this read phase by unsetting the `RESTARTABLE`.
         recovery::set_restartable(false);
         compiler_fence(Ordering::SeqCst);
 
-        // Protecting must be conducted in a crash-free section.
-        // Otherwise it may forget to drop acquired hazard slot on crashing.
-        let localized = result.protect_with(self);
-        compiler_fence(Ordering::SeqCst);
+        // Store pointers in hazard slots and issue a light fence.
+        unsafe { defender.defend_unchecked(&result) };
+        membarrier::light_membarrier();
+
+        // Check whether we are ejected.
         if unsafe { self.is_ejected() } {
-            drop(localized);
+            // If we are ejected while protecting, the protection may not be valid.
+            // Restart this read phase manually.
             unsafe { recovery::perform_longjmp() };
         }
-        localized
     }
 
-    /// Conducts a iterative read phase, and returns a result which is protected with hazard pointers.
-    /// 
+    /// Conducts a iterative read phase, and stores a result in `def_1st`, protecting with hazard pointers.
+    ///
     /// This function saves intermeditate results on a backup storage periodically, so that
     /// it avoids a starvation on crash-intensive workloads.
-    /// 
+    ///
     /// It takes a mutable borrow from `EpochGuard`. This prevents accessing `EpochGuard` in a read phase.
     #[inline(never)]
-    pub fn read_loop<'r, F1, F2, P>(&mut self, init_result: F1, step_forward: F2) -> P::Localized
-    where
-        F1: Fn(&'r mut ReadGuard) -> P,
-        F2: Fn(&mut P, &'r mut ReadGuard) -> ReadStatus,
-        P: Localizable<'r> + Clone + Copy,
+    pub fn read_loop<'r, F1, F2, D>(
+        &mut self,
+        def_1st: &mut D,
+        def_2nd: &mut D,
+        init_result: F1,
+        step_forward: F2,
+    ) where
+        F1: Fn(&'r mut ReadGuard) -> D::Read<'r>,
+        F2: Fn(&mut D::Read<'r>, &'r mut ReadGuard) -> ReadStatus,
+        D: Defender,
     {
         const ITER_BETWEEN_CHECKPOINTS: usize = 512;
 
         // TODO(@jeonghyeon): Those lots of `compiler_fence`s are really necessary?
 
-        // Allocate a raw pointers to backup storages.
-        // These pointers MUST be on the STACK, so that the pointer values
-        // are preserved across the crashes.
-        let mut backup_result = unsafe { zeroed() };
-        let mut backup_exist = unsafe { zeroed() };
-        let mut backup_shield = unsafe { zeroed() };
-
-        // Allocate backup storages on the HEAP,
-        // and write their pointers on `backup_*`, which are on the STACK.
-        unsafe {
-            write_volatile(
-                &mut backup_result,
-                Box::into_raw(Box::new(mem::zeroed::<P>())),
-            );
-            write_volatile(&mut backup_exist, Box::into_raw(Box::new(false)));
-            write_volatile(
-                &mut backup_shield,
-                Box::into_raw(Box::new(MaybeUninit::new(mem::zeroed::<P::Localized>()))),
-            );
-        }
+        // `backup_idx` indicates where we have stored a backup to `backup_def`.
+        // 0 = no backup, 1 = `def_1st`, 2 = `def_2st`
+        // We use an atomic type instead of regular one, to perform writes atomically,
+        // so that stored data is consistent even if a crash occured during a write.
+        let backup_idx = AtomicUsize::new(0);
 
         // Make a checkpoint with `sigsetjmp` for recovering in read phase.
         compiler_fence(Ordering::SeqCst);
@@ -608,12 +590,7 @@ impl EpochGuard {
         // If we have reached here by restarting this read phase in a write phase,
         // we should drop previous backups.
         if recovery::is_invalidated() {
-            unsafe {
-                if *backup_exist {
-                    *backup_exist = false;
-                    drop_in_place((*backup_shield).as_mut_ptr());
-                }
-            }
+            backup_idx.store(0, Ordering::Relaxed);
             recovery::set_invalidate_backup(false);
         }
 
@@ -637,50 +614,46 @@ impl EpochGuard {
         let mut guard = ReadGuard::new(self);
 
         // Load the saved intermediate result, if one exists.
-        let mut result = if unsafe { *backup_exist } {
-            unsafe { read_volatile(backup_result.cast_const()) }
-        } else {
-            init_result(unsafe { mem::transmute(&mut guard) })
+        let mut result = unsafe {
+            match backup_idx.load(Ordering::Relaxed) {
+                0 => init_result(transmute(&mut guard)),
+                1 => def_1st.as_read(),
+                2 => def_2nd.as_read(),
+                _ => unreachable!(),
+            }
         };
 
+        // Execute the body of this read phase.
+        //
+        // Here, `transmute` is needed to bypass a lifetime parameter error.
         for iter in 0.. {
-            match step_forward(&mut result, unsafe { mem::transmute(&mut guard) }) {
+            match step_forward(&mut result, unsafe { transmute(&mut guard) }) {
                 ReadStatus::Finished => break,
                 ReadStatus::Continue => {
                     // TODO(@jeonghyeon): Apply an adaptive checkpointing.
                     if iter % ITER_BETWEEN_CHECKPOINTS == 0 {
-                        // Protecting must be conducted in a crash-free section.
-                        // Otherwise it may forget to drop acquired hazard slot on crashing.
-                        recovery::set_restartable(false);
-                        compiler_fence(Ordering::SeqCst);
+                        // Select an available defender to protect a backup.
+                        let (next_def, next_idx) = match backup_idx.load(Ordering::Relaxed) {
+                            0 | 2 => (&mut *def_1st, 1),
+                            1 => (&mut *def_2nd, 2),
+                            _ => unreachable!(),
+                        };
 
-                        let localized = result.protect_with(self);
-                        compiler_fence(Ordering::SeqCst);
+                        // Store pointers in hazard slots and issue a light fence.
+                        unsafe { next_def.defend_unchecked(&result) };
+                        membarrier::light_membarrier();
 
+                        // Check whether we are ejected.
                         if unsafe { self.is_ejected() } {
-                            // While protecting, we are ejected.
-                            // Then the protection may not be valid.
-                            // Drop the shields and restart this read phase manually.
-                            drop(localized);
+                            // If we are ejected while protecting, the protection may not be valid.
+                            // Restart this read phase manually.
                             recovery::set_restartable(false);
                             unsafe { recovery::perform_longjmp() };
                         } else {
-                            // We are not ejected so the protection was valid!
-                            // Drop the previous shields and save the current one on the backup storage.
-                            unsafe {
-                                if *backup_exist {
-                                    // TODO(@jeonghyeon): On each checkpointing, we drop the previous shields and
-                                    //                    create shields again. Optimize this by recycling them.
-                                    drop_in_place((*backup_shield).as_mut_ptr());
-                                }
-                                *backup_result = result.clone();
-                                *backup_exist = true;
-                                write_volatile((*backup_shield).as_mut_ptr(), localized);
-                            }
+                            // We are not ejected so the protection is valid!
+                            // Finalize backup process by storing a new backup index to `backup_idx`
+                            backup_idx.store(next_idx, Ordering::Relaxed);
                         }
-                        compiler_fence(Ordering::SeqCst);
-
-                        recovery::set_restartable(true);
                     }
                 }
             }
@@ -691,27 +664,28 @@ impl EpochGuard {
         recovery::set_restartable(false);
         compiler_fence(Ordering::SeqCst);
 
-        // Protecting must be conducted in a crash-free section.
-        // Otherwise it may forget to drop acquired hazard slot on crashing.
-        let localized = result.protect_with(self);
-        compiler_fence(Ordering::SeqCst);
+        // Select an available defender to protect the final result.
+        let final_def = match backup_idx.load(Ordering::Relaxed) {
+            0 | 2 => &mut *def_1st,
+            1 => &mut *def_2nd,
+            _ => unreachable!(),
+        };
+
+        // Store pointers in hazard slots and issue a light fence.
+        unsafe { final_def.defend_unchecked(&result) };
+        membarrier::light_membarrier();
+
+        // Check whether we are ejected.
         if unsafe { self.is_ejected() } {
-            drop(localized);
+            // If we are ejected while protecting, the protection may not be valid.
+            // Restart this read phase manually.
             unsafe { recovery::perform_longjmp() };
         }
 
-        // Free the memory location for the backup storage.
-        // If there are backup shields, drop them.
-        unsafe {
-            let backup_exist = *Box::from_raw(backup_exist);
-            if backup_exist {
-                drop_in_place((*backup_shield).as_mut_ptr());
-            }
-            drop(Box::from_raw(backup_result));
-            drop(Box::from_raw(backup_shield));
+        // Success! Move the final defender to `def_1st` and return.
+        if ptr::eq(final_def, def_2nd) {
+            mem::swap(def_1st, def_2nd);
         }
-
-        localized
     }
 }
 
@@ -843,18 +817,23 @@ impl ReadGuard {
     }
 
     /// Starts an auxiliary write phase where writing on a localized shared memory is allowed.
-    pub fn write<'r, F, P>(&'r self, to_deref: P, f: F)
+    pub fn write<'r, F, D>(&'r self, to_deref: D::Read<'r>, f: F)
     where
-        F: Fn(&P::Localized, &WriteGuard) -> WriteResult,
-        P: Localizable<'r>,
+        F: Fn(&D, &WriteGuard) -> WriteResult,
+        D: Defender,
     {
         // Protecting must be conducted in a crash-free section.
         // Otherwise it may forget to drop acquired hazard slot on crashing.
         recovery::set_restartable(false);
         compiler_fence(Ordering::SeqCst);
 
-        let localized = to_deref.protect_with(unsafe { &*self.inner });
-        compiler_fence(Ordering::SeqCst);
+        // Allocate fresh hazard slots to protect pointers.
+        let mut localized = D::default(unsafe { &*self.inner });
+        // Store pointers in hazard slots and issue a light fence.
+        unsafe { localized.defend_unchecked(&to_deref) };
+        membarrier::light_membarrier();
+
+        // Check whether we are ejected.
         if unsafe { (&*self.inner).is_ejected() } {
             // While protecting, we are ejected.
             // Then the protection may not be valid.
@@ -913,67 +892,21 @@ impl WriteGuard {
 }
 
 /// A common trait for `Guard` types which allow mutating shared memory locations.
-/// 
+///
 /// `EpochGuard` and `WriteGuard` implement this trait.
 pub trait Writable {
     /// Stores a function so that it can be executed at some point after all currently pinned threads get unpinned.
     unsafe fn defer<F: FnOnce()>(&self, f: F);
-
-    /// Loads a pointer from the given `link` and defends it with `Shield`.
-    /// 
-    /// It may repin the epoch if it is ejected by a reclaimer.
-    fn defend<T>(&mut self, link: &AtomicUsize, shield: &mut Shield<T>);
-
-    /// Copies a `Shield` to another by storing a pointer of `src` in `dst`.
-    fn copy<T>(&mut self, src: &Shield<T>, dst: &mut Shield<T>);
-
-    /// Returns a mutable reference to `EpochGuard`.
-    /// 
-    /// # Safety
-    /// The returned `EpochGuard` MUST NOT be used to open a nested read phase in a write phase.
-    unsafe fn as_epoch_guard<'g>(&'g mut self) -> &'g mut EpochGuard;
 }
 
 impl Writable for EpochGuard {
     unsafe fn defer<F: FnOnce()>(&self, f: F) {
         self.defer_unchecked(f);
     }
-
-    fn defend<T>(&mut self, link: &AtomicUsize, shield: &mut Shield<T>) {
-        loop {
-            let ptr = link.load(Ordering::Acquire);
-            if shield.defend_usize(ptr, self).is_ok() {
-                return;
-            }
-            self.repin();
-        }
-    }
-
-    fn copy<T>(&mut self, src: &Shield<T>, dst: &mut Shield<T>) {
-        while dst.defend_usize(src.data, self).is_err() {
-            self.repin();
-        }
-    }
-
-    unsafe fn as_epoch_guard<'g>(&'g mut self) -> &'g mut EpochGuard {
-        self
-    }
 }
 
 impl Writable for WriteGuard {
     unsafe fn defer<F: FnOnce()>(&self, f: F) {
         unsafe { &mut *self.inner }.defer_unchecked(f);
-    }
-
-    fn defend<T>(&mut self, link: &AtomicUsize, shield: &mut Shield<T>) {
-        unsafe { &mut *self.inner }.defend(link, shield)
-    }
-
-    fn copy<T>(&mut self, src: &Shield<T>, dst: &mut Shield<T>) {
-        unsafe { &mut *self.inner }.copy(src, dst)
-    }
-
-    unsafe fn as_epoch_guard<'g>(&'g mut self) -> &'g mut EpochGuard {
-        unsafe { &mut *self.inner }
     }
 }

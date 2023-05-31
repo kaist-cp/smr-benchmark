@@ -1,7 +1,7 @@
 extern crate crossbeam_cbr_epoch;
 
 use crossbeam_cbr_epoch::{
-    rc::{AcquiredPtr, Atomic, Localizable, Rc, Shared, Shield},
+    rc::{AcquiredPtr, Atomic, Defender, Rc, Shared, Shield},
     EpochGuard, ReadGuard, ReadStatus,
 };
 use std::mem;
@@ -41,65 +41,74 @@ where
     }
 }
 
-/// TODO(@jeonghyeon): implement `#[derive(Localizable)]`,
-/// so that `LocalizedCursor` and the trait implementation
+/// TODO(@jeonghyeon): implement `#[derive(Defender)]`,
+/// so that `ReadCursor` and the trait implementation
 /// is generated automatically.
-struct Cursor<'r, K, V> {
-    prev: Shared<'r, Node<K, V>>,
-    prev_next: Shared<'r, Node<K, V>>,
+pub struct Cursor<K, V> {
+    prev: Shield<Node<K, V>>,
+    prev_next: Shield<Node<K, V>>,
     // Tag of `curr` should always be zero so when `curr` is stored in a `prev`, we don't store a
     // marked pointer and cause cleanup to fail.
+    curr: Shield<Node<K, V>>,
+    found: bool,
+}
+
+/// This struct definition must be generated automatically by a `derive` macro.
+pub struct ReadCursor<'r, K, V> {
+    prev: Shared<'r, Node<K, V>>,
+    prev_next: Shared<'r, Node<K, V>>,
     curr: Shared<'r, Node<K, V>>,
     found: bool,
 }
 
-/// This trait implementation must be generated automatically by a `derive` macro.
-impl<'r, K, V> Clone for Cursor<'r, K, V> {
+impl<'r, K, V> Clone for ReadCursor<'r, K, V> {
     fn clone(&self) -> Self {
         Self { ..*self }
     }
 }
 
-/// This trait implementation must be generated automatically by a `derive` macro.
-impl<'r, K, V> Copy for Cursor<'r, K, V> {}
-
-/// This struct definition must be generated automatically by a `derive` macro.
-struct LocalizedCursor<K, V> {
-    prev: Shield<Node<K, V>>,
-    prev_next: Shield<Node<K, V>>,
-    curr: Shield<Node<K, V>>,
-    found: bool,
-}
+impl<'r, K, V> Copy for ReadCursor<'r, K, V> {}
 
 /// This trait implementation must be generated automatically by a `derive` macro.
-impl<'r, K, V> Localizable<'r> for Cursor<'r, K, V> {
-    type Localized = LocalizedCursor<K, V>;
+impl<K: 'static, V: 'static> Defender for Cursor<K, V> {
+    type Read<'r> = ReadCursor<'r, K, V>;
 
-    fn protect_with(self, guard: &EpochGuard) -> Self::Localized {
-        Self::Localized {
-            prev: self.prev.protect_with(guard),
-            prev_next: self.prev_next.protect_with(guard),
-            curr: self.curr.protect_with(guard),
-            found: self.found,
-        }
-    }
-}
-
-impl<'r, K: Ord, V> Cursor<'r, K, V> {
-    /// Creates a cursor.
-    fn new(head: &'r Atomic<Node<K, V>>, guard: &'r ReadGuard) -> Self {
-        let prev = head.load(guard);
-        let curr = prev.as_ref().unwrap().next.load(guard);
+    #[inline]
+    fn default(guard: &EpochGuard) -> Self {
         Self {
-            prev,
-            prev_next: curr,
-            curr,
+            prev: Shield::null(guard),
+            prev_next: Shield::null(guard),
+            curr: Shield::null(guard),
             found: false,
         }
     }
+
+    #[inline]
+    unsafe fn defend_unchecked(&mut self, read: &Self::Read<'_>) {
+        self.prev.defend_unchecked(&read.prev);
+        self.prev_next.defend_unchecked(&read.prev_next);
+        self.curr.defend_unchecked(&read.curr);
+    }
+
+    #[inline]
+    unsafe fn as_read<'r>(&mut self) -> Self::Read<'r> {
+        ReadCursor {
+            prev: self.prev.as_read(),
+            prev_next: self.prev_next.as_read(),
+            curr: self.curr.as_read(),
+            found: self.found,
+        }
+    }
+
+    #[inline]
+    fn release(&mut self) {
+        self.prev.release();
+        self.prev_next.release();
+        self.curr.release();
+    }
 }
 
-impl<K, V> LocalizedCursor<K, V> {
+impl<K, V> Cursor<K, V> {
     fn new(head: &Atomic<Node<K, V>>, guard: &mut EpochGuard) -> Self {
         let prev = head.defend(guard);
         let curr = prev.as_ref().unwrap().next.defend(guard);
@@ -108,6 +117,20 @@ impl<K, V> LocalizedCursor<K, V> {
         Self {
             prev,
             prev_next,
+            curr,
+            found: false,
+        }
+    }
+}
+
+impl<'r, K: Ord, V> ReadCursor<'r, K, V> {
+    /// Creates a cursor.
+    fn new(head: &'r Atomic<Node<K, V>>, guard: &'r ReadGuard) -> Self {
+        let prev = head.load(guard);
+        let curr = prev.as_ref().unwrap().next.load(guard);
+        Self {
+            prev,
+            prev_next: curr,
             curr,
             found: false,
         }
@@ -125,10 +148,10 @@ where
         }
     }
 
-    pub fn find_naive(&self, key: &K, guard: &mut EpochGuard) -> LocalizedCursor<K, V> {
+    pub fn find_naive(&self, key: &K, handle: &mut Cursor<K, V>, guard: &mut EpochGuard) {
         loop {
             let mut next = Shield::null(guard);
-            let mut cursor = LocalizedCursor::new(&self.head, guard);
+            let mut cursor = Cursor::new(&self.head, guard);
             cursor.found = loop {
                 let curr_node = match cursor.curr.as_ref() {
                     Some(node) => node,
@@ -162,12 +185,12 @@ where
                     guard,
                 )
             {
-                return cursor;
+                return;
             }
         }
     }
 
-    pub fn find_read(&self, key: &K, guard: &mut EpochGuard) -> LocalizedCursor<K, V> {
+    pub fn find_read(&self, key: &K, handle: &mut Cursor<K, V>, guard: &mut EpochGuard) {
         loop {
             let cursor = guard.read(|guard| {
                 let mut cursor = Cursor::new(&self.head, guard);
@@ -210,7 +233,7 @@ where
         }
     }
 
-    pub fn find_read_loop(&self, key: &K, guard: &mut EpochGuard) -> LocalizedCursor<K, V> {
+    pub fn find_read_loop(&self, key: &K, handle: &mut Cursor<K, V>, guard: &mut EpochGuard) {
         loop {
             let cursor = guard.read_loop(
                 |guard| Cursor::new(&self.head, guard),
