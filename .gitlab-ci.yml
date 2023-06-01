@@ -9,13 +9,19 @@ cache:
 # Set any required environment variables here
 variables:
   RUST_BACKTRACE: "FULL"
+  GIT_SUBMODULE_STRATEGY: recursive
 
 image: rust:latest
 
+before_script:
+  # Install dependencies to build
+  # `clang` is necessary for `setjmp`
+  - apt install build-essential python3-pip clang
+
 stages:
-- install
-- test
-- deploy
+  - install
+  - test
+  - deploy
 
 install:
   stage: install
@@ -27,7 +33,6 @@ check:
   before_script:
     - rustup component add rustfmt clippy
     - cargo install cargo-audit
-    - git submodule update --init --recursive
   script:
     # TODO(@jeonghyeon): uncomment after adding documents and resolving warnings
     # TODO(@jeonghyeon): change the working directory into cbr
@@ -39,29 +44,23 @@ check:
 
 debug:
   stage: test
-  before_script:
-    - git submodule update --init --recursive
   script:
     - cargo test
     - cargo build
 
 release:
   stage: test
-  before_script:
-    - git submodule update --init --recursive
   script:
     - cargo test --release
     - cargo build --release
 
 pages:
   stage: deploy
-  before_script:
-    - git submodule update --init --recursive
   script:
-  - cargo doc
-  - mkdir -p public && cp -r target/doc/* public
+    - cargo doc
+    - mkdir -p public && cp -r target/doc/* public
   artifacts:
     paths:
-    - public
+      - public
   rules:
     - if: $CI_COMMIT_REF_NAME == $CI_DEFAULT_BRANCH
