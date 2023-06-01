@@ -21,13 +21,13 @@ install:
   stage: install
   script:
     - rustc --version # triggering installation
-    - git submodule update --init --recursive
 
 check:
   stage: test
   before_script:
     - rustup component add rustfmt clippy
     - cargo install cargo-audit
+    - git submodule update --init --recursive
   script:
     # TODO(@jeonghyeon): uncomment after adding documents and resolving warnings
     # TODO(@jeonghyeon): change the working directory into cbr
@@ -40,7 +40,7 @@ check:
 debug:
   stage: test
   before_script:
-    # - apt update && apt install -yy
+    - git submodule update --init --recursive
   script:
     - cargo test
     - cargo build
@@ -48,7 +48,7 @@ debug:
 release:
   stage: test
   before_script:
-    # - apt update && apt install -yy
+    - git submodule update --init --recursive
   script:
     - cargo test --release
     - cargo build --release
@@ -56,7 +56,7 @@ release:
 pages:
   stage: deploy
   before_script:
-    # - apt update && apt install -yy
+    - git submodule update --init --recursive
   script:
   - cargo doc
   - mkdir -p public && cp -r target/doc/* public
