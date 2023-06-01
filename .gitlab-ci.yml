@@ -16,7 +16,11 @@ image: rust:latest
 before_script:
   # Install dependencies to build
   # `clang` is necessary for `setjmp`
-  - apt install build-essential python3-pip clang
+  - apt-get update -qy
+  - apt-get install -y build-essential python3-pip clang
+
+after_script:
+  - apt-get clean
 
 stages:
   - install
