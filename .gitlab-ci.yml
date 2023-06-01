@@ -21,6 +21,7 @@ install:
   stage: install
   script:
     - rustc --version # triggering installation
+    - git submodule update --init --recursive
 
 check:
   stage: test
