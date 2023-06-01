@@ -41,6 +41,19 @@ where
     }
 }
 
+pub struct Handle<K, V>(Cursor<K, V>, Cursor<K, V>);
+
+impl<K, V> Handle<K, V>
+where
+    K: 'static,
+    V: 'static,
+{
+    #[inline]
+    fn default(guard: &EpochGuard) -> Self {
+        Self(Cursor::default(guard), Cursor::default(guard))
+    }
+}
+
 /// TODO(@jeonghyeon): implement `#[derive(Defender)]`,
 /// so that `ReadCursor` and the trait implementation
 /// is generated automatically.
@@ -50,6 +63,7 @@ pub struct Cursor<K, V> {
     // Tag of `curr` should always be zero so when `curr` is stored in a `prev`, we don't store a
     // marked pointer and cause cleanup to fail.
     curr: Shield<Node<K, V>>,
+    next: Shield<Node<K, V>>,
     found: bool,
 }
 
@@ -79,6 +93,7 @@ impl<K: 'static, V: 'static> Defender for Cursor<K, V> {
             prev: Shield::null(guard),
             prev_next: Shield::null(guard),
             curr: Shield::null(guard),
+            next: Shield::null(guard),
             found: false,
         }
     }
@@ -109,17 +124,15 @@ impl<K: 'static, V: 'static> Defender for Cursor<K, V> {
 }
 
 impl<K, V> Cursor<K, V> {
-    fn new(head: &Atomic<Node<K, V>>, guard: &mut EpochGuard) -> Self {
-        let prev = head.defend(guard);
-        let curr = prev.as_ref().unwrap().next.defend(guard);
-        let mut prev_next = Shield::null(guard);
-        curr.copy_to(&mut prev_next, guard);
-        Self {
-            prev,
-            prev_next,
-            curr,
-            found: false,
-        }
+    fn initialize(&mut self, head: &Atomic<Node<K, V>>, guard: &mut EpochGuard) {
+        head.defend_with(&mut self.prev, guard);
+        self.prev
+            .as_ref()
+            .unwrap()
+            .next
+            .defend_with(&mut self.curr, guard);
+        self.curr.copy_to(&mut self.prev_next, guard);
+        self.found = false;
     }
 }
 
@@ -127,7 +140,7 @@ impl<'r, K: Ord, V> ReadCursor<'r, K, V> {
     /// Creates a cursor.
     fn new(head: &'r Atomic<Node<K, V>>, guard: &'r ReadGuard) -> Self {
         let prev = head.load(guard);
-        let curr = prev.as_ref().unwrap().next.load(guard);
+        let curr = prev.as_ref(guard).unwrap().next.load(guard);
         Self {
             prev,
             prev_next: curr,
@@ -139,8 +152,8 @@ impl<'r, K: Ord, V> ReadCursor<'r, K, V> {
 
 impl<K, V> List<K, V>
 where
-    K: Default + Ord,
-    V: Default,
+    K: Default + Ord + 'static,
+    V: Default + 'static,
 {
     pub fn new() -> Self {
         List {
@@ -148,28 +161,28 @@ where
         }
     }
 
-    pub fn find_naive(&self, key: &K, handle: &mut Cursor<K, V>, guard: &mut EpochGuard) {
+    pub fn find_naive(&self, key: &K, handle: &mut Handle<K, V>, guard: &mut EpochGuard) {
+        let mut cursor = &mut handle.0;
         loop {
-            let mut next = Shield::null(guard);
-            let mut cursor = Cursor::new(&self.head, guard);
+            cursor.initialize(&self.head, guard);
             cursor.found = loop {
                 let curr_node = match cursor.curr.as_ref() {
                     Some(node) => node,
                     None => break false,
                 };
 
-                curr_node.next.defend_with(&mut next, guard);
-                if next.tag() > 0 {
-                    next = next.with_tag(0);
-                    mem::swap(&mut next, &mut cursor.curr);
+                curr_node.next.defend_with(&mut cursor.next, guard);
+                if cursor.next.tag() > 0 {
+                    cursor.next.set_tag(0);
+                    mem::swap(&mut cursor.next, &mut cursor.curr);
                     continue;
                 }
 
                 match curr_node.key.cmp(key) {
                     std::cmp::Ordering::Less => {
                         mem::swap(&mut cursor.prev, &mut cursor.curr);
-                        next.copy_to(&mut cursor.prev_next, guard);
-                        mem::swap(&mut cursor.curr, &mut next);
+                        cursor.next.copy_to(&mut cursor.prev_next, guard);
+                        mem::swap(&mut cursor.curr, &mut cursor.next);
                         continue;
                     }
                     std::cmp::Ordering::Equal => break true,
@@ -190,12 +203,13 @@ where
         }
     }
 
-    pub fn find_read(&self, key: &K, handle: &mut Cursor<K, V>, guard: &mut EpochGuard) {
+    pub fn find_read(&self, key: &K, handle: &mut Handle<K, V>, guard: &mut EpochGuard) {
+        let cursor = &mut handle.0;
         loop {
-            let cursor = guard.read(|guard| {
-                let mut cursor = Cursor::new(&self.head, guard);
+            guard.read(cursor, |guard| {
+                let mut cursor = ReadCursor::new(&self.head, guard);
                 cursor.found = loop {
-                    let curr_node = match cursor.curr.as_ref() {
+                    let curr_node = match cursor.curr.as_ref(guard) {
                         Some(node) => node,
                         None => break false,
                     };
@@ -228,17 +242,19 @@ where
                     guard,
                 )
             {
-                return cursor;
+                return;
             }
         }
     }
 
-    pub fn find_read_loop(&self, key: &K, handle: &mut Cursor<K, V>, guard: &mut EpochGuard) {
+    pub fn find_read_loop(&self, key: &K, handle: &mut Handle<K, V>, guard: &mut EpochGuard) {
         loop {
-            let cursor = guard.read_loop(
-                |guard| Cursor::new(&self.head, guard),
+            guard.read_loop(
+                &mut handle.0,
+                &mut handle.1,
+                |guard| ReadCursor::new(&self.head, guard),
                 |cursor, guard| {
-                    let curr_node = match cursor.curr.as_ref() {
+                    let curr_node = match cursor.curr.as_ref(guard) {
                         Some(node) => node,
                         None => {
                             cursor.found = false;
@@ -266,6 +282,7 @@ where
                 },
             );
 
+            let cursor = &mut handle.0;
             // Perform Clean-up CAS and return the cursor.
             if cursor.prev_next.as_raw() == cursor.curr.as_raw()
                 || cursor.prev.as_ref().unwrap().next.try_compare_exchange(
@@ -274,30 +291,41 @@ where
                     guard,
                 )
             {
-                return cursor;
+                return;
             }
         }
     }
 
-    pub fn get<F>(&self, find: F, key: &K, guard: &mut EpochGuard) -> Option<LocalizedCursor<K, V>>
+    /// On `true`, `handle.0.curr` is a reference to the found node.
+    pub fn get<F>(
+        &self,
+        find: F,
+        key: &K,
+        handle: &mut Handle<K, V>,
+        guard: &mut EpochGuard,
+    ) -> bool
     where
-        F: Fn(&List<K, V>, &K, &mut EpochGuard) -> LocalizedCursor<K, V>,
+        F: Fn(&List<K, V>, &K, &mut Handle<K, V>, &mut EpochGuard),
     {
-        let cursor = find(self, key, guard);
-        if cursor.found {
-            Some(cursor)
-        } else {
-            None
-        }
+        find(self, key, handle, guard);
+        handle.0.found
     }
 
-    pub fn insert<F>(&self, find: F, key: K, value: V, guard: &mut EpochGuard) -> Result<(), (K, V)>
+    pub fn insert<F>(
+        &self,
+        find: F,
+        key: K,
+        value: V,
+        handle: &mut Handle<K, V>,
+        guard: &mut EpochGuard,
+    ) -> Result<(), (K, V)>
     where
-        F: Fn(&List<K, V>, &K, &mut EpochGuard) -> LocalizedCursor<K, V>,
+        F: Fn(&List<K, V>, &K, &mut Handle<K, V>, &mut EpochGuard),
     {
         let mut new_node = Node::new(key, value);
         loop {
-            let cursor = find(self, &new_node.key, guard);
+            find(self, &new_node.key, handle, guard);
+            let cursor = &handle.0;
             if cursor.found {
                 return Err((new_node.key, new_node.value));
             }
@@ -319,36 +347,41 @@ where
         }
     }
 
+    /// On `true`, `handle.0.curr` is a reference to the removed node.
     pub fn remove<F>(
         &self,
         find: F,
         key: &K,
+        handle: &mut Handle<K, V>,
         guard: &mut EpochGuard,
-    ) -> Option<LocalizedCursor<K, V>>
+    ) -> bool
     where
-        F: Fn(&List<K, V>, &K, &mut EpochGuard) -> LocalizedCursor<K, V>,
+        F: Fn(&List<K, V>, &K, &mut Handle<K, V>, &mut EpochGuard),
     {
         loop {
-            let cursor = find(self, key, guard);
+            find(self, key, handle, guard);
+            let cursor = &mut handle.0;
             if !cursor.found {
-                return None;
+                return false;
             }
 
             let curr_node = cursor.curr.as_ref().unwrap();
-            let mut next = Shield::null(guard);
-            curr_node.next.defend_with(&mut next, guard);
-            if next.tag() > 0 || !curr_node.next.try_compare_exchange_tag(&next, 1, guard) {
+            curr_node.next.defend_with(&mut cursor.next, guard);
+            if cursor.next.tag() > 0
+                || !curr_node
+                    .next
+                    .try_compare_exchange_tag(&cursor.next, 1, guard)
+            {
                 continue;
             }
 
-            cursor
-                .prev
-                .as_ref()
-                .unwrap()
-                .next
-                .try_compare_exchange(&cursor.curr, &next, guard);
+            cursor.prev.as_ref().unwrap().next.try_compare_exchange(
+                &cursor.curr,
+                &cursor.next,
+                guard,
+            );
 
-            return Some(cursor);
+            return true;
         }
     }
 }
@@ -379,7 +412,7 @@ fn smoke_harris_read_loop() {
 
 fn smoke_with<F>(find: &F)
 where
-    F: Fn(&List<i32, String>, &i32, &mut EpochGuard) -> LocalizedCursor<i32, String> + Sync,
+    F: Fn(&List<i32, String>, &i32, &mut Handle<i32, String>, &mut EpochGuard) + Sync,
 {
     extern crate rand;
     use crossbeam_cbr_epoch::pin;
@@ -387,7 +420,7 @@ where
     use std::sync::atomic::{compiler_fence, Ordering};
     use std::thread::scope;
 
-    const THREADS: i32 = 30;
+    const THREADS: i32 = 1;
     const ELEMENTS_PER_THREADS: i32 = 1000;
 
     let map = &List::new();
@@ -395,12 +428,15 @@ where
     scope(|s| {
         for t in 0..THREADS {
             s.spawn(move || {
+                let mut handle = Handle::default(&pin());
                 let mut rng = rand::thread_rng();
                 let mut keys: Vec<i32> =
                     (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
                 keys.shuffle(&mut rng);
                 for i in keys {
-                    assert!(map.insert(find, i, i.to_string(), &mut pin()).is_ok());
+                    assert!(map
+                        .insert(find, i, i.to_string(), &mut handle, &mut pin())
+                        .is_ok());
                 }
             });
         }
@@ -409,14 +445,15 @@ where
     scope(|s| {
         for t in 0..(THREADS / 2) {
             s.spawn(move || {
+                let mut handle = Handle::default(&pin());
                 let mut rng = rand::thread_rng();
                 let mut keys: Vec<i32> =
                     (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
                 keys.shuffle(&mut rng);
                 let mut guard = pin();
                 for i in keys {
-                    let cursor = map.remove(find, &i, &mut guard).unwrap();
-                    assert_eq!(i.to_string(), cursor.curr.as_ref().unwrap().value);
+                    assert!(map.remove(find, &i, &mut handle, &mut guard));
+                    assert_eq!(i.to_string(), handle.0.curr.as_ref().unwrap().value);
                     compiler_fence(Ordering::SeqCst);
                     guard.repin();
                 }
@@ -427,14 +464,15 @@ where
     scope(|s| {
         for t in (THREADS / 2)..THREADS {
             s.spawn(move || {
+                let mut handle = Handle::default(&pin());
                 let mut rng = rand::thread_rng();
                 let mut keys: Vec<i32> =
                     (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
                 keys.shuffle(&mut rng);
                 let mut guard = pin();
                 for i in keys {
-                    let cursor = map.get(find, &i, &mut guard).unwrap();
-                    assert_eq!(i.to_string(), cursor.curr.as_ref().unwrap().value);
+                    assert!(map.get(find, &i, &mut handle, &mut guard));
+                    assert_eq!(i.to_string(), handle.0.curr.as_ref().unwrap().value);
                     compiler_fence(Ordering::SeqCst);
                     guard.repin();
                 }

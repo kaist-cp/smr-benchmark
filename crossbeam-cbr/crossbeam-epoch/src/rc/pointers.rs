@@ -358,11 +358,6 @@ unsafe impl<T> Sync for Shield<T> {}
 
 impl<T> Shield<T> {
     #[inline]
-    pub(crate) fn new(shield: crate::Shield<Counted<T>>) -> Self {
-        Self { hazptr: shield }
-    }
-
-    #[inline]
     pub fn null(guard: &EpochGuard) -> Self {
         Self {
             hazptr: crate::Shield::null(guard),
@@ -392,15 +387,9 @@ impl<T> Shield<T> {
     }
 
     #[inline]
-    pub fn untagged(self) -> Self {
-        self.with_tag(0)
-    }
-
-    #[inline]
-    pub fn with_tag(mut self, tag: usize) -> Self {
+    pub fn set_tag(&mut self, tag: usize) {
         let modified = self.hazptr.shared().with_tag(tag).into_usize();
         unsafe { self.hazptr.defend_fake(crate::Shared::from_usize(modified)) };
-        self
     }
 
     #[inline]

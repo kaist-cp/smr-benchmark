@@ -126,14 +126,7 @@ impl<K, V> Cursor<K, V> {
 impl<'r, K: Ord, V> ReadCursor<'r, K, V> {
     /// Creates a cursor.
     fn new(head: &'r Atomic<Node<K, V>>, guard: &'r ReadGuard) -> Self {
-        let prev = head.load(guard);
-        let curr = prev.as_ref().unwrap().next.load(guard);
-        Self {
-            prev,
-            prev_next: curr,
-            curr,
-            found: false,
-        }
+        todo!()
     }
 }
 
@@ -147,210 +140,6 @@ where
             head: Atomic::new(Node::head()),
         }
     }
-
-    pub fn find_naive(&self, key: &K, guard: &mut EpochGuard) -> LocalizedCursor<K, V> {
-        loop {
-            let mut next = Shield::null(guard);
-            let mut cursor = LocalizedCursor::new(&self.head, guard);
-            cursor.found = loop {
-                let curr_node = match cursor.curr.as_ref() {
-                    Some(node) => node,
-                    None => break false,
-                };
-
-                curr_node.next.defend_with(&mut next, guard);
-                if next.tag() > 0 {
-                    next = next.with_tag(0);
-                    mem::swap(&mut next, &mut cursor.curr);
-                    continue;
-                }
-
-                match curr_node.key.cmp(key) {
-                    std::cmp::Ordering::Less => {
-                        mem::swap(&mut cursor.prev, &mut cursor.curr);
-                        next.copy_to(&mut cursor.prev_next, guard);
-                        mem::swap(&mut cursor.curr, &mut next);
-                        continue;
-                    }
-                    std::cmp::Ordering::Equal => break true,
-                    std::cmp::Ordering::Greater => break false,
-                }
-            };
-
-            // Perform Clean-up CAS and return the cursor.
-            if cursor.prev_next.as_raw() == cursor.curr.as_raw()
-                || cursor.prev.as_ref().unwrap().next.try_compare_exchange(
-                    &cursor.prev_next,
-                    &cursor.curr,
-                    guard,
-                )
-            {
-                return cursor;
-            }
-        }
-    }
-
-    pub fn find_read(&self, key: &K, guard: &mut EpochGuard) -> LocalizedCursor<K, V> {
-        loop {
-            let cursor = guard.read(|guard| {
-                let mut cursor = Cursor::new(&self.head, guard);
-                cursor.found = loop {
-                    let curr_node = match cursor.curr.as_ref() {
-                        Some(node) => node,
-                        None => break false,
-                    };
-
-                    let next = curr_node.next.load(guard);
-                    if next.tag() > 0 {
-                        cursor.curr = next.with_tag(0);
-                        continue;
-                    }
-
-                    match curr_node.key.cmp(key) {
-                        std::cmp::Ordering::Less => {
-                            cursor.prev = cursor.curr;
-                            cursor.prev_next = next;
-                            cursor.curr = next;
-                            continue;
-                        }
-                        std::cmp::Ordering::Equal => break true,
-                        std::cmp::Ordering::Greater => break false,
-                    }
-                };
-                cursor
-            });
-
-            // Perform Clean-up CAS and return the cursor.
-            if cursor.prev_next.as_raw() == cursor.curr.as_raw()
-                || cursor.prev.as_ref().unwrap().next.try_compare_exchange(
-                    &cursor.prev_next,
-                    &cursor.curr,
-                    guard,
-                )
-            {
-                return cursor;
-            }
-        }
-    }
-
-    pub fn find_read_loop(&self, key: &K, guard: &mut EpochGuard) -> LocalizedCursor<K, V> {
-        loop {
-            let cursor = guard.read_loop(
-                |guard| Cursor::new(&self.head, guard),
-                |cursor, guard| {
-                    let curr_node = match cursor.curr.as_ref() {
-                        Some(node) => node,
-                        None => {
-                            cursor.found = false;
-                            return ReadStatus::Finished;
-                        }
-                    };
-
-                    let next = curr_node.next.load(guard);
-                    if next.tag() > 0 {
-                        cursor.curr = next.with_tag(0);
-                        return ReadStatus::Continue;
-                    }
-
-                    match curr_node.key.cmp(key) {
-                        std::cmp::Ordering::Less => {
-                            cursor.prev = cursor.curr;
-                            cursor.prev_next = next;
-                            cursor.curr = next;
-                            return ReadStatus::Continue;
-                        }
-                        std::cmp::Ordering::Equal => cursor.found = true,
-                        std::cmp::Ordering::Greater => cursor.found = false,
-                    }
-                    ReadStatus::Finished
-                },
-            );
-
-            // Perform Clean-up CAS and return the cursor.
-            if cursor.prev_next.as_raw() == cursor.curr.as_raw()
-                || cursor.prev.as_ref().unwrap().next.try_compare_exchange(
-                    &cursor.prev_next,
-                    &cursor.curr,
-                    guard,
-                )
-            {
-                return cursor;
-            }
-        }
-    }
-
-    pub fn get<F>(&self, find: F, key: &K, guard: &mut EpochGuard) -> Option<LocalizedCursor<K, V>>
-    where
-        F: Fn(&List<K, V>, &K, &mut EpochGuard) -> LocalizedCursor<K, V>,
-    {
-        let cursor = find(self, key, guard);
-        if cursor.found {
-            Some(cursor)
-        } else {
-            None
-        }
-    }
-
-    pub fn insert<F>(&self, find: F, key: K, value: V, guard: &mut EpochGuard) -> Result<(), (K, V)>
-    where
-        F: Fn(&List<K, V>, &K, &mut EpochGuard) -> LocalizedCursor<K, V>,
-    {
-        let mut new_node = Node::new(key, value);
-        loop {
-            let cursor = find(self, &new_node.key, guard);
-            if cursor.found {
-                return Err((new_node.key, new_node.value));
-            }
-
-            new_node.next.store(&cursor.curr, guard);
-            let new_node_ptr = Rc::from_obj(new_node, guard);
-
-            if cursor.prev.as_ref().unwrap().next.try_compare_exchange(
-                &cursor.curr,
-                &new_node_ptr,
-                guard,
-            ) {
-                return Ok(());
-            } else {
-                // Safety: As we failed to insert `new_node_ptr` into the data structure,
-                // only current thread has a reference to this node.
-                new_node = unsafe { new_node_ptr.into_owned() };
-            }
-        }
-    }
-
-    pub fn remove<F>(
-        &self,
-        find: F,
-        key: &K,
-        guard: &mut EpochGuard,
-    ) -> Option<LocalizedCursor<K, V>>
-    where
-        F: Fn(&List<K, V>, &K, &mut EpochGuard) -> LocalizedCursor<K, V>,
-    {
-        loop {
-            let cursor = find(self, key, guard);
-            if !cursor.found {
-                return None;
-            }
-
-            let curr_node = cursor.curr.as_ref().unwrap();
-            let mut next = Shield::null(guard);
-            curr_node.next.defend_with(&mut next, guard);
-            if next.tag() > 0 || !curr_node.next.try_compare_exchange_tag(&next, 1, guard) {
-                continue;
-            }
-
-            cursor
-                .prev
-                .as_ref()
-                .unwrap()
-                .next
-                .try_compare_exchange(&cursor.curr, &next, guard);
-
-            return Some(cursor);
-        }
-    }
 }
 
 pub struct HList<K, V> {
@@ -362,7 +151,7 @@ where
     K: Ord + Default,
     V: Default,
 {
-    type Localized = LocalizedCursor<K, V>;
+    type Localized = ();
 
     fn new() -> Self {
         HList { inner: List::new() }
@@ -370,24 +159,16 @@ where
 
     #[inline]
     fn get<'g>(&self, key: &K, guard: &'g mut EpochGuard) -> Option<(&'g V, Self::Localized)> {
-        match self.inner.get(List::find_read, key, guard) {
-            Some(found) => Some((unsafe { mem::transmute(found.curr.as_ref()) }, found)),
-            None => None,
-        }
+        todo!()
     }
 
     #[inline]
     fn insert(&self, key: K, value: V, guard: &mut EpochGuard) -> bool {
-        self.inner
-            .insert(List::find_read, key, value, guard)
-            .is_ok()
+        todo!()
     }
 
     #[inline]
     fn remove<'g>(&self, key: &K, guard: &'g mut EpochGuard) -> Option<(&'g V, Self::Localized)> {
-        match self.inner.remove(List::find_read, key, guard) {
-            Some(found) => Some((unsafe { mem::transmute(found.curr.as_ref()) }, found)),
-            None => None,
-        }
+        todo!()
     }
 }

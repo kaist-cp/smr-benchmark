@@ -15,7 +15,6 @@ use crate::atomic::Shared;
 use crate::collector::Collector;
 use crate::deferred::Deferred;
 use crate::garbage::Garbage;
-use crate::hazard::Shield;
 use crate::internal::Local;
 use crate::rc::Defender;
 use crate::recovery;
