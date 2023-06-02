@@ -198,11 +198,13 @@ where
 
             // Perform Clean-up CAS and return the cursor.
             if cursor.prev_next.as_raw() == cursor.curr.as_raw()
-                || cursor.prev.as_ref().unwrap().next.try_compare_exchange(
-                    &cursor.prev_next,
-                    &cursor.curr,
-                    guard,
-                )
+                || cursor
+                    .prev
+                    .as_ref()
+                    .unwrap()
+                    .next
+                    .try_compare_exchange(&cursor.prev_next, &cursor.curr, guard)
+                    .is_ok()
             {
                 return;
             }
@@ -242,11 +244,13 @@ where
 
             // Perform Clean-up CAS and return the cursor.
             if cursor.prev_next.as_raw() == cursor.curr.as_raw()
-                || cursor.prev.as_ref().unwrap().next.try_compare_exchange(
-                    &cursor.prev_next,
-                    &cursor.curr,
-                    guard,
-                )
+                || cursor
+                    .prev
+                    .as_ref()
+                    .unwrap()
+                    .next
+                    .try_compare_exchange(&cursor.prev_next, &cursor.curr, guard)
+                    .is_ok()
             {
                 return;
             }
@@ -296,11 +300,13 @@ where
             let cursor = &mut handle.0;
             // Perform Clean-up CAS and return the cursor.
             if cursor.prev_next.as_raw() == cursor.curr.as_raw()
-                || cursor.prev.as_ref().unwrap().next.try_compare_exchange(
-                    &cursor.prev_next,
-                    &cursor.curr,
-                    guard,
-                )
+                || cursor
+                    .prev
+                    .as_ref()
+                    .unwrap()
+                    .next
+                    .try_compare_exchange(&cursor.prev_next, &cursor.curr, guard)
+                    .is_ok()
             {
                 return;
             }
@@ -325,11 +331,14 @@ where
 
                 if cursor.next.tag() != 0 {
                     cursor.next.set_tag(0);
-                    if !cursor.prev.as_ref().unwrap().next.try_compare_exchange(
-                        &cursor.curr,
-                        &cursor.next,
-                        guard,
-                    ) {
+                    if cursor
+                        .prev
+                        .as_ref()
+                        .unwrap()
+                        .next
+                        .try_compare_exchange(&cursor.curr, &cursor.next, guard)
+                        .is_err()
+                    {
                         continue 'find;
                     }
                     mem::swap(&mut cursor.curr, &mut cursor.next);
@@ -380,6 +389,7 @@ where
                                     .unwrap()
                                     .next
                                     .try_compare_exchange(curr, next, guard)
+                                    .is_ok()
                                 {
                                     return WriteResult::Finished;
                                 } else {
@@ -444,11 +454,14 @@ where
             new_node.next.store(&cursor.curr, guard);
             let new_node_ptr = Rc::from_obj(new_node, guard);
 
-            if cursor.prev.as_ref().unwrap().next.try_compare_exchange(
-                &cursor.curr,
-                &new_node_ptr,
-                guard,
-            ) {
+            if cursor
+                .prev
+                .as_ref()
+                .unwrap()
+                .next
+                .try_compare_exchange(&cursor.curr, &new_node_ptr, guard)
+                .is_ok()
+            {
                 return true;
             } else {
                 // Safety: As we failed to insert `new_node_ptr` into the data structure,
@@ -486,7 +499,7 @@ where
                 continue;
             }
 
-            cursor.prev.as_ref().unwrap().next.try_compare_exchange(
+            let _ = cursor.prev.as_ref().unwrap().next.try_compare_exchange(
                 &cursor.curr,
                 &cursor.next,
                 guard,

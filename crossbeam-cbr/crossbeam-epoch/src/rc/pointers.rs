@@ -105,6 +105,8 @@ impl<T> Atomic<T> {
         Shared::new(unsafe { crate::Shared::from_usize(self.link.load(Ordering::Acquire)) })
     }
 
+    /// TODO(@jeonghyeon): Rewrite this document (return type is changed)
+    ///
     /// Stores the pointer `desired` (either `Rc` or `Shield`) into the atomic pointer if the current
     /// value is the same as `expected`. The tag is also taken into account, so two pointers to the
     /// same object, but with different tags, will not be considered equal.
@@ -116,13 +118,13 @@ impl<T> Atomic<T> {
     /// **Note that this function is not wait-free, to protect and return a precise pointer on a failure.**
     /// If you don't need an actual pointer on a failure, use `try_compare_exchange` which is wait-free.
     #[inline]
-    pub fn compare_exchange<P1, P2, G>(
+    pub fn compare_exchange<'s, P1, P2, G>(
         &self,
         expected: &P1,
         desired: &P2,
-        err_shield: &mut Shield<T>,
+        err_shield: &'s mut Shield<T>,
         guard: &mut EpochGuard,
-    ) -> bool
+    ) -> Result<Rc<T>, &'s mut Shield<T>>
     where
         P1: AcquiredPtr<T>,
         P2: AcquiredPtr<T>,
@@ -137,23 +139,23 @@ impl<T> Atomic<T> {
                 Ordering::SeqCst,
             ) {
                 Ok(_) => {
-                    if !expected.as_untagged_raw().is_null() {
-                        unsafe { delayed_decrement_ref_cnt(expected.as_untagged_raw(), guard) };
-                    }
+                    let rc = Rc::from_atomic_cas_succ(expected.as_untagged_raw());
                     if let Some(desired) = unsafe { desired.as_untagged_raw().as_ref() } {
                         desired.add_refs(1);
                     }
-                    return true;
+                    return Ok(rc);
                 }
                 Err(actual) => {
                     if actual == err_shield.as_raw() {
-                        return false;
+                        return Err(err_shield);
                     }
                 }
             }
         }
     }
 
+    /// TODO(@jeonghyeon): Rewrite this document (return type is changed)
+    ///
     /// Stores the pointer `desired` (either `Rc` or `Shield`) into the atomic pointer if the current
     /// value is the same as `expected`. The tag is also taken into account, so two pointers to the
     /// same object, but with different tags, will not be considered equal.
@@ -163,7 +165,12 @@ impl<T> Atomic<T> {
     ///
     /// If you need an actual pointer on a failure, use `compare_exchange`.
     #[inline]
-    pub fn try_compare_exchange<P1, P2, G>(&self, expected: &P1, desired: &P2, guard: &G) -> bool
+    pub fn try_compare_exchange<P1, P2, G>(
+        &self,
+        expected: &P1,
+        desired: &P2,
+        _guard: &G,
+    ) -> Result<Rc<T>, ()>
     where
         P1: AcquiredPtr<T>,
         P2: AcquiredPtr<T>,
@@ -176,15 +183,13 @@ impl<T> Atomic<T> {
             Ordering::SeqCst,
         ) {
             Ok(_) => {
-                if !expected.as_untagged_raw().is_null() {
-                    unsafe { delayed_decrement_ref_cnt(expected.as_untagged_raw(), guard) };
-                }
+                let rc = Rc::from_atomic_cas_succ(expected.as_untagged_raw());
                 if let Some(desired) = unsafe { desired.as_untagged_raw().as_ref() } {
                     desired.add_refs(1);
                 }
-                true
+                Ok(rc)
             }
-            Err(_actual) => false,
+            Err(_actual) => Err(()),
         }
     }
 
@@ -409,6 +414,9 @@ pub struct Rc<T> {
     // That is, the lifetime of the object is equal to or longer than
     // the lifetime of this object.
     ptr: usize,
+    // If this `Rc` is from `compare_exchange` of `Atomic`,
+    // we need to decrement its reference count with a delayed manner.
+    delayed_decr: bool,
     _marker: PhantomData<T>,
 }
 
@@ -417,12 +425,30 @@ unsafe impl<T> Sync for Rc<T> {}
 
 impl<T> Rc<T> {
     #[inline]
-    pub fn from_local<G: Writable>(ptr: &Shield<T>, _: &G) -> Self {
+    pub fn from_shield<G: Writable>(ptr: &Shield<T>, _: &G) -> Self {
         if let Some(counted) = unsafe { ptr.as_untagged_raw().as_ref() } {
             counted.add_refs(1);
         }
         Self {
             ptr: ptr.as_raw() as _,
+            delayed_decr: false,
+            _marker: PhantomData,
+        }
+    }
+
+    pub(crate) fn from_atomic_cas_succ(ptr: *const Counted<T>) -> Self {
+        Self {
+            ptr: ptr as _,
+            delayed_decr: true,
+            _marker: PhantomData,
+        }
+    }
+
+    #[inline]
+    pub fn null() -> Self {
+        Self {
+            ptr: 0,
+            delayed_decr: false,
             _marker: PhantomData,
         }
     }
@@ -431,6 +457,7 @@ impl<T> Rc<T> {
     pub fn from_obj<G: Writable>(obj: T, _: &G) -> Self {
         Self {
             ptr: Box::into_raw(Box::new(Counted::new(obj))) as *const _ as _,
+            delayed_decr: false,
             _marker: PhantomData,
         }
     }
@@ -489,7 +516,11 @@ impl<T> Drop for Rc<T> {
     fn drop(&mut self) {
         if !self.is_null() {
             let guard = pin();
-            unsafe { decrement_ref_cnt(self.as_untagged_raw(), &guard) };
+            if self.delayed_decr {
+                unsafe { delayed_decrement_ref_cnt(self.as_untagged_raw(), &guard) };
+            } else {
+                unsafe { decrement_ref_cnt(self.as_untagged_raw(), &guard) };
+            }
         }
     }
 }
