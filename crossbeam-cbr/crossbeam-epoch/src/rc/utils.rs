@@ -1,7 +1,7 @@
 use core::{cell::UnsafeCell, mem, sync::atomic::AtomicU32};
 use std::{mem::ManuallyDrop, sync::atomic::compiler_fence, sync::atomic::Ordering};
 
-use crate::{pin, Writable};
+use crate::{Writable, unprotected};
 
 /// A wait-free atomic counter that supports increment and decrement,
 /// such that attempting to increment the counter from zero fails and
@@ -282,8 +282,9 @@ pub unsafe fn delayed_decrement_weak_cnt<T, G: Writable>(ptr: *const Counted<T>,
 #[inline]
 pub unsafe fn retire<T, G: Writable>(ptr: *const Counted<T>, ret_type: RetireType, guard: &G) {
     guard.defer(move || {
-        let inner_guard = pin();
-        eject(ptr, ret_type, &inner_guard);
+        // It is okay not to pin the epoch. When the `retire` is called,
+        // nobody can have references to detatched nodes.
+        eject(ptr, ret_type, unprotected());
     });
 }
 
