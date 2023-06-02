@@ -52,7 +52,7 @@ where
     fn default(guard: &EpochGuard) -> Self {
         Self(Cursor::default(guard), Cursor::default(guard))
     }
-    
+
     #[inline]
     fn result_value(&self) -> &V {
         self.0.curr.as_ref().map(|node| &node.value).unwrap()
@@ -253,7 +253,12 @@ where
         }
     }
 
-    pub fn find_harris_read_loop(&self, key: &K, handle: &mut Handle<K, V>, guard: &mut EpochGuard) {
+    pub fn find_harris_read_loop(
+        &self,
+        key: &K,
+        handle: &mut Handle<K, V>,
+        guard: &mut EpochGuard,
+    ) {
         loop {
             guard.read_loop(
                 &mut handle.0,
@@ -302,7 +307,12 @@ where
         }
     }
 
-    pub fn find_harris_michael_naive(&self, key: &K, handle: &mut Handle<K, V>, guard: &mut EpochGuard) {
+    pub fn find_harris_michael_naive(
+        &self,
+        key: &K,
+        handle: &mut Handle<K, V>,
+        guard: &mut EpochGuard,
+    ) {
         let mut cursor = &mut handle.0;
         'find: loop {
             cursor.initialize(&self.head, guard);
@@ -339,7 +349,12 @@ where
         }
     }
 
-    pub fn find_harris_michael_read_loop(&self, key: &K, handle: &mut Handle<K, V>, guard: &mut EpochGuard) {
+    pub fn find_harris_michael_read_loop(
+        &self,
+        key: &K,
+        handle: &mut Handle<K, V>,
+        guard: &mut EpochGuard,
+    ) {
         loop {
             let cursor = guard.read_loop(
                 &mut handle.0,
@@ -483,10 +498,10 @@ where
 }
 
 pub mod naive {
-    use crate::cbr::{ConcurrentMap};
+    use crate::cbr::ConcurrentMap;
     use crossbeam_cbr::EpochGuard;
 
-    use super::{List, Handle};
+    use super::{Handle, List};
 
     pub struct HList<K, V> {
         inner: List<K, V>,
@@ -507,12 +522,20 @@ pub mod naive {
             self.inner.get(List::find_harris_naive, key, handle, guard)
         }
 
-        fn insert(&self, key: K, value: V, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
-            self.inner.insert(List::find_harris_naive, key, value, handle, guard)
+        fn insert(
+            &self,
+            key: K,
+            value: V,
+            handle: &mut Self::Handle,
+            guard: &mut EpochGuard,
+        ) -> bool {
+            self.inner
+                .insert(List::find_harris_naive, key, value, handle, guard)
         }
 
         fn remove(&self, key: &K, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
-            self.inner.remove(List::find_harris_naive, key, handle, guard)
+            self.inner
+                .remove(List::find_harris_naive, key, handle, guard)
         }
     }
 
@@ -532,15 +555,24 @@ pub mod naive {
         }
 
         fn get(&self, key: &K, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
-            self.inner.get(List::find_harris_michael_naive, key, handle, guard)
+            self.inner
+                .get(List::find_harris_michael_naive, key, handle, guard)
         }
 
-        fn insert(&self, key: K, value: V, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
-            self.inner.insert(List::find_harris_michael_naive, key, value, handle, guard)
+        fn insert(
+            &self,
+            key: K,
+            value: V,
+            handle: &mut Self::Handle,
+            guard: &mut EpochGuard,
+        ) -> bool {
+            self.inner
+                .insert(List::find_harris_michael_naive, key, value, handle, guard)
         }
 
         fn remove(&self, key: &K, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
-            self.inner.remove(List::find_harris_michael_naive, key, handle, guard)
+            self.inner
+                .remove(List::find_harris_michael_naive, key, handle, guard)
         }
     }
 
@@ -556,10 +588,10 @@ pub mod naive {
 }
 
 pub mod read {
-    use crate::cbr::{ConcurrentMap};
+    use crate::cbr::ConcurrentMap;
     use crossbeam_cbr::EpochGuard;
 
-    use super::{List, Handle};
+    use super::{Handle, List};
 
     pub struct HList<K, V> {
         inner: List<K, V>,
@@ -580,12 +612,20 @@ pub mod read {
             self.inner.get(List::find_harris_read, key, handle, guard)
         }
 
-        fn insert(&self, key: K, value: V, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
-            self.inner.insert(List::find_harris_read, key, value, handle, guard)
+        fn insert(
+            &self,
+            key: K,
+            value: V,
+            handle: &mut Self::Handle,
+            guard: &mut EpochGuard,
+        ) -> bool {
+            self.inner
+                .insert(List::find_harris_read, key, value, handle, guard)
         }
 
         fn remove(&self, key: &K, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
-            self.inner.remove(List::find_harris_read, key, handle, guard)
+            self.inner
+                .remove(List::find_harris_read, key, handle, guard)
         }
     }
 
@@ -596,10 +636,10 @@ pub mod read {
 }
 
 pub mod read_loop {
-    use crate::cbr::{ConcurrentMap};
+    use crate::cbr::ConcurrentMap;
     use crossbeam_cbr::EpochGuard;
 
-    use super::{List, Handle};
+    use super::{Handle, List};
 
     pub struct HList<K, V> {
         inner: List<K, V>,
@@ -617,15 +657,24 @@ pub mod read_loop {
         }
 
         fn get(&self, key: &K, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
-            self.inner.get(List::find_harris_read_loop, key, handle, guard)
+            self.inner
+                .get(List::find_harris_read_loop, key, handle, guard)
         }
 
-        fn insert(&self, key: K, value: V, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
-            self.inner.insert(List::find_harris_read_loop, key, value, handle, guard)
+        fn insert(
+            &self,
+            key: K,
+            value: V,
+            handle: &mut Self::Handle,
+            guard: &mut EpochGuard,
+        ) -> bool {
+            self.inner
+                .insert(List::find_harris_read_loop, key, value, handle, guard)
         }
 
         fn remove(&self, key: &K, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
-            self.inner.remove(List::find_harris_read_loop, key, handle, guard)
+            self.inner
+                .remove(List::find_harris_read_loop, key, handle, guard)
         }
     }
 
@@ -645,15 +694,29 @@ pub mod read_loop {
         }
 
         fn get(&self, key: &K, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
-            self.inner.get(List::find_harris_michael_read_loop, key, handle, guard)
+            self.inner
+                .get(List::find_harris_michael_read_loop, key, handle, guard)
         }
 
-        fn insert(&self, key: K, value: V, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
-            self.inner.insert(List::find_harris_michael_read_loop, key, value, handle, guard)
+        fn insert(
+            &self,
+            key: K,
+            value: V,
+            handle: &mut Self::Handle,
+            guard: &mut EpochGuard,
+        ) -> bool {
+            self.inner.insert(
+                List::find_harris_michael_read_loop,
+                key,
+                value,
+                handle,
+                guard,
+            )
         }
 
         fn remove(&self, key: &K, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
-            self.inner.remove(List::find_harris_michael_read_loop, key, handle, guard)
+            self.inner
+                .remove(List::find_harris_michael_read_loop, key, handle, guard)
         }
     }
 

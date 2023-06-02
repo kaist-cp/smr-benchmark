@@ -661,9 +661,9 @@ impl<T> Shield<T> {
     }
 
     /// Defends a hazard pointer, without checking if `local` is no ejected.
-    /// 
+    ///
     /// # Safety
-    /// 
+    ///
     /// To ensure that the given pointer is protected properly, we must check it manually
     /// by calling `is_ejected` from `EpochGuard`.
     pub unsafe fn defend_unchecked<'g>(&mut self, ptr: Shared<'g, T>) {

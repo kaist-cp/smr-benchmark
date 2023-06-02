@@ -17,8 +17,8 @@ pub trait ConcurrentMap<K, V> {
 #[cfg(test)]
 pub mod tests {
     extern crate rand;
-    use super::Shields;
     use super::ConcurrentMap;
+    use super::Shields;
     use crossbeam_cbr::pin;
     use crossbeam_utils::thread;
     use rand::prelude::*;

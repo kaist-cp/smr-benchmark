@@ -105,8 +105,8 @@ impl Drop for Bag {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::Ordering;
     use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
 
     use super::*;
     use crate::deferred::Deferred;

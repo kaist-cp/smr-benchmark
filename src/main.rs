@@ -571,27 +571,32 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             _ => panic!("Unsupported data structure for CDRC EBR"),
         },
         MM::CBR_NAIVE => match config.ds {
-            DS::HList => {
-                bench_map_cbr::<cbr::list::naive::HList<String, String>, N>(config, PrefillStrategy::Decreasing)
-            }
-            DS::HMList => {
-                bench_map_cbr::<cbr::list::naive::HMList<String, String>, N>(config, PrefillStrategy::Decreasing)
-            }
+            DS::HList => bench_map_cbr::<cbr::list::naive::HList<String, String>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::HMList => bench_map_cbr::<cbr::list::naive::HMList<String, String>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
             _ => panic!("Unsupported data structure for CBR with naive reference counting"),
         },
         MM::CBR_READ => match config.ds {
-            DS::HList => {
-                bench_map_cbr::<cbr::list::read::HList<String, String>, N>(config, PrefillStrategy::Decreasing)
-            }
+            DS::HList => bench_map_cbr::<cbr::list::read::HList<String, String>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
             _ => panic!("Unsupported data structure for CBR with naive reference counting"),
         },
         MM::CBR_READ_LOOP => match config.ds {
-            DS::HList => {
-                bench_map_cbr::<cbr::list::read_loop::HList<String, String>, N>(config, PrefillStrategy::Decreasing)
-            }
-            DS::HMList => {
-                bench_map_cbr::<cbr::list::read_loop::HMList<String, String>, N>(config, PrefillStrategy::Decreasing)
-            }
+            DS::HList => bench_map_cbr::<cbr::list::read_loop::HList<String, String>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::HMList => bench_map_cbr::<cbr::list::read_loop::HMList<String, String>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
             _ => panic!("Unsupported data structure for CBR with naive reference counting"),
         },
     };
@@ -816,7 +821,7 @@ impl PrefillStrategy {
                 for k in keys.drain(..) {
                     let key = k.to_string();
                     let value = key.clone();
-                    map.insert(key, value,  &mut handle, guard);
+                    map.insert(key, value, &mut handle, guard);
                 }
             }
         }
