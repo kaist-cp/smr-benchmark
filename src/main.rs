@@ -29,6 +29,8 @@ use smr_benchmark::pebr;
 use smr_benchmark::{cbr, hp};
 use smr_benchmark::{cdrc, ebr};
 
+use smr_benchmark::cbr::concurrent_map::Shields;
+
 arg_enum! {
     #[derive(PartialEq, Debug)]
     pub enum DS {
@@ -54,6 +56,8 @@ arg_enum! {
         HP_PP,
         NBR,
         CDRC_EBR,
+        CBR_NAIVE,
+        CBR_READ,
         CBR_READ_LOOP,
     }
 }
@@ -566,11 +570,29 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             >(config, PrefillStrategy::Random),
             _ => panic!("Unsupported data structure for CDRC EBR"),
         },
+        MM::CBR_NAIVE => match config.ds {
+            DS::HList => {
+                bench_map_cbr::<cbr::list::naive::HList<String, String>, N>(config, PrefillStrategy::Decreasing)
+            }
+            DS::HMList => {
+                bench_map_cbr::<cbr::list::naive::HMList<String, String>, N>(config, PrefillStrategy::Decreasing)
+            }
+            _ => panic!("Unsupported data structure for CBR with naive reference counting"),
+        },
+        MM::CBR_READ => match config.ds {
+            DS::HList => {
+                bench_map_cbr::<cbr::list::read::HList<String, String>, N>(config, PrefillStrategy::Decreasing)
+            }
+            _ => panic!("Unsupported data structure for CBR with naive reference counting"),
+        },
         MM::CBR_READ_LOOP => match config.ds {
             DS::HList => {
-                bench_map_cbr::<cbr::HList<String, String>, N>(config, PrefillStrategy::Decreasing)
+                bench_map_cbr::<cbr::list::read_loop::HList<String, String>, N>(config, PrefillStrategy::Decreasing)
             }
-            _ => panic!("Unsupported data structure for CBR read_loop"),
+            DS::HMList => {
+                bench_map_cbr::<cbr::list::read_loop::HMList<String, String>, N>(config, PrefillStrategy::Decreasing)
+            }
+            _ => panic!("Unsupported data structure for CBR with naive reference counting"),
         },
     };
     output
@@ -775,13 +797,14 @@ impl PrefillStrategy {
         map: &M,
     ) {
         let guard = &mut crossbeam_cbr::pin();
+        let mut handle = M::Handle::default(guard);
         let mut rng = rand::thread_rng();
         match self {
             PrefillStrategy::Random => {
                 for _ in 0..config.prefill {
                     let key = config.key_dist.sample(&mut rng).to_string();
                     let value = key.clone();
-                    map.insert(key, value, guard);
+                    map.insert(key, value, &mut handle, guard);
                 }
             }
             PrefillStrategy::Decreasing => {
@@ -793,7 +816,7 @@ impl PrefillStrategy {
                 for k in keys.drain(..) {
                     let key = k.to_string();
                     let value = key.clone();
-                    map.insert(key, value, guard);
+                    map.insert(key, value,  &mut handle, guard);
                 }
             }
         }
@@ -1502,18 +1525,19 @@ fn bench_map_cbr<M: cbr::ConcurrentMap<String, String> + Send + Sync, N: Unsigne
                 let start = Instant::now();
 
                 let mut guard = crossbeam_cbr::pin();
+                let mut handle = M::Handle::default(&guard);
                 while start.elapsed() < config.duration {
                     let key = config.key_dist.sample(&mut rng).to_string();
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
                         Op::Get => {
-                            map.get(&key, &mut guard);
+                            map.get(&key, &mut handle, &mut guard);
                         }
                         Op::Insert => {
                             let value = key.clone();
-                            map.insert(key, value, &mut guard);
+                            map.insert(key, value, &mut handle, &mut guard);
                         }
                         Op::Remove => {
-                            map.remove(&key, &mut guard);
+                            map.remove(&key, &mut handle, &mut guard);
                         }
                     }
                     ops += 1;

@@ -103,6 +103,7 @@ impl<K: 'static, V: 'static> Defender for Cursor<K, V> {
         self.prev.defend_unchecked(&read.prev);
         self.prev_next.defend_unchecked(&read.prev_next);
         self.curr.defend_unchecked(&read.curr);
+        self.found = read.found;
     }
 
     #[inline]
@@ -388,28 +389,22 @@ where
 
 #[test]
 fn smoke_harris_naive() {
-    return; // TODO(@jeonghyeon): Temporary return to bypass CI test
-    for i in 0..50 {
+    for _ in 0..5 {
         smoke_with(&List::<i32, String>::find_naive);
-        println!("{i}");
     }
 }
 
 #[test]
 fn smoke_harris_read() {
-    return; // TODO(@jeonghyeon): Temporary return to bypass CI test
-    for i in 0..50 {
+    for _ in 0..5 {
         smoke_with(&List::<i32, String>::find_read);
-        println!("{i}");
     }
 }
 
 #[test]
 fn smoke_harris_read_loop() {
-    return; // TODO(@jeonghyeon): Temporary return to bypass CI test
-    for i in 0..50 {
+    for _ in 0..5 {
         smoke_with(&List::<i32, String>::find_read_loop);
-        println!("{i}");
     }
 }
 
@@ -423,7 +418,7 @@ where
     use std::sync::atomic::{compiler_fence, Ordering};
     use std::thread::scope;
 
-    const THREADS: i32 = 1;
+    const THREADS: i32 = 30;
     const ELEMENTS_PER_THREADS: i32 = 1000;
 
     let map = &List::new();

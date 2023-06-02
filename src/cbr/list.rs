@@ -1,10 +1,10 @@
-use super::concurrent_map::ConcurrentMap;
-
 use crossbeam_cbr::{
     rc::{AcquiredPtr, Atomic, Defender, Rc, Shared, Shield},
-    EpochGuard, ReadGuard, ReadStatus,
+    EpochGuard, ReadGuard, ReadStatus, WriteResult,
 };
 use std::mem;
+
+use super::concurrent_map::Shields;
 
 struct Node<K, V> {
     next: Atomic<Self>,
@@ -41,6 +41,24 @@ where
     }
 }
 
+pub struct Handle<K, V>(Cursor<K, V>, Cursor<K, V>);
+
+impl<K, V> Shields<V> for Handle<K, V>
+where
+    K: 'static,
+    V: 'static,
+{
+    #[inline]
+    fn default(guard: &EpochGuard) -> Self {
+        Self(Cursor::default(guard), Cursor::default(guard))
+    }
+    
+    #[inline]
+    fn result_value(&self) -> &V {
+        self.0.curr.as_ref().map(|node| &node.value).unwrap()
+    }
+}
+
 /// TODO(@jeonghyeon): implement `#[derive(Defender)]`,
 /// so that `ReadCursor` and the trait implementation
 /// is generated automatically.
@@ -50,6 +68,7 @@ pub struct Cursor<K, V> {
     // Tag of `curr` should always be zero so when `curr` is stored in a `prev`, we don't store a
     // marked pointer and cause cleanup to fail.
     curr: Shield<Node<K, V>>,
+    next: Shield<Node<K, V>>,
     found: bool,
 }
 
@@ -79,6 +98,7 @@ impl<K: 'static, V: 'static> Defender for Cursor<K, V> {
             prev: Shield::null(guard),
             prev_next: Shield::null(guard),
             curr: Shield::null(guard),
+            next: Shield::null(guard),
             found: false,
         }
     }
@@ -88,6 +108,7 @@ impl<K: 'static, V: 'static> Defender for Cursor<K, V> {
         self.prev.defend_unchecked(&read.prev);
         self.prev_next.defend_unchecked(&read.prev_next);
         self.curr.defend_unchecked(&read.curr);
+        self.found = read.found;
     }
 
     #[inline]
@@ -109,66 +130,540 @@ impl<K: 'static, V: 'static> Defender for Cursor<K, V> {
 }
 
 impl<K, V> Cursor<K, V> {
-    fn new(head: &Atomic<Node<K, V>>, guard: &mut EpochGuard) -> Self {
-        let prev = head.defend(guard);
-        let curr = prev.as_ref().unwrap().next.defend(guard);
-        let mut prev_next = Shield::null(guard);
-        curr.copy_to(&mut prev_next, guard);
-        Self {
-            prev,
-            prev_next,
-            curr,
-            found: false,
-        }
+    fn initialize(&mut self, head: &Atomic<Node<K, V>>, guard: &mut EpochGuard) {
+        head.defend_with(&mut self.prev, guard);
+        self.prev
+            .as_ref()
+            .unwrap()
+            .next
+            .defend_with(&mut self.curr, guard);
+        self.curr.copy_to(&mut self.prev_next, guard);
+        self.found = false;
     }
 }
 
 impl<'r, K: Ord, V> ReadCursor<'r, K, V> {
     /// Creates a cursor.
     fn new(head: &'r Atomic<Node<K, V>>, guard: &'r ReadGuard) -> Self {
-        todo!()
+        let prev = head.load(guard);
+        let curr = prev.as_ref(guard).unwrap().next.load(guard);
+        Self {
+            prev,
+            prev_next: curr,
+            curr,
+            found: false,
+        }
     }
 }
 
 impl<K, V> List<K, V>
 where
-    K: Default + Ord,
-    V: Default,
+    K: Default + Ord + 'static,
+    V: Default + 'static,
 {
     pub fn new() -> Self {
         List {
             head: Atomic::new(Node::head()),
         }
     }
+
+    pub fn find_harris_naive(&self, key: &K, handle: &mut Handle<K, V>, guard: &mut EpochGuard) {
+        let mut cursor = &mut handle.0;
+        loop {
+            cursor.initialize(&self.head, guard);
+            cursor.found = loop {
+                let curr_node = match cursor.curr.as_ref() {
+                    Some(node) => node,
+                    None => break false,
+                };
+
+                curr_node.next.defend_with(&mut cursor.next, guard);
+                if cursor.next.tag() > 0 {
+                    cursor.next.set_tag(0);
+                    mem::swap(&mut cursor.next, &mut cursor.curr);
+                    continue;
+                }
+
+                match curr_node.key.cmp(key) {
+                    std::cmp::Ordering::Less => {
+                        mem::swap(&mut cursor.prev, &mut cursor.curr);
+                        cursor.next.copy_to(&mut cursor.prev_next, guard);
+                        mem::swap(&mut cursor.curr, &mut cursor.next);
+                        continue;
+                    }
+                    std::cmp::Ordering::Equal => break true,
+                    std::cmp::Ordering::Greater => break false,
+                }
+            };
+
+            // Perform Clean-up CAS and return the cursor.
+            if cursor.prev_next.as_raw() == cursor.curr.as_raw()
+                || cursor.prev.as_ref().unwrap().next.try_compare_exchange(
+                    &cursor.prev_next,
+                    &cursor.curr,
+                    guard,
+                )
+            {
+                return;
+            }
+        }
+    }
+
+    pub fn find_harris_read(&self, key: &K, handle: &mut Handle<K, V>, guard: &mut EpochGuard) {
+        let cursor = &mut handle.0;
+        loop {
+            guard.read(cursor, |guard| {
+                let mut cursor = ReadCursor::new(&self.head, guard);
+                cursor.found = loop {
+                    let curr_node = match cursor.curr.as_ref(guard) {
+                        Some(node) => node,
+                        None => break false,
+                    };
+
+                    let next = curr_node.next.load(guard);
+                    if next.tag() > 0 {
+                        cursor.curr = next.with_tag(0);
+                        continue;
+                    }
+
+                    match curr_node.key.cmp(key) {
+                        std::cmp::Ordering::Less => {
+                            cursor.prev = cursor.curr;
+                            cursor.prev_next = next;
+                            cursor.curr = next;
+                            continue;
+                        }
+                        std::cmp::Ordering::Equal => break true,
+                        std::cmp::Ordering::Greater => break false,
+                    }
+                };
+                cursor
+            });
+
+            // Perform Clean-up CAS and return the cursor.
+            if cursor.prev_next.as_raw() == cursor.curr.as_raw()
+                || cursor.prev.as_ref().unwrap().next.try_compare_exchange(
+                    &cursor.prev_next,
+                    &cursor.curr,
+                    guard,
+                )
+            {
+                return;
+            }
+        }
+    }
+
+    pub fn find_harris_read_loop(&self, key: &K, handle: &mut Handle<K, V>, guard: &mut EpochGuard) {
+        loop {
+            guard.read_loop(
+                &mut handle.0,
+                &mut handle.1,
+                |guard| ReadCursor::new(&self.head, guard),
+                |cursor, guard| {
+                    let curr_node = match cursor.curr.as_ref(guard) {
+                        Some(node) => node,
+                        None => {
+                            cursor.found = false;
+                            return ReadStatus::Finished;
+                        }
+                    };
+
+                    let next = curr_node.next.load(guard);
+                    if next.tag() > 0 {
+                        cursor.curr = next.with_tag(0);
+                        return ReadStatus::Continue;
+                    }
+
+                    match curr_node.key.cmp(key) {
+                        std::cmp::Ordering::Less => {
+                            cursor.prev = cursor.curr;
+                            cursor.prev_next = next;
+                            cursor.curr = next;
+                            return ReadStatus::Continue;
+                        }
+                        std::cmp::Ordering::Equal => cursor.found = true,
+                        std::cmp::Ordering::Greater => cursor.found = false,
+                    }
+                    ReadStatus::Finished
+                },
+            );
+
+            let cursor = &mut handle.0;
+            // Perform Clean-up CAS and return the cursor.
+            if cursor.prev_next.as_raw() == cursor.curr.as_raw()
+                || cursor.prev.as_ref().unwrap().next.try_compare_exchange(
+                    &cursor.prev_next,
+                    &cursor.curr,
+                    guard,
+                )
+            {
+                return;
+            }
+        }
+    }
+
+    pub fn find_harris_michael_naive(&self, key: &K, handle: &mut Handle<K, V>, guard: &mut EpochGuard) {
+        let mut cursor = &mut handle.0;
+        'find: loop {
+            cursor.initialize(&self.head, guard);
+            cursor.found = loop {
+                let curr_node = match cursor.curr.as_ref() {
+                    Some(node) => node,
+                    None => break false,
+                };
+                curr_node.next.defend_with(&mut cursor.next, guard);
+
+                if cursor.next.tag() != 0 {
+                    cursor.next.set_tag(0);
+                    if !cursor.prev.as_ref().unwrap().next.try_compare_exchange(
+                        &cursor.curr,
+                        &cursor.next,
+                        guard,
+                    ) {
+                        continue 'find;
+                    }
+                    mem::swap(&mut cursor.curr, &mut cursor.next);
+                    continue;
+                }
+
+                match curr_node.key.cmp(key) {
+                    std::cmp::Ordering::Less => {
+                        mem::swap(&mut cursor.prev, &mut cursor.curr);
+                        mem::swap(&mut cursor.curr, &mut cursor.next);
+                    }
+                    std::cmp::Ordering::Equal => break true,
+                    std::cmp::Ordering::Greater => break false,
+                }
+            };
+            return;
+        }
+    }
+
+    pub fn find_harris_michael_read_loop(&self, key: &K, handle: &mut Handle<K, V>, guard: &mut EpochGuard) {
+        loop {
+            let cursor = guard.read_loop(
+                &mut handle.0,
+                &mut handle.1,
+                |guard| ReadCursor::new(&self.head, guard),
+                |cursor, guard| {
+                    let curr_node = match cursor.curr.as_ref(guard) {
+                        Some(node) => node,
+                        None => {
+                            cursor.found = false;
+                            return ReadStatus::Finished;
+                        }
+                    };
+
+                    let mut next = curr_node.next.load(guard);
+                    if next.tag() != 0 {
+                        next = next.with_tag(0);
+                        guard.write::<_, [Shield<Node<K, V>>; 3]>(
+                            [cursor.prev, cursor.curr, next],
+                            |[prev, curr, next], guard| {
+                                if prev
+                                    .as_ref()
+                                    .unwrap()
+                                    .next
+                                    .try_compare_exchange(curr, next, guard)
+                                {
+                                    return WriteResult::Finished;
+                                } else {
+                                    return WriteResult::RestartRead;
+                                }
+                            },
+                        );
+                        mem::swap(&mut cursor.curr, &mut next);
+                        return ReadStatus::Continue;
+                    }
+
+                    match curr_node.key.cmp(key) {
+                        std::cmp::Ordering::Less => {
+                            cursor.prev = cursor.curr;
+                            cursor.curr = next;
+                            return ReadStatus::Continue;
+                        }
+                        std::cmp::Ordering::Equal => cursor.found = true,
+                        std::cmp::Ordering::Greater => cursor.found = false,
+                    }
+                    ReadStatus::Finished
+                },
+            );
+            return cursor;
+        }
+    }
+
+    /// On `true`, `handle.0.curr` is a reference to the found node.
+    pub fn get<F>(
+        &self,
+        find: F,
+        key: &K,
+        handle: &mut Handle<K, V>,
+        guard: &mut EpochGuard,
+    ) -> bool
+    where
+        F: Fn(&List<K, V>, &K, &mut Handle<K, V>, &mut EpochGuard),
+    {
+        find(self, key, handle, guard);
+        handle.0.found
+    }
+
+    pub fn insert<F>(
+        &self,
+        find: F,
+        key: K,
+        value: V,
+        handle: &mut Handle<K, V>,
+        guard: &mut EpochGuard,
+    ) -> bool
+    where
+        F: Fn(&List<K, V>, &K, &mut Handle<K, V>, &mut EpochGuard),
+    {
+        let mut new_node = Node::new(key, value);
+        loop {
+            find(self, &new_node.key, handle, guard);
+            let cursor = &handle.0;
+            if cursor.found {
+                return false;
+            }
+
+            new_node.next.store(&cursor.curr, guard);
+            let new_node_ptr = Rc::from_obj(new_node, guard);
+
+            if cursor.prev.as_ref().unwrap().next.try_compare_exchange(
+                &cursor.curr,
+                &new_node_ptr,
+                guard,
+            ) {
+                return true;
+            } else {
+                // Safety: As we failed to insert `new_node_ptr` into the data structure,
+                // only current thread has a reference to this node.
+                new_node = unsafe { new_node_ptr.into_owned() };
+            }
+        }
+    }
+
+    /// On `true`, `handle.0.curr` is a reference to the removed node.
+    pub fn remove<F>(
+        &self,
+        find: F,
+        key: &K,
+        handle: &mut Handle<K, V>,
+        guard: &mut EpochGuard,
+    ) -> bool
+    where
+        F: Fn(&List<K, V>, &K, &mut Handle<K, V>, &mut EpochGuard),
+    {
+        loop {
+            find(self, key, handle, guard);
+            let cursor = &mut handle.0;
+            if !cursor.found {
+                return false;
+            }
+
+            let curr_node = cursor.curr.as_ref().unwrap();
+            curr_node.next.defend_with(&mut cursor.next, guard);
+            if cursor.next.tag() > 0
+                || !curr_node
+                    .next
+                    .try_compare_exchange_tag(&cursor.next, 1, guard)
+            {
+                continue;
+            }
+
+            cursor.prev.as_ref().unwrap().next.try_compare_exchange(
+                &cursor.curr,
+                &cursor.next,
+                guard,
+            );
+
+            return true;
+        }
+    }
 }
 
-pub struct HList<K, V> {
-    inner: List<K, V>,
+pub mod naive {
+    use crate::cbr::{ConcurrentMap};
+    use crossbeam_cbr::EpochGuard;
+
+    use super::{List, Handle};
+
+    pub struct HList<K, V> {
+        inner: List<K, V>,
+    }
+
+    impl<K, V> ConcurrentMap<K, V> for HList<K, V>
+    where
+        K: Default + Ord + 'static,
+        V: Default + 'static,
+    {
+        type Handle = Handle<K, V>;
+
+        fn new() -> Self {
+            Self { inner: List::new() }
+        }
+
+        fn get(&self, key: &K, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
+            self.inner.get(List::find_harris_naive, key, handle, guard)
+        }
+
+        fn insert(&self, key: K, value: V, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
+            self.inner.insert(List::find_harris_naive, key, value, handle, guard)
+        }
+
+        fn remove(&self, key: &K, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
+            self.inner.remove(List::find_harris_naive, key, handle, guard)
+        }
+    }
+
+    pub struct HMList<K, V> {
+        inner: List<K, V>,
+    }
+
+    impl<K, V> ConcurrentMap<K, V> for HMList<K, V>
+    where
+        K: Default + Ord + 'static,
+        V: Default + 'static,
+    {
+        type Handle = Handle<K, V>;
+
+        fn new() -> Self {
+            Self { inner: List::new() }
+        }
+
+        fn get(&self, key: &K, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
+            self.inner.get(List::find_harris_michael_naive, key, handle, guard)
+        }
+
+        fn insert(&self, key: K, value: V, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
+            self.inner.insert(List::find_harris_michael_naive, key, value, handle, guard)
+        }
+
+        fn remove(&self, key: &K, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
+            self.inner.remove(List::find_harris_michael_naive, key, handle, guard)
+        }
+    }
+
+    #[test]
+    fn smoke_h_list() {
+        crate::cbr::concurrent_map::tests::smoke::<HList<i32, String>>();
+    }
+
+    #[test]
+    fn smoke_hm_list() {
+        crate::cbr::concurrent_map::tests::smoke::<HMList<i32, String>>();
+    }
 }
 
-impl<K, V> ConcurrentMap<K, V> for HList<K, V>
-where
-    K: Ord + Default,
-    V: Default,
-{
-    type Localized = ();
+pub mod read {
+    use crate::cbr::{ConcurrentMap};
+    use crossbeam_cbr::EpochGuard;
 
-    fn new() -> Self {
-        HList { inner: List::new() }
+    use super::{List, Handle};
+
+    pub struct HList<K, V> {
+        inner: List<K, V>,
     }
 
-    #[inline]
-    fn get<'g>(&self, key: &K, guard: &'g mut EpochGuard) -> Option<(&'g V, Self::Localized)> {
-        todo!()
+    impl<K, V> ConcurrentMap<K, V> for HList<K, V>
+    where
+        K: Default + Ord + 'static,
+        V: Default + 'static,
+    {
+        type Handle = Handle<K, V>;
+
+        fn new() -> Self {
+            Self { inner: List::new() }
+        }
+
+        fn get(&self, key: &K, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
+            self.inner.get(List::find_harris_read, key, handle, guard)
+        }
+
+        fn insert(&self, key: K, value: V, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
+            self.inner.insert(List::find_harris_read, key, value, handle, guard)
+        }
+
+        fn remove(&self, key: &K, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
+            self.inner.remove(List::find_harris_read, key, handle, guard)
+        }
     }
 
-    #[inline]
-    fn insert(&self, key: K, value: V, guard: &mut EpochGuard) -> bool {
-        todo!()
+    #[test]
+    fn smoke_h_list() {
+        crate::cbr::concurrent_map::tests::smoke::<HList<i32, String>>();
+    }
+}
+
+pub mod read_loop {
+    use crate::cbr::{ConcurrentMap};
+    use crossbeam_cbr::EpochGuard;
+
+    use super::{List, Handle};
+
+    pub struct HList<K, V> {
+        inner: List<K, V>,
     }
 
-    #[inline]
-    fn remove<'g>(&self, key: &K, guard: &'g mut EpochGuard) -> Option<(&'g V, Self::Localized)> {
-        todo!()
+    impl<K, V> ConcurrentMap<K, V> for HList<K, V>
+    where
+        K: Default + Ord + 'static,
+        V: Default + 'static,
+    {
+        type Handle = Handle<K, V>;
+
+        fn new() -> Self {
+            Self { inner: List::new() }
+        }
+
+        fn get(&self, key: &K, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
+            self.inner.get(List::find_harris_read_loop, key, handle, guard)
+        }
+
+        fn insert(&self, key: K, value: V, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
+            self.inner.insert(List::find_harris_read_loop, key, value, handle, guard)
+        }
+
+        fn remove(&self, key: &K, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
+            self.inner.remove(List::find_harris_read_loop, key, handle, guard)
+        }
+    }
+
+    pub struct HMList<K, V> {
+        inner: List<K, V>,
+    }
+
+    impl<K, V> ConcurrentMap<K, V> for HMList<K, V>
+    where
+        K: Default + Ord + 'static,
+        V: Default + 'static,
+    {
+        type Handle = Handle<K, V>;
+
+        fn new() -> Self {
+            Self { inner: List::new() }
+        }
+
+        fn get(&self, key: &K, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
+            self.inner.get(List::find_harris_michael_read_loop, key, handle, guard)
+        }
+
+        fn insert(&self, key: K, value: V, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
+            self.inner.insert(List::find_harris_michael_read_loop, key, value, handle, guard)
+        }
+
+        fn remove(&self, key: &K, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
+            self.inner.remove(List::find_harris_michael_read_loop, key, handle, guard)
+        }
+    }
+
+    #[test]
+    fn smoke_h_list() {
+        crate::cbr::concurrent_map::tests::smoke::<HList<i32, String>>();
+    }
+
+    #[test]
+    fn smoke_hm_list() {
+        crate::cbr::concurrent_map::tests::smoke::<HMList<i32, String>>();
     }
 }
