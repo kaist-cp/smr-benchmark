@@ -632,9 +632,9 @@ impl EpochGuard {
                     // TODO(@jeonghyeon): Apply an adaptive checkpointing.
                     if iter % ITER_BETWEEN_CHECKPOINTS == 0 {
                         // Select an available defender to protect a backup.
-                        let (next_def, next_idx) = match backup_idx.load(Ordering::Relaxed) {
-                            0 | 2 => (&mut *def_1st, 1),
-                            1 => (&mut *def_2nd, 2),
+                        let (curr_def, next_def, next_idx) = match backup_idx.load(Ordering::Relaxed) {
+                            0 | 2 => (&mut *def_2nd, &mut *def_1st, 1),
+                            1 => (&mut *def_1st, &mut *def_2nd, 2),
                             _ => unreachable!(),
                         };
 
@@ -649,9 +649,10 @@ impl EpochGuard {
                             recovery::set_restartable(false);
                             unsafe { recovery::perform_longjmp() };
                         } else {
-                            // We are not ejected so the protection is valid!
+                            // Success! We are not ejected so the protection is valid!
                             // Finalize backup process by storing a new backup index to `backup_idx`
                             backup_idx.store(next_idx, Ordering::Relaxed);
+                            curr_def.release();
                         }
                     }
                 }
@@ -685,6 +686,7 @@ impl EpochGuard {
         if ptr::eq(final_def, def_2nd) {
             mem::swap(def_1st, def_2nd);
         }
+        def_2nd.release();
     }
 }
 
