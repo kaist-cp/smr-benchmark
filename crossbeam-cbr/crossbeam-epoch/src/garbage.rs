@@ -1,7 +1,7 @@
 use arrayvec::ArrayVec;
 
 use crate::bloom_filter::BloomFilter;
-use crate::deferred::Deferred;
+use crate::deferred::{Deferred, DeferredWithHazard};
 
 /// Maximum number of objects a bag can contain.
 #[cfg(not(feature = "sanitize"))]
@@ -16,6 +16,7 @@ const MAX_OBJECTS: usize = 4;
 #[derive(Debug)]
 pub enum Garbage {
     Deferred { inner: Deferred },
+    DeferredWithHazard { inner: DeferredWithHazard },
     Destroy { data: usize, dtor: unsafe fn(usize) },
 }
 
@@ -25,6 +26,9 @@ impl Garbage {
     pub fn is_hazardous(&self, hazards: Option<&BloomFilter>) -> bool {
         match self {
             Garbage::Deferred { .. } => false,
+            Garbage::DeferredWithHazard { inner } => {
+                hazards.map(|h| h.query(inner.hazard)).unwrap_or(false)
+            }
             Garbage::Destroy { data, .. } => hazards.map(|h| h.query(*data)).unwrap_or(false),
         }
     }
@@ -34,6 +38,7 @@ impl Garbage {
     pub fn dispose(self) {
         match self {
             Garbage::Deferred { inner } => inner.call(),
+            Garbage::DeferredWithHazard { inner } => inner.call(),
             Garbage::Destroy { data, dtor } => unsafe { dtor(data) },
         }
     }

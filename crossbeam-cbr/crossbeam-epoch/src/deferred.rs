@@ -77,6 +77,74 @@ impl Deferred {
     }
 }
 
+/// A `FnOnce()` that is stored inline if small, or otherwise boxed on the heap.
+///
+/// This is a handy way of keeping an unsized `FnOnce()` within a sized structure.
+///
+/// It is different with `Deferred`, as it is intended to check hazards before calling.
+pub struct DeferredWithHazard {
+    call: unsafe fn(*mut u8, *const u8),
+    pub(crate) hazard: usize,
+    data: MaybeUninit<usize>,
+    _marker: PhantomData<*mut ()>, // !Send + !Sync
+}
+
+impl fmt::Debug for DeferredWithHazard {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        f.pad("DeferredWithHazard { .. }")
+    }
+}
+
+impl DeferredWithHazard {
+    /// Constructs a new `Deferred` from a `FnOnce()`.
+    pub fn new<T, F: FnOnce(*const T)>(hazard: *const T, f: F) -> Self {
+        let size = mem::size_of::<F>();
+        let align = mem::align_of::<F>();
+
+        unsafe {
+            if size <= mem::size_of::<usize>() && align <= mem::align_of::<usize>() {
+                let mut data = MaybeUninit::<usize>::uninit();
+                ptr::write(data.as_mut_ptr() as *mut F, f);
+
+                unsafe fn call<T, F: FnOnce(*const T)>(raw: *mut u8, hazard: *const u8) {
+                    let f: F = ptr::read(raw as *mut F);
+                    f(hazard as *const T);
+                }
+
+                DeferredWithHazard {
+                    call: call::<T, F>,
+                    hazard: hazard as _,
+                    data,
+                    _marker: PhantomData,
+                }
+            } else {
+                let b: Box<F> = Box::new(f);
+                let mut data = MaybeUninit::<usize>::uninit();
+                ptr::write(data.as_mut_ptr() as *mut Box<F>, b);
+
+                unsafe fn call<T, F: FnOnce(*const T)>(raw: *mut u8, hazard: *const u8) {
+                    let b: Box<F> = ptr::read(raw as *mut Box<F>);
+                    (*b)(hazard as *const T);
+                }
+
+                DeferredWithHazard {
+                    call: call::<T, F>,
+                    hazard: hazard as _,
+                    data,
+                    _marker: PhantomData,
+                }
+            }
+        }
+    }
+
+    /// Calls the function.
+    #[inline]
+    pub fn call(mut self) {
+        let call = self.call;
+        unsafe { call(self.data.as_mut_ptr() as *mut u8, self.hazard as *const u8) };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::Deferred;

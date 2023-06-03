@@ -3,6 +3,7 @@ use crossbeam_cbr::EpochGuard;
 pub trait Shields<V> {
     fn default(guard: &EpochGuard) -> Self;
     fn result_value(&self) -> &V;
+    fn release(&mut self);
 }
 
 pub trait ConcurrentMap<K, V> {

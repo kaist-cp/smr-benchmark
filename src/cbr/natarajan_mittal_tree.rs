@@ -146,6 +146,12 @@ where
     fn result_value(&self) -> &V {
         todo!()
     }
+
+    #[inline]
+    fn release(&mut self) {
+        self.0.release();
+        self.1.release();
+    }
 }
 
 /// All Shared<_> are unmarked.

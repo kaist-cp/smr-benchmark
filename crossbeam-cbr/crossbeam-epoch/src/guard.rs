@@ -14,6 +14,7 @@ use nix::sys::signalfd::SigSet;
 use crate::atomic::Shared;
 use crate::collector::Collector;
 use crate::deferred::Deferred;
+use crate::deferred::DeferredWithHazard;
 use crate::garbage::Garbage;
 use crate::internal::Local;
 use crate::rc::Defender;
@@ -632,11 +633,12 @@ impl EpochGuard {
                     // TODO(@jeonghyeon): Apply an adaptive checkpointing.
                     if iter % ITER_BETWEEN_CHECKPOINTS == 0 {
                         // Select an available defender to protect a backup.
-                        let (curr_def, next_def, next_idx) = match backup_idx.load(Ordering::Relaxed) {
-                            0 | 2 => (&mut *def_2nd, &mut *def_1st, 1),
-                            1 => (&mut *def_1st, &mut *def_2nd, 2),
-                            _ => unreachable!(),
-                        };
+                        let (curr_def, next_def, next_idx) =
+                            match backup_idx.load(Ordering::Relaxed) {
+                                0 | 2 => (&mut *def_2nd, &mut *def_1st, 1),
+                                1 => (&mut *def_1st, &mut *def_2nd, 2),
+                                _ => unreachable!(),
+                            };
 
                         // Store pointers in hazard slots and issue a light fence.
                         unsafe { next_def.defend_unchecked(&result) };
@@ -896,18 +898,31 @@ impl WriteGuard {
 ///
 /// `EpochGuard` and `WriteGuard` implement this trait.
 pub trait Writable {
-    /// Stores a function so that it can be executed at some point after all currently pinned threads get unpinned.
-    unsafe fn defer<F: FnOnce()>(&self, f: F);
+    /// Stores a function so that it can be executed at some point when:
+    ///
+    /// 1. all currently pinned threads get unpinned, and
+    /// 2. no hazard pointer protects `ptr`.
+    unsafe fn defer<T, F: FnOnce(*const T)>(&self, ptr: *const T, f: F);
 }
 
 impl Writable for EpochGuard {
-    unsafe fn defer<F: FnOnce()>(&self, f: F) {
-        self.defer_unchecked(f);
+    unsafe fn defer<T, F: FnOnce(*const T)>(&self, ptr: *const T, f: F) {
+        self.defer_garbage(
+            Garbage::DeferredWithHazard {
+                inner: DeferredWithHazard::new(ptr, f),
+            },
+            false,
+        );
     }
 }
 
 impl Writable for WriteGuard {
-    unsafe fn defer<F: FnOnce()>(&self, f: F) {
-        unsafe { &mut *self.inner }.defer_unchecked(f);
+    unsafe fn defer<T, F: FnOnce(*const T)>(&self, ptr: *const T, f: F) {
+        unsafe { &mut *self.inner }.defer_garbage(
+            Garbage::DeferredWithHazard {
+                inner: DeferredWithHazard::new(ptr, f),
+            },
+            false,
+        );
     }
 }

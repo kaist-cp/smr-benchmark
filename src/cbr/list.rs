@@ -57,6 +57,12 @@ where
     fn result_value(&self) -> &V {
         self.0.curr.as_ref().map(|node| &node.value).unwrap()
     }
+
+    #[inline]
+    fn release(&mut self) {
+        self.0.release();
+        self.1.release();
+    }
 }
 
 /// TODO(@jeonghyeon): implement `#[derive(Defender)]`,

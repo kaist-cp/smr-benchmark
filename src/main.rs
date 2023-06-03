@@ -1547,6 +1547,7 @@ fn bench_map_cbr<M: cbr::ConcurrentMap<String, String> + Send + Sync, N: Unsigne
                     }
                     ops += 1;
                     if ops % N::to_u64() == 0 {
+                        handle.release();
                         guard.repin();
                     }
                 }
