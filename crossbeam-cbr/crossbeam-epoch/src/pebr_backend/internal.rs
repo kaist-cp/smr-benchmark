@@ -401,6 +401,9 @@ pub struct Local {
     collect_count: Cell<usize>,
     advance_count: Cell<usize>,
 
+    /// Indicates whether the thread is in `collect`.
+    collecting: Cell<bool>,
+
     /// The set of hazard pointers.
     pub(crate) hazards: HazardSet,
     /// The Pthread ID of registered thread.
@@ -452,6 +455,7 @@ impl Local {
                 collect_count: Cell::new(0),
                 advance_count: Cell::new(0),
                 pthread: pthread_self(),
+                collecting: Cell::new(false),
             })
             .into_shared(unprotected());
             collector.global.locals.insert(local);
@@ -550,8 +554,10 @@ impl Local {
             garbage = g;
         }
 
-        if !internal {
+        if !internal && !self.collecting.get() {
+            self.collecting.set(true);
             self.incr_counts(false, guard);
+            self.collecting.set(false);
         }
     }
 
