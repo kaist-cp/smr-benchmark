@@ -416,7 +416,7 @@ mod tests {
     fn insert() {
         let collector = Collector::new();
         let handle = collector.register();
-        let guard = handle.pin().unwrap();
+        let guard = handle.pin();
 
         let l: List<Entry> = List::new();
 
@@ -458,7 +458,7 @@ mod tests {
     fn delete() {
         let collector = Collector::new();
         let handle = collector.register();
-        let guard = handle.pin().unwrap();
+        let guard = handle.pin();
 
         let l: List<Entry> = List::new();
 
@@ -512,7 +512,7 @@ mod tests {
                     b.wait();
 
                     let handle = collector.register();
-                    let guard: EpochGuard = handle.pin().unwrap();
+                    let guard: EpochGuard = handle.pin();
                     let mut v = Vec::with_capacity(ITERS);
 
                     for _ in 0..ITERS {
@@ -534,7 +534,7 @@ mod tests {
         .unwrap();
 
         let handle = collector.register();
-        let guard = handle.pin().unwrap();
+        let guard = handle.pin();
 
         let mut pred = Shield::null(&guard);
         let mut curr = Shield::null(&guard);
@@ -557,7 +557,7 @@ mod tests {
                     b.wait();
 
                     let handle = collector.register();
-                    let mut guard: EpochGuard = handle.pin().unwrap();
+                    let mut guard: EpochGuard = handle.pin();
                     let mut v = Vec::with_capacity(ITERS);
 
                     for _ in 0..ITERS {
@@ -605,7 +605,7 @@ mod tests {
         .unwrap();
 
         let handle = collector.register();
-        let guard = handle.pin().unwrap();
+        let guard = handle.pin();
 
         let mut pred = Shield::null(&guard);
         let mut curr = Shield::null(&guard);

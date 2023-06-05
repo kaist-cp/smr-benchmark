@@ -21,7 +21,7 @@ thread_local! {
 
 /// Pins the current thread.
 #[inline]
-pub fn pin() -> Option<EpochGuard> {
+pub fn pin() -> EpochGuard {
     with_handle(|handle| handle.pin())
 }
 

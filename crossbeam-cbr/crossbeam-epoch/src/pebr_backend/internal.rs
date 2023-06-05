@@ -570,7 +570,7 @@ impl Local {
     ///
     /// If there is an another pinned `Guard` for this thread, returns `None`.
     #[inline]
-    pub fn pin(&self) -> Option<EpochGuard> {
+    pub fn pin(&self) -> EpochGuard {
         let guard = EpochGuard { local: self };
 
         let guard_count = self.guard_count.get();
@@ -666,11 +666,9 @@ impl Local {
                 self.prev_epoch.set(new_epoch);
                 self.advance_count.set(0);
             }
-            Some(guard)
-        } else {
-            // Creating multiple pinned `Guard` is not allowed.
-            None
         }
+
+        guard
     }
 
     /// Unpins the `Local`.

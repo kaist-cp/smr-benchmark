@@ -22,7 +22,7 @@ fn worker(a: Arc<Atomic<AtomicUsize>>, handle: LocalHandle) -> usize {
 
     while now.elapsed() < timeout {
         for _ in 0..100 {
-            let guard = &handle.pin().unwrap();
+            let guard = &handle.pin();
             guard.flush();
 
             let val = if rng.gen() {

@@ -8,7 +8,7 @@ use super::utils::{decrement_ref_cnt, delayed_decrement_ref_cnt, Counted};
 use crate::{
     pebr_backend::{
         tag::{data_with_tag, decompose_data},
-        unprotected, Defender, EpochGuard, Pointer, ReadGuard, Writable,
+        Defender, EpochGuard, Pointer, ReadGuard, Writable,
     },
     pin,
 };
@@ -305,7 +305,7 @@ impl<T> Drop for Atomic<T> {
         let ptr = decompose_data::<Counted<T>>(val).0.cast_const();
         unsafe {
             if !ptr.is_null() {
-                let guard = unprotected();
+                let guard = &pin();
                 delayed_decrement_ref_cnt(ptr, guard);
             }
         }
@@ -529,8 +529,7 @@ impl<T> Drop for Rc<T> {
     fn drop(&mut self) {
         if !self.is_null() {
             unsafe {
-                let pinned = pin();
-                let guard = pinned.as_ref().unwrap_or(unprotected());
+                let guard = &pin();
                 if self.delayed_decr {
                     delayed_decrement_ref_cnt(self.as_untagged_raw(), guard);
                 } else {

@@ -28,7 +28,7 @@ use crate::pebr_backend::{
 ///
 /// // It is often convenient to prefix a call to `pin` with a `&` in order to create a reference.
 /// // This is not really necessary, but makes passing references to the guard a bit easier.
-/// let guard = &epoch::pin().unwrap();
+/// let guard = &epoch::pin();
 /// ```
 ///
 /// When a guard gets dropped, the current thread is automatically unpinned.
@@ -46,7 +46,7 @@ use crate::pebr_backend::{
 /// let a = Atomic::new(777);
 ///
 /// // Pin the current thread.
-/// let guard = &epoch::pin().unwrap();
+/// let guard = &epoch::pin();
 ///
 /// // Load the heap-allocated object and create pointer `p` on the stack.
 /// let p = a.load(SeqCst, guard);
@@ -57,20 +57,21 @@ use crate::pebr_backend::{
 /// }
 /// ```
 ///
-/// # No multiple guards
+/// # Multiple guards
 ///
-/// Unlink the original *PEBR*, creating multiple guard is not allowed. This is because if
-/// a thread open a read phase with a guard and open a nested read phase with a new guard,
-/// phase managing could fall into undefined behaviors.
+/// Pinning is reentrant and it is perfectly legal to create multiple guards. In that case, the
+/// thread will actually be pinned only when the first guard is created and unpinned when the last
+/// one is dropped:
 ///
 /// ```
 /// use crossbeam_cbr_epoch as epoch;
 ///
 /// let guard1 = epoch::pin();
 /// let guard2 = epoch::pin();
+/// drop(guard1);
 /// assert!(epoch::is_pinned());
-/// assert!(guard1.is_some());
-/// assert!(guard2.is_none());
+/// drop(guard2);
+/// assert!(!epoch::is_pinned());
 /// ```
 ///
 /// [`pin`]: fn.pin.html
@@ -141,7 +142,7 @@ impl EpochGuard {
     /// ```
     /// use crossbeam_cbr_epoch as epoch;
     ///
-    /// let guard = &epoch::pin().unwrap();
+    /// let guard = &epoch::pin();
     /// let message = "Hello!";
     /// unsafe {
     ///     // ALWAYS use `move` when sending a closure into `defer_unchecked`.
@@ -185,7 +186,7 @@ impl EpochGuard {
     /// // accessed and modified...
     ///
     /// // Pin the current thread.
-    /// let guard = &epoch::pin().unwrap();
+    /// let guard = &epoch::pin();
     ///
     /// // Steal the object currently stored in `a` and swap it with another one.
     /// let p = a.swap(Owned::new("bar").into_shared(guard), SeqCst, guard);
@@ -273,7 +274,7 @@ impl EpochGuard {
     /// // accessed and modified...
     ///
     /// // Pin the current thread.
-    /// let guard = &epoch::pin().unwrap();
+    /// let guard = &epoch::pin();
     ///
     /// // Steal the object currently stored in `a` and swap it with another one.
     /// let p = a.swap(Owned::new("bar").into_shared(guard), SeqCst, guard);
@@ -332,7 +333,7 @@ impl EpochGuard {
     /// ```
     /// use crossbeam_cbr_epoch as epoch;
     ///
-    /// let guard = &epoch::pin().unwrap();
+    /// let guard = &epoch::pin();
     /// unsafe {
     ///     guard.defer(move || {
     ///         println!("This better be printed as soon as possible!");
@@ -366,7 +367,7 @@ impl EpochGuard {
     /// use std::time::Duration;
     ///
     /// let a = Atomic::new(777);
-    /// let mut guard = epoch::pin().unwrap();
+    /// let mut guard = epoch::pin();
     /// {
     ///     let p = a.load(SeqCst, &guard);
     ///     assert_eq!(unsafe { p.as_ref() }, Some(&777));
@@ -404,7 +405,7 @@ impl EpochGuard {
     /// use std::time::Duration;
     ///
     /// let a = Atomic::new(777);
-    /// let mut guard = epoch::pin().unwrap();
+    /// let mut guard = epoch::pin();
     /// {
     ///     let p = a.load(SeqCst, &guard);
     ///     assert_eq!(unsafe { p.as_ref() }, Some(&777));
@@ -451,7 +452,7 @@ impl EpochGuard {
     /// ```
     /// use crossbeam_cbr_epoch as epoch;
     ///
-    /// let mut guard1 = epoch::pin().unwrap();
+    /// let mut guard1 = epoch::pin();
     /// let mut guard2 = unsafe { epoch::unprotected() };
     /// assert_ne!(guard1.collector(), guard2.collector());
     /// ```

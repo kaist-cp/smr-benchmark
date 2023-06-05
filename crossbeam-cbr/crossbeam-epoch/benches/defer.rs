@@ -11,7 +11,7 @@ use utils::thread::scope;
 #[bench]
 fn single_alloc_defer_free(b: &mut Bencher) {
     b.iter(|| {
-        let guard = &epoch::pin().unwrap();
+        let guard = &epoch::pin();
         let p = Owned::new(1).into_shared(guard);
         unsafe {
             guard.defer_destroy(p);
@@ -22,7 +22,7 @@ fn single_alloc_defer_free(b: &mut Bencher) {
 #[bench]
 fn single_defer(b: &mut Bencher) {
     b.iter(|| {
-        let guard = &epoch::pin().unwrap();
+        let guard = &epoch::pin();
         guard.defer(move || ());
     });
 }
@@ -37,7 +37,7 @@ fn multi_alloc_defer_free(b: &mut Bencher) {
             for _ in 0..THREADS {
                 s.spawn(|_| {
                     for _ in 0..STEPS {
-                        let guard = &epoch::pin().unwrap();
+                        let guard = &epoch::pin();
                         let p = Owned::new(1).into_shared(guard);
                         unsafe {
                             guard.defer_destroy(p);
@@ -60,7 +60,7 @@ fn multi_defer(b: &mut Bencher) {
             for _ in 0..THREADS {
                 s.spawn(|_| {
                     for _ in 0..STEPS {
-                        let guard = &epoch::pin().unwrap();
+                        let guard = &epoch::pin();
                         guard.defer(move || ());
                     }
                 });

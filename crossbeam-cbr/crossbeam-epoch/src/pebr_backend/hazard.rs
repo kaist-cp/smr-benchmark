@@ -354,7 +354,7 @@ impl<T> Shield<T> {
     /// let a = Atomic::new(777);
     ///
     /// // Pin the current thread.
-    /// let guard = epoch::pin().unwrap();
+    /// let guard = epoch::pin();
     ///
     /// // Creates a shield to the heap-allocated object.
     /// let mut shield = Shield::new(a.load(SeqCst, &guard), &guard).unwrap();
@@ -423,7 +423,7 @@ impl<T> Shield<T> {
     /// let a = Atomic::from(o);
     ///
     /// // Pin the current thread.
-    /// let guard = epoch::pin().unwrap();
+    /// let guard = epoch::pin();
     ///
     /// // Create a new shield.
     /// let mut shield = Shield::new(a.load(SeqCst, &guard), &guard).unwrap();
@@ -455,7 +455,7 @@ impl<T> Shield<T> {
     /// let a = Atomic::new(1234);
     ///
     /// // Pin the current thread.
-    /// let guard = epoch::pin().unwrap();
+    /// let guard = epoch::pin();
     ///
     /// // Create a new shield.
     /// let mut shield = Shield::new(a.load(SeqCst, &guard), &guard).unwrap();
@@ -490,7 +490,7 @@ impl<T> Shield<T> {
     /// let a = Atomic::new(1234);
     ///
     /// // Pin the current thread.
-    /// let guard = epoch::pin().unwrap();
+    /// let guard = epoch::pin();
     ///
     /// // Create a new shield.
     /// let mut shield = Shield::new(a.load(SeqCst, &guard), &guard).unwrap();
@@ -518,7 +518,7 @@ impl<T> Shield<T> {
     /// let a = Atomic::new(1234);
     ///
     /// // Pin the current thread.
-    /// let guard = epoch::pin().unwrap();
+    /// let guard = epoch::pin();
     ///
     /// // Create a new shield.
     /// let mut shield = Shield::new(a.load(SeqCst, &guard), &guard).unwrap();
@@ -547,7 +547,7 @@ impl<T> Shield<T> {
     /// let a = Atomic::new(1234);
     ///
     /// // Pin the current thread.
-    /// let guard = epoch::pin().unwrap();
+    /// let guard = epoch::pin();
     ///
     /// // Create a new shield.
     /// let mut shield = Shield::new(a.load(SeqCst, &guard), &guard).unwrap();
@@ -581,7 +581,7 @@ impl<T> Shield<T> {
     /// let a = Atomic::new(777);
     ///
     /// // Pin the current thread.
-    /// let guard = epoch::pin().unwrap();
+    /// let guard = epoch::pin();
     ///
     /// // Create a new shield.
     /// let mut shield = Shield::null(&guard);
@@ -624,7 +624,7 @@ impl<T> Shield<T> {
     /// let a = Atomic::new(777);
     ///
     /// // Pin the current thread.
-    /// let guard = epoch::pin().unwrap();
+    /// let guard = epoch::pin();
     ///
     /// // Create a new shield.
     /// let mut shield: Shield<usize> = Shield::null(&guard);
@@ -696,7 +696,7 @@ impl<T> Shield<T> {
     /// let a = Atomic::new(777);
     ///
     /// // Pin the current thread.
-    /// let guard = epoch::pin().unwrap();
+    /// let guard = epoch::pin();
     ///
     /// // Create a shield to the heap-allocated object.
     /// let mut shield = Shield::new(a.load(SeqCst, &guard), &guard).unwrap();

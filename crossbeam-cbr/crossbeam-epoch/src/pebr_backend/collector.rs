@@ -10,7 +10,7 @@
 /// let handle = collector.register();
 /// drop(collector); // `handle` still works after dropping `collector`
 ///
-/// handle.pin().unwrap().flush();
+/// handle.pin().flush();
 /// ```
 use alloc::sync::Arc;
 use core::fmt;
@@ -71,7 +71,7 @@ pub struct LocalHandle {
 impl LocalHandle {
     /// Pins the handle.
     #[inline]
-    pub fn pin(&self) -> Option<EpochGuard> {
+    pub fn pin(&self) -> EpochGuard {
         unsafe { (*self.local).pin() }
     }
 
@@ -138,7 +138,7 @@ mod tests {
         drop(collector);
 
         for _ in 0..100 {
-            let guard = &handle.pin().unwrap();
+            let guard = &handle.pin();
             unsafe {
                 let a = Owned::new(7).into_shared(guard);
                 guard.defer_destroy(a);
@@ -155,7 +155,7 @@ mod tests {
         let handle = collector.register();
         drop(collector);
 
-        let guard = &handle.pin().unwrap();
+        let guard = &handle.pin();
         unsafe {
             for _ in 0..10 {
                 let a = Owned::new(7).into_shared(guard);
@@ -174,7 +174,7 @@ mod tests {
         let handle = collector.register();
 
         unsafe {
-            let guard = &handle.pin().unwrap();
+            let guard = &handle.pin();
             for _ in 0..COUNT {
                 let a = Owned::new(7i32).into_shared(guard);
                 guard.defer_unchecked(move || {
@@ -192,7 +192,7 @@ mod tests {
             assert!(curr - last <= 2048);
             last = curr;
 
-            let guard = &handle.pin().unwrap();
+            let guard = &handle.pin();
             let _ = collector.global.collect(guard);
         }
         assert!(DESTROYS.load(Ordering::Relaxed) == 100_000);
@@ -207,7 +207,7 @@ mod tests {
         let handle = collector.register();
 
         unsafe {
-            let guard = &handle.pin().unwrap();
+            let guard = &handle.pin();
             for _ in 0..COUNT {
                 let a = Owned::new(7i32).into_shared(guard);
                 guard.defer_unchecked(move || {
@@ -217,14 +217,14 @@ mod tests {
             }
         }
 
-        let _ = collector.global.collect(&handle.pin().unwrap());
+        let _ = collector.global.collect(&handle.pin());
 
         assert!(DESTROYS.load(Ordering::Relaxed) < COUNT);
 
-        handle.pin().unwrap().flush();
+        handle.pin().flush();
 
         while DESTROYS.load(Ordering::Relaxed) < COUNT {
-            let guard = &handle.pin().unwrap();
+            let guard = &handle.pin();
             let _ = collector.global.collect(guard);
         }
         assert_eq!(DESTROYS.load(Ordering::Relaxed), COUNT);
@@ -247,7 +247,7 @@ mod tests {
         let handle = collector.register();
 
         unsafe {
-            let guard = &handle.pin().unwrap();
+            let guard = &handle.pin();
 
             for _ in 0..COUNT {
                 let a = Owned::new(Elem(7i32)).into_shared(guard);
@@ -257,7 +257,7 @@ mod tests {
         }
 
         while DROPS.load(Ordering::Relaxed) < COUNT {
-            let guard = &handle.pin().unwrap();
+            let guard = &handle.pin();
             let _ = collector.global.collect(guard);
         }
         assert_eq!(DROPS.load(Ordering::Relaxed), COUNT);
@@ -272,7 +272,7 @@ mod tests {
         let handle = collector.register();
 
         unsafe {
-            let guard = &handle.pin().unwrap();
+            let guard = &handle.pin();
 
             for _ in 0..COUNT {
                 let a = Owned::new(7i32).into_shared(guard);
@@ -285,7 +285,7 @@ mod tests {
         }
 
         while DESTROYS.load(Ordering::Relaxed) < COUNT {
-            let guard = &handle.pin().unwrap();
+            let guard = &handle.pin();
             let _ = collector.global.collect(guard);
         }
         assert_eq!(DESTROYS.load(Ordering::Relaxed), COUNT);
@@ -307,7 +307,7 @@ mod tests {
         let collector = Collector::new();
         let handle = collector.register();
 
-        let mut guard = handle.pin().unwrap();
+        let mut guard = handle.pin();
 
         let mut v = Vec::with_capacity(COUNT);
         for i in 0..COUNT {
@@ -338,7 +338,7 @@ mod tests {
         let handle = collector.register();
 
         unsafe {
-            let guard = &handle.pin().unwrap();
+            let guard = &handle.pin();
 
             let mut v = Vec::with_capacity(COUNT);
             for i in 0..COUNT {
@@ -357,7 +357,7 @@ mod tests {
         }
 
         while DESTROYS.load(Ordering::Relaxed) < COUNT {
-            let guard = &handle.pin().unwrap();
+            let guard = &handle.pin();
             let _ = collector.global.collect(guard);
         }
         assert_eq!(DESTROYS.load(Ordering::Relaxed), COUNT);
@@ -384,7 +384,7 @@ mod tests {
                 scope.spawn(|_| {
                     let handle = collector.register();
                     for _ in 0..COUNT {
-                        let guard = &handle.pin().unwrap();
+                        let guard = &handle.pin();
                         unsafe {
                             let a = Owned::new(Elem(7i32)).into_shared(guard);
                             guard.defer_destroy(a);
@@ -397,7 +397,7 @@ mod tests {
 
         let handle = collector.register();
         while DROPS.load(Ordering::Relaxed) < COUNT * THREADS {
-            let guard = &handle.pin().unwrap();
+            let guard = &handle.pin();
             let _ = collector.global.collect(guard);
         }
         assert_eq!(DROPS.load(Ordering::Relaxed), COUNT * THREADS);

@@ -175,7 +175,7 @@ impl<T> Atomic<T> {
     /// use std::sync::atomic::Ordering::SeqCst;
     ///
     /// let a = Atomic::new(1234);
-    /// let guard = &epoch::pin().unwrap();
+    /// let guard = &epoch::pin();
     /// let p = a.load(SeqCst, guard);
     /// ```
     pub fn load<'g>(&self, ord: Ordering, _: &'g EpochGuard) -> Shared<'g, T> {
@@ -200,7 +200,7 @@ impl<T> Atomic<T> {
     /// use crossbeam_cbr_epoch::pebr_backend::{self as epoch, Atomic};
     ///
     /// let a = Atomic::new(1234);
-    /// let guard = &epoch::pin().unwrap();
+    /// let guard = &epoch::pin();
     /// let p = a.load_consume(guard);
     /// ```
     pub fn load_consume<'g>(&self, _: &'g EpochGuard) -> Shared<'g, T> {
@@ -243,7 +243,7 @@ impl<T> Atomic<T> {
     /// use std::sync::atomic::Ordering::SeqCst;
     ///
     /// let a = Atomic::new(1234);
-    /// let guard = &epoch::pin().unwrap();
+    /// let guard = &epoch::pin();
     /// let p = a.swap(Shared::null(), SeqCst, guard);
     /// ```
     pub fn swap<'g, P: Pointer<T>>(
@@ -276,7 +276,7 @@ impl<T> Atomic<T> {
     ///
     /// let a = Atomic::new(1234);
     ///
-    /// let guard = &epoch::pin().unwrap();
+    /// let guard = &epoch::pin();
     /// let mut curr = a.load(SeqCst, guard);
     /// let res1 = a.compare_and_set(curr, Shared::null(), SeqCst, guard);
     /// let res2 = a.compare_and_set(curr, Owned::new(5678), SeqCst, guard);
@@ -326,7 +326,7 @@ impl<T> Atomic<T> {
     /// use std::sync::atomic::Ordering::SeqCst;
     ///
     /// let a = Atomic::new(1234);
-    /// let guard = &epoch::pin().unwrap();
+    /// let guard = &epoch::pin();
     ///
     /// let mut new = Owned::new(5678);
     /// let mut ptr = a.load(SeqCst, guard);
@@ -391,7 +391,7 @@ impl<T> Atomic<T> {
     /// use std::sync::atomic::Ordering::SeqCst;
     ///
     /// let a = Atomic::<i32>::from(Shared::null().with_tag(3));
-    /// let guard = &epoch::pin().unwrap();
+    /// let guard = &epoch::pin();
     /// assert_eq!(a.fetch_and(2, SeqCst, guard).tag(), 3);
     /// assert_eq!(a.load(SeqCst, guard).tag(), 2);
     /// ```
@@ -416,7 +416,7 @@ impl<T> Atomic<T> {
     /// use std::sync::atomic::Ordering::SeqCst;
     ///
     /// let a = Atomic::<i32>::from(Shared::null().with_tag(1));
-    /// let guard = &epoch::pin().unwrap();
+    /// let guard = &epoch::pin();
     /// assert_eq!(a.fetch_or(2, SeqCst, guard).tag(), 1);
     /// assert_eq!(a.load(SeqCst, guard).tag(), 3);
     /// ```
@@ -441,7 +441,7 @@ impl<T> Atomic<T> {
     /// use std::sync::atomic::Ordering::SeqCst;
     ///
     /// let a = Atomic::<i32>::from(Shared::null().with_tag(1));
-    /// let guard = &epoch::pin().unwrap();
+    /// let guard = &epoch::pin();
     /// assert_eq!(a.fetch_xor(3, SeqCst, guard).tag(), 1);
     /// assert_eq!(a.load(SeqCst, guard).tag(), 2);
     /// ```
@@ -673,7 +673,7 @@ impl<T> Owned<T> {
     /// use crossbeam_cbr_epoch::pebr_backend::{self as epoch, Owned};
     ///
     /// let o = Owned::new(1234);
-    /// let guard = &epoch::pin().unwrap();
+    /// let guard = &epoch::pin();
     /// let p = o.into_shared(guard);
     /// ```
     ///
@@ -887,7 +887,7 @@ impl<'g, T> Shared<'g, T> {
     /// use std::sync::atomic::Ordering::SeqCst;
     ///
     /// let a = Atomic::null();
-    /// let guard = &epoch::pin().unwrap();
+    /// let guard = &epoch::pin();
     /// assert!(a.load(SeqCst, guard).is_null());
     /// a.store(Owned::new(1234), SeqCst);
     /// assert!(!a.load(SeqCst, guard).is_null());
@@ -908,7 +908,7 @@ impl<'g, T> Shared<'g, T> {
     /// let raw = &*o as *const _;
     /// let a = Atomic::from(o);
     ///
-    /// let guard = &epoch::pin().unwrap();
+    /// let guard = &epoch::pin();
     /// let p = a.load(SeqCst, guard);
     /// assert_eq!(p.as_raw(), raw);
     /// ```
@@ -942,7 +942,7 @@ impl<'g, T> Shared<'g, T> {
     /// use std::sync::atomic::Ordering::SeqCst;
     ///
     /// let a = Atomic::new(1234);
-    /// let guard = &epoch::pin().unwrap();
+    /// let guard = &epoch::pin();
     /// let p = a.load(SeqCst, guard);
     /// unsafe {
     ///     assert_eq!(p.deref(), &1234);
@@ -972,7 +972,7 @@ impl<'g, T> Shared<'g, T> {
     /// use std::sync::atomic::Ordering::SeqCst;
     ///
     /// let a = Atomic::new(vec![1, 2, 3, 4]);
-    /// let guard = &epoch::pin().unwrap();
+    /// let guard = &epoch::pin();
     ///
     /// let mut p = a.load(SeqCst, guard);
     /// unsafe {
@@ -1017,7 +1017,7 @@ impl<'g, T> Shared<'g, T> {
     /// use std::sync::atomic::Ordering::SeqCst;
     ///
     /// let a = Atomic::new(1234);
-    /// let guard = &epoch::pin().unwrap();
+    /// let guard = &epoch::pin();
     /// let p = a.load(SeqCst, guard);
     /// unsafe {
     ///     assert_eq!(p.as_ref(), Some(&1234));
@@ -1065,7 +1065,7 @@ impl<'g, T> Shared<'g, T> {
     /// use std::sync::atomic::Ordering::SeqCst;
     ///
     /// let a = Atomic::<u64>::from(Owned::new(0u64).with_tag(2));
-    /// let guard = &epoch::pin().unwrap();
+    /// let guard = &epoch::pin();
     /// let p = a.load(SeqCst, guard);
     /// assert_eq!(p.tag(), 2);
     /// ```
@@ -1084,7 +1084,7 @@ impl<'g, T> Shared<'g, T> {
     /// use std::sync::atomic::Ordering::SeqCst;
     ///
     /// let a = Atomic::new(0u64);
-    /// let guard = &epoch::pin().unwrap();
+    /// let guard = &epoch::pin();
     /// let p1 = a.load(SeqCst, guard);
     /// let p2 = p1.with_tag(2);
     ///

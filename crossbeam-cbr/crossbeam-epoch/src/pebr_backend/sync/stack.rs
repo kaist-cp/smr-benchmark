@@ -102,7 +102,7 @@ mod test {
                 scope.spawn(|_| {
                     for i in 0..10_000 {
                         stack.push(i);
-                        let mut guard = pin().unwrap();
+                        let mut guard = pin();
                         loop {
                             match stack.try_pop(&guard) {
                                 Ok(r) => {
@@ -118,7 +118,7 @@ mod test {
         })
         .unwrap();
 
-        let guard = pin().unwrap();
+        let guard = pin();
         assert!(stack.try_pop(&guard).unwrap().is_none());
     }
 }
