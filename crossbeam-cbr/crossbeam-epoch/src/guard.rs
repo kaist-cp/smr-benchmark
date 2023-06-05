@@ -1,4 +1,5 @@
 use core::fmt;
+use core::hint::black_box;
 use core::mem;
 use core::mem::transmute;
 use core::ptr;
@@ -482,62 +483,82 @@ impl EpochGuard {
         F: Fn(&'r mut ReadGuard) -> D::Read<'r>,
         D: Defender,
     {
-        // TODO(@jeonghyeon): Those lots of `compiler_fence`s are really necessary?
-
-        // Make a checkpoint with `sigsetjmp` for recovering in read phase.
-        compiler_fence(Ordering::SeqCst);
         let buf = recovery::jmp_buf();
-        if unsafe { setjmp::sigsetjmp(buf, 0) } == 1 {
-            fence(Ordering::SeqCst);
 
-            // Repin the current epoch.
-            self.repin();
-
-            // Unblock the signal before restarting the phase.
-            let mut oldset = SigSet::empty();
-            oldset.add(unsafe { recovery::ejection_signal() });
-            if pthread_sigmask(SigmaskHow::SIG_UNBLOCK, Some(&oldset), None).is_err() {
-                panic!("Failed to unblock signal");
-            }
-        }
-        compiler_fence(Ordering::SeqCst);
-
-        // Get ready to open the phase by setting atomic indicators.
-        assert!(
-            !recovery::is_restartable(),
-            "restartable value should be false before starting read phase"
-        );
-        recovery::set_restartable(true);
-        compiler_fence(Ordering::SeqCst);
-
-        // After setting `RESTARTABLE` up, we must check if the current
-        // epoch is ejected.
-        if unsafe { self.is_ejected() } {
-            recovery::set_restartable(false);
-            unsafe { recovery::perform_longjmp() };
-        }
-
-        let mut guard = ReadGuard::new(self);
-
-        // Execute the body of this read phase.
+        // A dummy loop to bypass a false stack overflow from AdressSanitizer.
         //
-        // Here, `transmute` is needed to bypass a lifetime parameter error.
-        let result = f(unsafe { transmute(&mut guard) });
-        compiler_fence(Ordering::SeqCst);
+        // # HACK: A dummy loop and `blackbox`
+        //
+        // It is not needed in normal builds, but when address-sanitizing,
+        // the sanitizer often gives a false positive by recognizing `longjmp` as
+        // stack buffer overflow (or stack corruption).
+        //
+        // However, awkwardly, if it wrapped by a loop block,
+        // it seems that the sanitizer recognizes `longjmp` as
+        // normal `continue` operation and totally satisfies with it.
+        //
+        // So, they are added to avoid false positives from the sanitizer.
+        loop {
+            // Make a checkpoint with `sigsetjmp` for recovering in read phase.
+            if unsafe { setjmp::sigsetjmp(buf, 0) } == 1 {
+                fence(Ordering::SeqCst);
 
-        // Finaly, close this read phase by unsetting the `RESTARTABLE`.
-        recovery::set_restartable(false);
-        compiler_fence(Ordering::SeqCst);
+                // Repin the current epoch.
+                self.repin();
 
-        // Store pointers in hazard slots and issue a light fence.
-        unsafe { defender.defend_unchecked(&result) };
-        membarrier::light_membarrier();
+                // Unblock the signal before restarting the phase.
+                let mut oldset = SigSet::empty();
+                oldset.add(unsafe { recovery::ejection_signal() });
+                if pthread_sigmask(SigmaskHow::SIG_UNBLOCK, Some(&oldset), None).is_err() {
+                    panic!("Failed to unblock signal");
+                }
+            }
+            compiler_fence(Ordering::SeqCst);
 
-        // Check whether we are ejected.
-        if unsafe { self.is_ejected() } {
-            // If we are ejected while protecting, the protection may not be valid.
-            // Restart this read phase manually.
-            unsafe { recovery::perform_longjmp() };
+            // Get ready to open the phase by setting atomic indicators.
+            assert!(
+                !recovery::is_restartable(),
+                "restartable value should be false before starting read phase"
+            );
+            recovery::set_restartable(true);
+            compiler_fence(Ordering::SeqCst);
+
+            // After setting `RESTARTABLE` up, we must check if the current
+            // epoch is ejected.
+            if unsafe { self.is_ejected() } {
+                recovery::set_restartable(false);
+                unsafe { recovery::perform_longjmp() };
+            }
+
+            let mut guard = ReadGuard::new(self);
+
+            // Execute the body of this read phase.
+            //
+            // Here, `transmute` is needed to bypass a lifetime parameter error.
+            let result = f(unsafe { transmute(&mut guard) });
+            compiler_fence(Ordering::SeqCst);
+
+            // Finaly, close this read phase by unsetting the `RESTARTABLE`.
+            recovery::set_restartable(false);
+            compiler_fence(Ordering::SeqCst);
+
+            // Store pointers in hazard slots and issue a light fence.
+            unsafe { defender.defend_unchecked(&result) };
+            membarrier::light_membarrier();
+
+            // Check whether we are ejected.
+            if unsafe { self.is_ejected() } {
+                // If we are ejected while protecting, the protection may not be valid.
+                // Restart this read phase manually.
+                unsafe { recovery::perform_longjmp() };
+            }
+
+            // # HACK: A dummy loop and `blackbox`
+            //
+            // (See comments on the loop for more information.)
+            if black_box(true) {
+                break;
+            }
         }
     }
 
@@ -561,134 +582,154 @@ impl EpochGuard {
     {
         const ITER_BETWEEN_CHECKPOINTS: usize = 512;
 
-        // TODO(@jeonghyeon): Those lots of `compiler_fence`s are really necessary?
-
         // `backup_idx` indicates where we have stored a backup to `backup_def`.
         // 0 = no backup, 1 = `def_1st`, 2 = `def_2st`
         // We use an atomic type instead of regular one, to perform writes atomically,
         // so that stored data is consistent even if a crash occured during a write.
         let backup_idx = AtomicUsize::new(0);
 
-        // Make a checkpoint with `sigsetjmp` for recovering in read phase.
-        compiler_fence(Ordering::SeqCst);
         let buf = recovery::jmp_buf();
-        if unsafe { setjmp::sigsetjmp(buf, 0) } == 1 {
-            fence(Ordering::SeqCst);
 
-            // Repin the current epoch.
-            self.repin();
-
-            // Unblock the signal before restarting the phase.
-            let mut oldset = SigSet::empty();
-            oldset.add(unsafe { recovery::ejection_signal() });
-            if pthread_sigmask(SigmaskHow::SIG_UNBLOCK, Some(&oldset), None).is_err() {
-                panic!("Failed to unblock signal");
-            }
-        }
-        compiler_fence(Ordering::SeqCst);
-
-        // If we have reached here by restarting this read phase in a write phase,
-        // we should drop previous backups.
-        if recovery::is_invalidated() {
-            backup_idx.store(0, Ordering::Relaxed);
-            recovery::set_invalidate_backup(false);
-        }
-
-        compiler_fence(Ordering::SeqCst);
-
-        // Get ready to open the phase by setting atomic indicators.
-        assert!(
-            !recovery::is_restartable(),
-            "restartable value should be false before starting read phase"
-        );
-        recovery::set_restartable(true);
-        compiler_fence(Ordering::SeqCst);
-
-        // After setting `RESTARTABLE` up, we must check if the current
-        // epoch is ejected.
-        if unsafe { self.is_ejected() } {
-            recovery::set_restartable(false);
-            unsafe { recovery::perform_longjmp() };
-        }
-
-        let mut guard = ReadGuard::new(self);
-
-        // Load the saved intermediate result, if one exists.
-        let mut result = unsafe {
-            match backup_idx.load(Ordering::Relaxed) {
-                0 => init_result(transmute(&mut guard)),
-                1 => def_1st.as_read(),
-                2 => def_2nd.as_read(),
-                _ => unreachable!(),
-            }
-        };
-
-        // Execute the body of this read phase.
+        // A dummy loop to bypass a false stack overflow from AdressSanitizer.
         //
-        // Here, `transmute` is needed to bypass a lifetime parameter error.
-        for iter in 0.. {
-            match step_forward(&mut result, unsafe { transmute(&mut guard) }) {
-                ReadStatus::Finished => break,
-                ReadStatus::Continue => {
-                    // TODO(@jeonghyeon): Apply an adaptive checkpointing.
-                    if iter % ITER_BETWEEN_CHECKPOINTS == 0 {
-                        // Select an available defender to protect a backup.
-                        let (curr_def, next_def, next_idx) =
-                            match backup_idx.load(Ordering::Relaxed) {
-                                0 | 2 => (&mut *def_2nd, &mut *def_1st, 1),
-                                1 => (&mut *def_1st, &mut *def_2nd, 2),
-                                _ => unreachable!(),
-                            };
+        // # HACK: A dummy loop and `blackbox`
+        //
+        // It is not needed in normal builds, but when address-sanitizing,
+        // the sanitizer often gives a false positive by recognizing `longjmp` as
+        // stack buffer overflow (or stack corruption).
+        //
+        // However, awkwardly, if it wrapped by a loop block,
+        // it seems that the sanitizer recognizes `longjmp` as
+        // normal `continue` operation and totally satisfies with it.
+        //
+        // So, they are added to avoid false positives from the sanitizer.
+        loop {
+            // Make a checkpoint with `sigsetjmp` for recovering in read phase.
+            if unsafe { setjmp::sigsetjmp(buf, 0) } == 1 {
+                fence(Ordering::SeqCst);
 
-                        // Store pointers in hazard slots and issue a light fence.
-                        unsafe { next_def.defend_unchecked(&result) };
-                        membarrier::light_membarrier();
+                // Repin the current epoch.
+                self.repin();
 
-                        // Check whether we are ejected.
-                        if unsafe { self.is_ejected() } {
-                            // If we are ejected while protecting, the protection may not be valid.
-                            // Restart this read phase manually.
-                            recovery::set_restartable(false);
-                            unsafe { recovery::perform_longjmp() };
-                        } else {
-                            // Success! We are not ejected so the protection is valid!
-                            // Finalize backup process by storing a new backup index to `backup_idx`
-                            backup_idx.store(next_idx, Ordering::Relaxed);
-                            curr_def.release();
+                // Unblock the signal before restarting the phase.
+                let mut oldset = SigSet::empty();
+                oldset.add(unsafe { recovery::ejection_signal() });
+                if pthread_sigmask(SigmaskHow::SIG_UNBLOCK, Some(&oldset), None).is_err() {
+                    panic!("Failed to unblock signal");
+                }
+            }
+            compiler_fence(Ordering::SeqCst);
+
+            // If we have reached here by restarting this read phase in a write phase,
+            // we should drop previous backups.
+            if recovery::is_invalidated() {
+                backup_idx.store(0, Ordering::Relaxed);
+                recovery::set_invalidate_backup(false);
+            }
+
+            compiler_fence(Ordering::SeqCst);
+
+            // Get ready to open the phase by setting atomic indicators.
+            assert!(
+                !recovery::is_restartable(),
+                "restartable value should be false before starting read phase"
+            );
+            recovery::set_restartable(true);
+            compiler_fence(Ordering::SeqCst);
+
+            // After setting `RESTARTABLE` up, we must check if the current
+            // epoch is ejected.
+            if unsafe { self.is_ejected() } {
+                recovery::set_restartable(false);
+                unsafe { recovery::perform_longjmp() };
+            }
+
+            let mut guard = ReadGuard::new(self);
+
+            // Load the saved intermediate result, if one exists.
+            let mut result = unsafe {
+                match backup_idx.load(Ordering::Relaxed) {
+                    0 => init_result(transmute(&mut guard)),
+                    1 => def_1st.as_read(),
+                    2 => def_2nd.as_read(),
+                    _ => unreachable!(),
+                }
+            };
+
+            // Execute the body of this read phase.
+            //
+            // Here, `transmute` is needed to bypass a lifetime parameter error.
+            for iter in 0.. {
+                match step_forward(&mut result, unsafe { transmute(&mut guard) }) {
+                    ReadStatus::Finished => break,
+                    ReadStatus::Continue => {
+                        // TODO(@jeonghyeon): Apply an adaptive checkpointing.
+                        if iter % ITER_BETWEEN_CHECKPOINTS == 0 {
+                            // Select an available defender to protect a backup.
+                            let (curr_def, next_def, next_idx) =
+                                match backup_idx.load(Ordering::Relaxed) {
+                                    0 | 2 => (&mut *def_2nd, &mut *def_1st, 1),
+                                    1 => (&mut *def_1st, &mut *def_2nd, 2),
+                                    _ => unreachable!(),
+                                };
+
+                            // Store pointers in hazard slots and issue a light fence.
+                            unsafe { next_def.defend_unchecked(&result) };
+                            membarrier::light_membarrier();
+
+                            // Check whether we are ejected.
+                            if unsafe { self.is_ejected() } {
+                                // If we are ejected while protecting, the protection may not be valid.
+                                // Restart this read phase manually.
+                                recovery::set_restartable(false);
+                                unsafe { recovery::perform_longjmp() };
+                            } else {
+                                // Success! We are not ejected so the protection is valid!
+                                // Finalize backup process by storing a new backup index to `backup_idx`
+                                backup_idx.store(next_idx, Ordering::Relaxed);
+                                curr_def.release();
+                            }
                         }
                     }
                 }
             }
+            compiler_fence(Ordering::SeqCst);
+
+            // Finaly, close this read phase by unsetting the `RESTARTABLE`.
+            recovery::set_restartable(false);
+            compiler_fence(Ordering::SeqCst);
+
+            // Select an available defender to protect the final result.
+            let final_def = match backup_idx.load(Ordering::Relaxed) {
+                0 | 2 => &mut *def_1st,
+                1 => &mut *def_2nd,
+                _ => unreachable!(),
+            };
+
+            // Store pointers in hazard slots and issue a light fence.
+            unsafe { final_def.defend_unchecked(&result) };
+            membarrier::light_membarrier();
+
+            // Check whether we are ejected.
+            if unsafe { self.is_ejected() } {
+                // If we are ejected while protecting, the protection may not be valid.
+                // Restart this read phase manually.
+                unsafe { recovery::perform_longjmp() };
+            }
+
+            // Success! Move the final defender to `def_1st` and return.
+            if ptr::eq(final_def, def_2nd) {
+                mem::swap(def_1st, def_2nd);
+            }
+            def_2nd.release();
+
+            // # HACK: A dummy loop and `blackbox`
+            //
+            // (See comments on the loop for more information.)
+            if black_box(true) {
+                break;
+            }
         }
-        compiler_fence(Ordering::SeqCst);
-
-        // Finaly, close this read phase by unsetting the `RESTARTABLE`.
-        recovery::set_restartable(false);
-        compiler_fence(Ordering::SeqCst);
-
-        // Select an available defender to protect the final result.
-        let final_def = match backup_idx.load(Ordering::Relaxed) {
-            0 | 2 => &mut *def_1st,
-            1 => &mut *def_2nd,
-            _ => unreachable!(),
-        };
-
-        // Store pointers in hazard slots and issue a light fence.
-        unsafe { final_def.defend_unchecked(&result) };
-        membarrier::light_membarrier();
-
-        // Check whether we are ejected.
-        if unsafe { self.is_ejected() } {
-            // If we are ejected while protecting, the protection may not be valid.
-            // Restart this read phase manually.
-            unsafe { recovery::perform_longjmp() };
-        }
-
-        // Success! Move the final defender to `def_1st` and return.
-        if ptr::eq(final_def, def_2nd) {
-            mem::swap(def_1st, def_2nd);
-        }
-        def_2nd.release();
     }
 }
 
