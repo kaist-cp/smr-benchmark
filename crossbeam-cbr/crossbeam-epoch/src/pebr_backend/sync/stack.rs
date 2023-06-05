@@ -1,12 +1,16 @@
+//! Treiber's lock-free stack.
+
 use std::mem::ManuallyDrop;
 use std::ptr;
 use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
 
-use crate::atomic::{Atomic, Owned};
-use crate::guard::{unprotected, EpochGuard};
-use crate::hazard::{Shield, ShieldError};
+use crate::pebr_backend::{
+    atomic::{Atomic, Owned},
+    guard::{unprotected, EpochGuard},
+    hazard::{Shield, ShieldError},
+};
 
-/// 's lock-free stack.
+/// Treiber's lock-free stack.
 ///
 /// Usable with any number of producers and consumers.
 #[derive(Debug)]
@@ -98,7 +102,7 @@ mod test {
                 scope.spawn(|_| {
                     for i in 0..10_000 {
                         stack.push(i);
-                        let mut guard = pin();
+                        let mut guard = pin().unwrap();
                         loop {
                             match stack.try_pop(&guard) {
                                 Ok(r) => {
@@ -114,7 +118,7 @@ mod test {
         })
         .unwrap();
 
-        let guard = pin();
+        let guard = pin().unwrap();
         assert!(stack.try_pop(&guard).unwrap().is_none());
     }
 }

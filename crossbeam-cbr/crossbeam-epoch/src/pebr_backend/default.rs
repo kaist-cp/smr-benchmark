@@ -4,8 +4,10 @@
 //! is registered in the default collector.  If initialized, the thread's participant will get
 //! destructed on thread exit, which in turn unregisters the thread.
 
-use crate::collector::{Collector, LocalHandle};
-use crate::guard::EpochGuard;
+use crate::pebr_backend::{
+    collector::{Collector, LocalHandle},
+    guard::EpochGuard,
+};
 
 lazy_static! {
     /// The global data for the default garbage collector.
@@ -19,7 +21,7 @@ thread_local! {
 
 /// Pins the current thread.
 #[inline]
-pub fn pin() -> EpochGuard {
+pub fn pin() -> Option<EpochGuard> {
     with_handle(|handle| handle.pin())
 }
 

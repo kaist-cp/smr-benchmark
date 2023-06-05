@@ -6,9 +6,11 @@ use core::{
 
 use super::utils::{decrement_ref_cnt, delayed_decrement_ref_cnt, Counted};
 use crate::{
+    pebr_backend::{
+        tag::{data_with_tag, decompose_data},
+        unprotected, Defender, EpochGuard, Pointer, ReadGuard, Writable,
+    },
     pin,
-    tag::{data_with_tag, decompose_data},
-    EpochGuard, Pointer, ReadGuard, Writable,
 };
 
 /// An reference counting atomic pointer that can be safely shared between threads.
@@ -102,7 +104,9 @@ impl<T> Atomic<T> {
     /// Loads a `Shared` from the atomic pointer. This can be called only in a read phase.
     #[inline]
     pub fn load<'r>(&self, _guard: &'r ReadGuard) -> Shared<'r, T> {
-        Shared::new(unsafe { crate::Shared::from_usize(self.link.load(Ordering::Acquire)) })
+        Shared::new(unsafe {
+            crate::pebr_backend::Shared::from_usize(self.link.load(Ordering::Acquire))
+        })
     }
 
     /// TODO(@jeonghyeon): Rewrite this document (return type is changed)
@@ -169,13 +173,17 @@ impl<T> Atomic<T> {
         &self,
         expected: &P1,
         desired: &P2,
-        _guard: &G,
+        guard: &G,
     ) -> Result<Rc<T>, ()>
     where
         P1: AcquiredPtr<T>,
         P2: AcquiredPtr<T>,
         G: Writable,
     {
+        if let Some(desired) = unsafe { desired.as_untagged_raw().as_ref() } {
+            desired.add_refs(1);
+        }
+
         match self.link.compare_exchange(
             expected.as_raw() as usize,
             desired.as_raw() as usize,
@@ -184,12 +192,14 @@ impl<T> Atomic<T> {
         ) {
             Ok(_) => {
                 let rc = Rc::from_atomic_cas_succ(expected.as_untagged_raw());
-                if let Some(desired) = unsafe { desired.as_untagged_raw().as_ref() } {
-                    desired.add_refs(1);
-                }
                 Ok(rc)
             }
-            Err(_actual) => Err(()),
+            Err(_actual) => {
+                if !desired.as_untagged_raw().is_null() {
+                    unsafe { decrement_ref_cnt(desired.as_untagged_raw(), guard) };
+                }
+                Err(())
+            }
         }
     }
 
@@ -295,15 +305,15 @@ impl<T> Drop for Atomic<T> {
         let ptr = decompose_data::<Counted<T>>(val).0.cast_const();
         unsafe {
             if !ptr.is_null() {
-                let guard = pin();
-                delayed_decrement_ref_cnt(ptr, &guard);
+                let guard = unprotected();
+                delayed_decrement_ref_cnt(ptr, guard);
             }
         }
     }
 }
 
 pub struct Shared<'r, T> {
-    ptr: crate::Shared<'r, Counted<T>>,
+    ptr: crate::pebr_backend::Shared<'r, Counted<T>>,
 }
 
 impl<'r, T> Clone for Shared<'r, T> {
@@ -318,14 +328,14 @@ impl<'r, T> Copy for Shared<'r, T> {}
 
 impl<'r, T> Shared<'r, T> {
     #[inline]
-    pub(crate) fn new(ptr: crate::Shared<'r, Counted<T>>) -> Self {
+    pub(crate) fn new(ptr: crate::pebr_backend::Shared<'r, Counted<T>>) -> Self {
         Self { ptr }
     }
 
     #[inline]
     pub fn null() -> Self {
         Self {
-            ptr: crate::Shared::null(),
+            ptr: crate::pebr_backend::Shared::null(),
         }
     }
 
@@ -356,7 +366,7 @@ impl<'r, T> Shared<'r, T> {
 }
 
 pub struct Shield<T> {
-    hazptr: crate::Shield<Counted<T>>,
+    hazptr: crate::pebr_backend::Shield<Counted<T>>,
 }
 
 unsafe impl<T> Sync for Shield<T> {}
@@ -365,7 +375,7 @@ impl<T> Shield<T> {
     #[inline]
     pub fn null(guard: &EpochGuard) -> Self {
         Self {
-            hazptr: crate::Shield::null(guard),
+            hazptr: crate::pebr_backend::Shield::null(guard),
         }
     }
 
@@ -394,7 +404,10 @@ impl<T> Shield<T> {
     #[inline]
     pub fn set_tag(&mut self, tag: usize) {
         let modified = self.hazptr.shared().with_tag(tag).into_usize();
-        unsafe { self.hazptr.defend_fake(crate::Shared::from_usize(modified)) };
+        unsafe {
+            self.hazptr
+                .defend_fake(crate::pebr_backend::Shared::from_usize(modified))
+        };
     }
 
     #[inline]
@@ -515,11 +528,14 @@ impl<T> Rc<T> {
 impl<T> Drop for Rc<T> {
     fn drop(&mut self) {
         if !self.is_null() {
-            let guard = pin();
-            if self.delayed_decr {
-                unsafe { delayed_decrement_ref_cnt(self.as_untagged_raw(), &guard) };
-            } else {
-                unsafe { decrement_ref_cnt(self.as_untagged_raw(), &guard) };
+            unsafe {
+                let pinned = pin();
+                let guard = pinned.as_ref().unwrap_or(unprotected());
+                if self.delayed_decr {
+                    delayed_decrement_ref_cnt(self.as_untagged_raw(), guard);
+                } else {
+                    decrement_ref_cnt(self.as_untagged_raw(), guard);
+                }
             }
         }
     }
@@ -564,26 +580,6 @@ impl<T> AcquiredPtr<T> for Rc<T> {
     }
 }
 
-/// A trait for `Shield` which can protect `Shared`.
-pub trait Defender {
-    type Read<'r>: Clone + Copy;
-
-    /// Returns a default `Defender` with empty hazard pointers.
-    fn default(guard: &EpochGuard) -> Self;
-
-    /// Note: This function MUST be called by the PEBR library only in the read phase,
-    /// as it may be optimized to skip checking the epoch.
-    ///
-    /// Do not call this function to manually defend shared pointers.
-    unsafe fn defend_unchecked(&mut self, read: &Self::Read<'_>);
-
-    /// Loads currently protected pointers and composes a new `Shared` bag.
-    unsafe fn as_read<'r>(&mut self) -> Self::Read<'r>;
-
-    /// Resets the pointer to `null`, allowing the previous memory block to be reclaimed.
-    fn release(&mut self);
-}
-
 impl<T: 'static> Defender for Shield<T> {
     type Read<'r> = Shared<'r, T>;
 
@@ -600,7 +596,7 @@ impl<T: 'static> Defender for Shield<T> {
     #[inline]
     unsafe fn as_read<'r>(&mut self) -> Self::Read<'r> {
         Shared {
-            ptr: crate::Shared::from_usize(self.hazptr.shared().as_raw() as _),
+            ptr: crate::pebr_backend::Shared::from_usize(self.hazptr.shared().as_raw() as _),
         }
     }
 
@@ -638,7 +634,7 @@ macro_rules! impl_defender_for_array {(
                 let mut result: [MaybeUninit<Shared<'r, T>>; $N] = zeroed();
                 for (shield, shared) in self.iter().zip(result.iter_mut()) {
                     shared.write(Shared {
-                        ptr: crate::Shared::from_usize(shield.hazptr.shared().as_raw() as _)
+                        ptr: crate::pebr_backend::Shared::from_usize(shield.hazptr.shared().as_raw() as _)
                     });
                 }
                 transmute(result)

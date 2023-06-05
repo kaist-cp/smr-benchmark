@@ -3,12 +3,14 @@ use core::mem;
 use core::ptr;
 use core::sync::atomic::{fence, AtomicUsize, Ordering};
 
-use crate::atomic::{Owned, Pointer, Shared};
-use crate::bloom_filter::BloomFilter;
-use crate::guard::{unprotected, EpochGuard};
-use crate::internal::Local;
-use crate::sync::list::{repeat_iter, Entry, IsElement, Iter as ListIter, IterError, List};
-use crate::tag::*;
+use crate::pebr_backend::{
+    atomic::{Owned, Pointer, Shared},
+    bloom_filter::BloomFilter,
+    guard::{unprotected, EpochGuard},
+    internal::Local,
+    sync::list::{repeat_iter, Entry, IsElement, Iter as ListIter, IterError, List},
+    tag::*,
+};
 
 /// Node in a linked list that represents a finite set of hazard pointers.
 #[derive(Debug)]
@@ -345,14 +347,14 @@ impl<T> Shield<T> {
     /// # Examples
     ///
     /// ```
-    /// use crossbeam_cbr_epoch::{self as epoch, Atomic, Shield};
+    /// use crossbeam_cbr_epoch::pebr_backend::{self as epoch, Atomic, Shield};
     /// use std::sync::atomic::Ordering::SeqCst;
     ///
     /// // Create a heap-allocated number.
     /// let a = Atomic::new(777);
     ///
     /// // Pin the current thread.
-    /// let guard = epoch::pin();
+    /// let guard = epoch::pin().unwrap();
     ///
     /// // Creates a shield to the heap-allocated object.
     /// let mut shield = Shield::new(a.load(SeqCst, &guard), &guard).unwrap();
@@ -412,7 +414,7 @@ impl<T> Shield<T> {
     /// # Examples
     ///
     /// ```
-    /// use crossbeam_cbr_epoch::{self as epoch, Atomic, Owned, Shield};
+    /// use crossbeam_cbr_epoch::pebr_backend::{self as epoch, Atomic, Owned, Shield};
     /// use std::sync::atomic::Ordering::SeqCst;
     ///
     /// // Create a heap-allocated number.
@@ -421,7 +423,7 @@ impl<T> Shield<T> {
     /// let a = Atomic::from(o);
     ///
     /// // Pin the current thread.
-    /// let guard = epoch::pin();
+    /// let guard = epoch::pin().unwrap();
     ///
     /// // Create a new shield.
     /// let mut shield = Shield::new(a.load(SeqCst, &guard), &guard).unwrap();
@@ -446,14 +448,14 @@ impl<T> Shield<T> {
     /// # Examples
     ///
     /// ```
-    /// use crossbeam_cbr_epoch::{self as epoch, Atomic, Shared, Shield};
+    /// use crossbeam_cbr_epoch::pebr_backend::{self as epoch, Atomic, Shared, Shield};
     /// use std::sync::atomic::Ordering::SeqCst;
     ///
     /// // Create a heap-allocated number.
     /// let a = Atomic::new(1234);
     ///
     /// // Pin the current thread.
-    /// let guard = epoch::pin();
+    /// let guard = epoch::pin().unwrap();
     ///
     /// // Create a new shield.
     /// let mut shield = Shield::new(a.load(SeqCst, &guard), &guard).unwrap();
@@ -481,14 +483,14 @@ impl<T> Shield<T> {
     /// # Examples
     ///
     /// ```
-    /// use crossbeam_cbr_epoch::{self as epoch, Atomic, Shared, Shield};
+    /// use crossbeam_cbr_epoch::pebr_backend::{self as epoch, Atomic, Shared, Shield};
     /// use std::sync::atomic::Ordering::SeqCst;
     ///
     /// // Create a heap-allocated number.
     /// let a = Atomic::new(1234);
     ///
     /// // Pin the current thread.
-    /// let guard = epoch::pin();
+    /// let guard = epoch::pin().unwrap();
     ///
     /// // Create a new shield.
     /// let mut shield = Shield::new(a.load(SeqCst, &guard), &guard).unwrap();
@@ -509,14 +511,14 @@ impl<T> Shield<T> {
     /// # Examples
     ///
     /// ```
-    /// use crossbeam_cbr_epoch::{self as epoch, Atomic, Shared, Shield};
+    /// use crossbeam_cbr_epoch::pebr_backend::{self as epoch, Atomic, Shared, Shield};
     /// use std::sync::atomic::Ordering::SeqCst;
     ///
     /// // Create a heap-allocated number.
     /// let a = Atomic::new(1234);
     ///
     /// // Pin the current thread.
-    /// let guard = epoch::pin();
+    /// let guard = epoch::pin().unwrap();
     ///
     /// // Create a new shield.
     /// let mut shield = Shield::new(a.load(SeqCst, &guard), &guard).unwrap();
@@ -538,14 +540,14 @@ impl<T> Shield<T> {
     /// # Examples
     ///
     /// ```
-    /// use crossbeam_cbr_epoch::{self as epoch, Atomic, Shared, Shield};
+    /// use crossbeam_cbr_epoch::pebr_backend::{self as epoch, Atomic, Shared, Shield};
     /// use std::sync::atomic::Ordering::SeqCst;
     ///
     /// // Create a heap-allocated number.
     /// let a = Atomic::new(1234);
     ///
     /// // Pin the current thread.
-    /// let guard = epoch::pin();
+    /// let guard = epoch::pin().unwrap();
     ///
     /// // Create a new shield.
     /// let mut shield = Shield::new(a.load(SeqCst, &guard), &guard).unwrap();
@@ -572,14 +574,14 @@ impl<T> Shield<T> {
     /// # Examples
     ///
     /// ```
-    /// use crossbeam_cbr_epoch::{self as epoch, Atomic, Shared, Shield};
+    /// use crossbeam_cbr_epoch::pebr_backend::{self as epoch, Atomic, Shared, Shield};
     /// use std::sync::atomic::Ordering::SeqCst;
     ///
     /// // Create a heap-allocated number.
     /// let a = Atomic::new(777);
     ///
     /// // Pin the current thread.
-    /// let guard = epoch::pin();
+    /// let guard = epoch::pin().unwrap();
     ///
     /// // Create a new shield.
     /// let mut shield = Shield::null(&guard);
@@ -615,14 +617,14 @@ impl<T> Shield<T> {
     /// # Examples
     ///
     /// ```
-    /// use crossbeam_cbr_epoch::{self as epoch, Atomic, Shared, Shield, Pointer};
+    /// use crossbeam_cbr_epoch::pebr_backend::{self as epoch, Atomic, Shared, Shield, Pointer};
     /// use std::sync::atomic::Ordering::SeqCst;
     ///
     /// // Create a heap-allocated number.
     /// let a = Atomic::new(777);
     ///
     /// // Pin the current thread.
-    /// let guard = epoch::pin();
+    /// let guard = epoch::pin().unwrap();
     ///
     /// // Create a new shield.
     /// let mut shield: Shield<usize> = Shield::null(&guard);
@@ -687,14 +689,14 @@ impl<T> Shield<T> {
     /// # Examples
     ///
     /// ```
-    /// use crossbeam_cbr_epoch::{self as epoch, Atomic, Shared, Shield};
+    /// use crossbeam_cbr_epoch::pebr_backend::{self as epoch, Atomic, Shared, Shield};
     /// use std::sync::atomic::Ordering::SeqCst;
     ///
     /// // Create a heap-allocated number.
     /// let a = Atomic::new(777);
     ///
     /// // Pin the current thread.
-    /// let guard = epoch::pin();
+    /// let guard = epoch::pin().unwrap();
     ///
     /// // Create a shield to the heap-allocated object.
     /// let mut shield = Shield::new(a.load(SeqCst, &guard), &guard).unwrap();

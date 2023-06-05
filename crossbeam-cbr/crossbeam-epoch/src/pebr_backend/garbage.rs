@@ -1,7 +1,9 @@
 use arrayvec::ArrayVec;
 
-use crate::bloom_filter::BloomFilter;
-use crate::deferred::{Deferred, DeferredWithHazard};
+use crate::pebr_backend::{
+    bloom_filter::BloomFilter,
+    deferred::{Deferred, DeferredWithHazard},
+};
 
 /// Maximum number of objects a bag can contain.
 #[cfg(not(feature = "sanitize"))]
@@ -114,7 +116,7 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     use super::*;
-    use crate::deferred::Deferred;
+    use crate::pebr_backend::deferred::Deferred;
 
     #[test]
     fn check_bag() {

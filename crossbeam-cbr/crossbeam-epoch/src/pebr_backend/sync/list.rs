@@ -7,7 +7,7 @@ use core::marker::PhantomData;
 use core::mem;
 use core::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
 
-use crate::{unprotected, Atomic, EpochGuard, Shared, Shield, ShieldError};
+use crate::pebr_backend::{unprotected, Atomic, EpochGuard, Shared, Shield, ShieldError};
 
 /// An entry in a linked list.
 ///
@@ -392,7 +392,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Collector, Owned};
+    use crate::pebr_backend::{Collector, Owned};
     use crossbeam_utils::thread;
     use std::sync::Barrier;
 
@@ -416,7 +416,7 @@ mod tests {
     fn insert() {
         let collector = Collector::new();
         let handle = collector.register();
-        let guard = handle.pin();
+        let guard = handle.pin().unwrap();
 
         let l: List<Entry> = List::new();
 
@@ -458,7 +458,7 @@ mod tests {
     fn delete() {
         let collector = Collector::new();
         let handle = collector.register();
-        let guard = handle.pin();
+        let guard = handle.pin().unwrap();
 
         let l: List<Entry> = List::new();
 
@@ -512,7 +512,7 @@ mod tests {
                     b.wait();
 
                     let handle = collector.register();
-                    let guard: EpochGuard = handle.pin();
+                    let guard: EpochGuard = handle.pin().unwrap();
                     let mut v = Vec::with_capacity(ITERS);
 
                     for _ in 0..ITERS {
@@ -534,7 +534,7 @@ mod tests {
         .unwrap();
 
         let handle = collector.register();
-        let guard = handle.pin();
+        let guard = handle.pin().unwrap();
 
         let mut pred = Shield::null(&guard);
         let mut curr = Shield::null(&guard);
@@ -557,7 +557,7 @@ mod tests {
                     b.wait();
 
                     let handle = collector.register();
-                    let mut guard: EpochGuard = handle.pin();
+                    let mut guard: EpochGuard = handle.pin().unwrap();
                     let mut v = Vec::with_capacity(ITERS);
 
                     for _ in 0..ITERS {
@@ -605,7 +605,7 @@ mod tests {
         .unwrap();
 
         let handle = collector.register();
-        let guard = handle.pin();
+        let guard = handle.pin().unwrap();
 
         let mut pred = Shield::null(&guard);
         let mut curr = Shield::null(&guard);

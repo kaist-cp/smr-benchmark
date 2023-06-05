@@ -45,18 +45,19 @@ use core::sync::atomic::{self, AtomicUsize, Ordering};
 use crossbeam_utils::CachePadded;
 use membarrier;
 
-use crate::atomic::{Atomic, Owned, Shared};
-use crate::bloom_filter::BloomFilter;
-use crate::collector::{Collector, LocalHandle};
-use crate::garbage::{Bag, Garbage};
-use crate::guard::{unprotected, EpochGuard};
-use crate::hazard::{HazardSet, Shield, ShieldError};
-use crate::sync::list::{repeat_iter, Entry, IsElement, IterError, List};
-use crate::sync::stack::Stack;
-use crate::tag::*;
+use crate::pebr_backend::{
+    atomic::{Atomic, Owned, Shared},
+    bloom_filter::BloomFilter,
+    collector::{Collector, LocalHandle},
+    garbage::{Bag, Garbage},
+    guard::{unprotected, EpochGuard},
+    hazard::{HazardSet, Shield, ShieldError},
+    recovery,
+    sync::list::{repeat_iter, Entry, IsElement, IterError, List},
+    sync::stack::Stack,
+    tag::*,
+};
 use nix::sys::pthread::{pthread_self, Pthread};
-
-use crate::recovery;
 
 #[allow(missing_docs)]
 pub static GLOBAL_GARBAGE_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -566,8 +567,10 @@ impl Local {
     }
 
     /// Pins the `Local`.
+    ///
+    /// If there is an another pinned `Guard` for this thread, returns `None`.
     #[inline]
-    pub fn pin(&self) -> EpochGuard {
+    pub fn pin(&self) -> Option<EpochGuard> {
         let guard = EpochGuard { local: self };
 
         let guard_count = self.guard_count.get();
@@ -663,9 +666,11 @@ impl Local {
                 self.prev_epoch.set(new_epoch);
                 self.advance_count.set(0);
             }
+            Some(guard)
+        } else {
+            // Creating multiple pinned `Guard` is not allowed.
+            None
         }
-
-        guard
     }
 
     /// Unpins the `Local`.
@@ -905,7 +910,7 @@ impl IsElement<Local> for Local {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use crate::deferred::Deferred;
+    use crate::pebr_backend::deferred::Deferred;
 
     #[test]
     fn check_defer() {

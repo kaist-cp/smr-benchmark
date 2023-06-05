@@ -1486,8 +1486,8 @@ fn bench_map_cbr<M: cbr::ConcurrentMap<String, String> + Send + Sync, N: Unsigne
                 let mut samples = 0usize;
                 let mut acc = 0usize;
                 let mut peak = 0usize;
-                let mut _garb_acc = 0usize;
-                let mut _garb_peak = 0usize;
+                let mut garb_acc = 0usize;
+                let mut garb_peak = 0usize;
                 barrier.clone().wait();
 
                 let start = Instant::now();
@@ -1501,8 +1501,9 @@ fn bench_map_cbr<M: cbr::ConcurrentMap<String, String> + Send + Sync, N: Unsigne
                         acc += allocated;
                         peak = max(peak, allocated);
 
-                        // TODO: measure garbages for CDRC
-                        // (Is it reasonable to measure garbages for reference counting?)
+                        let garbages = crossbeam_cbr::GLOBAL_GARBAGE_COUNT.load(Ordering::Acquire);
+                        garb_acc += garbages;
+                        garb_peak = max(garb_peak, garbages);
 
                         next_sampling = now + config.sampling_period;
                     }
@@ -1511,7 +1512,7 @@ fn bench_map_cbr<M: cbr::ConcurrentMap<String, String> + Send + Sync, N: Unsigne
 
                 if config.sampling {
                     mem_sender
-                        .send((peak, acc / samples, _garb_peak, _garb_acc / samples))
+                        .send((peak, acc / samples, garb_peak, garb_acc / samples))
                         .unwrap();
                 } else {
                     mem_sender.send((0, 0, 0, 0)).unwrap();

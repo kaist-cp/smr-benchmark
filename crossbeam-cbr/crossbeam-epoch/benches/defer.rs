@@ -4,14 +4,14 @@ extern crate crossbeam_cbr_epoch as epoch;
 extern crate crossbeam_utils as utils;
 extern crate test;
 
-use epoch::Owned;
+use epoch::pebr_backend::Owned;
 use test::Bencher;
 use utils::thread::scope;
 
 #[bench]
 fn single_alloc_defer_free(b: &mut Bencher) {
     b.iter(|| {
-        let guard = &epoch::pin();
+        let guard = &epoch::pin().unwrap();
         let p = Owned::new(1).into_shared(guard);
         unsafe {
             guard.defer_destroy(p);
@@ -22,7 +22,7 @@ fn single_alloc_defer_free(b: &mut Bencher) {
 #[bench]
 fn single_defer(b: &mut Bencher) {
     b.iter(|| {
-        let guard = &epoch::pin();
+        let guard = &epoch::pin().unwrap();
         guard.defer(move || ());
     });
 }
@@ -37,7 +37,7 @@ fn multi_alloc_defer_free(b: &mut Bencher) {
             for _ in 0..THREADS {
                 s.spawn(|_| {
                     for _ in 0..STEPS {
-                        let guard = &epoch::pin();
+                        let guard = &epoch::pin().unwrap();
                         let p = Owned::new(1).into_shared(guard);
                         unsafe {
                             guard.defer_destroy(p);
@@ -60,7 +60,7 @@ fn multi_defer(b: &mut Bencher) {
             for _ in 0..THREADS {
                 s.spawn(|_| {
                     for _ in 0..STEPS {
-                        let guard = &epoch::pin();
+                        let guard = &epoch::pin().unwrap();
                         guard.defer(move || ());
                     }
                 });

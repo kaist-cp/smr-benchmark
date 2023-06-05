@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use epoch::{Atomic, Collector, LocalHandle, Owned, Shared};
+use epoch::pebr_backend::{Atomic, Collector, LocalHandle, Owned, Shared};
 use rand::Rng;
 
 fn worker(a: Arc<Atomic<AtomicUsize>>, handle: LocalHandle) -> usize {
@@ -22,7 +22,7 @@ fn worker(a: Arc<Atomic<AtomicUsize>>, handle: LocalHandle) -> usize {
 
     while now.elapsed() < timeout {
         for _ in 0..100 {
-            let guard = &handle.pin();
+            let guard = &handle.pin().unwrap();
             guard.flush();
 
             let val = if rng.gen() {

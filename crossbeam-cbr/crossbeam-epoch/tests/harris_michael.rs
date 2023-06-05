@@ -1,8 +1,7 @@
 extern crate crossbeam_cbr_epoch;
 
 use crossbeam_cbr_epoch::{
-    rc::{Atomic, Defender, Rc, Shared, Shield},
-    EpochGuard, ReadGuard, ReadStatus, WriteResult,
+    Atomic, Defender, EpochGuard, Rc, ReadGuard, ReadStatus, Shared, Shield, WriteResult,
 };
 use std::mem;
 
@@ -381,14 +380,14 @@ where
     scope(|s| {
         for t in 0..THREADS {
             s.spawn(move || {
-                let mut handle = Handle::default(&pin());
+                let mut handle = Handle::default(&pin().unwrap());
                 let mut rng = rand::thread_rng();
                 let mut keys: Vec<i32> =
                     (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
                 keys.shuffle(&mut rng);
                 for i in keys {
                     assert!(map
-                        .insert(find, i, i.to_string(), &mut handle, &mut pin())
+                        .insert(find, i, i.to_string(), &mut handle, &mut pin().unwrap())
                         .is_ok());
                 }
             });
@@ -398,12 +397,12 @@ where
     scope(|s| {
         for t in 0..(THREADS / 2) {
             s.spawn(move || {
-                let mut handle = Handle::default(&pin());
+                let mut handle = Handle::default(&pin().unwrap());
                 let mut rng = rand::thread_rng();
                 let mut keys: Vec<i32> =
                     (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
                 keys.shuffle(&mut rng);
-                let mut guard = pin();
+                let mut guard = pin().unwrap();
                 for i in keys {
                     assert!(map.remove(find, &i, &mut handle, &mut guard));
                     assert_eq!(i.to_string(), handle.0.curr.as_ref().unwrap().value);
@@ -417,12 +416,12 @@ where
     scope(|s| {
         for t in (THREADS / 2)..THREADS {
             s.spawn(move || {
-                let mut handle = Handle::default(&pin());
+                let mut handle = Handle::default(&pin().unwrap());
                 let mut rng = rand::thread_rng();
                 let mut keys: Vec<i32> =
                     (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
                 keys.shuffle(&mut rng);
-                let mut guard = pin();
+                let mut guard = pin().unwrap();
                 for i in keys {
                     assert!(map.get(find, &i, &mut handle, &mut guard));
                     assert_eq!(i.to_string(), handle.0.curr.as_ref().unwrap().value);

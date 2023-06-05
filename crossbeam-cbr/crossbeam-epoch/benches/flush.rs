@@ -26,7 +26,7 @@ fn single_flush(b: &mut Bencher) {
         }
 
         start.wait();
-        b.iter(|| epoch::pin().flush());
+        b.iter(|| epoch::pin().unwrap().flush());
         end.wait();
     })
     .unwrap();
@@ -42,7 +42,7 @@ fn multi_flush(b: &mut Bencher) {
             for _ in 0..THREADS {
                 s.spawn(|_| {
                     for _ in 0..STEPS {
-                        let guard = &epoch::pin();
+                        let guard = &epoch::pin().unwrap();
                         guard.flush();
                     }
                 });
