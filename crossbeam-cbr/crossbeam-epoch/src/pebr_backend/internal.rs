@@ -210,9 +210,12 @@ impl Global {
 
         for _ in 0..steps {
             if let Some(mut bag) = bags.try_pop(guard)? {
+                // Subtract the size of the popped bag.
+                // Note that unreclaimed garbage will be added in `push_bag`.
+                GLOBAL_GARBAGE_COUNT.fetch_sub(bag.len(), Ordering::AcqRel);
+
                 // Disposes the garbages (except for hazard pointers) in the bag popped from the
                 // global queue.
-                GLOBAL_GARBAGE_COUNT.fetch_sub(bag.len(), Ordering::AcqRel);
                 bag.dispose(summary);
 
                 // If the bag is not empty (due to hazard pointers), push it back to the global
