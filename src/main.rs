@@ -586,6 +586,10 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 config,
                 PrefillStrategy::Decreasing,
             ),
+            DS::HMList => bench_map_cbr::<cbr::list::read::HMList<String, String>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
             _ => panic!("Unsupported data structure for CBR with naive reference counting"),
         },
         MM::CBR_READ_LOOP => match config.ds {

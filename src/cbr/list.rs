@@ -364,6 +364,58 @@ where
         }
     }
 
+    pub fn find_harris_michael_read(
+        &self,
+        key: &K,
+        handle: &mut Handle<K, V>,
+        guard: &mut EpochGuard,
+    ) {
+        let cursor = &mut handle.0;
+        guard.read(cursor, |guard| {
+            let mut cursor = ReadCursor::new(&self.head, guard);
+            cursor.found = loop {
+                let curr_node = match cursor.curr.as_ref(guard) {
+                    Some(node) => node,
+                    None => break false,
+                };
+                let next = curr_node.next.load(guard);
+
+                if next.tag() != 0 {
+                    let next = next.with_tag(0);
+                    guard.write::<_, [Shield<Node<K, V>>; 3]>(
+                        [next, cursor.prev, cursor.curr],
+                        |[next, prev, curr], guard| {
+                            if prev
+                                .as_ref()
+                                .unwrap()
+                                .next
+                                .try_compare_exchange(curr, next, guard)
+                                .is_ok()
+                            {
+                                return WriteResult::Finished;
+                            } else {
+                                return WriteResult::RestartRead;
+                            }
+                        },
+                    );
+                    cursor.curr = next;
+                    continue;
+                }
+
+                match curr_node.key.cmp(key) {
+                    std::cmp::Ordering::Less => {
+                        cursor.prev = cursor.curr;
+                        cursor.curr = next;
+                        continue;
+                    }
+                    std::cmp::Ordering::Equal => break true,
+                    std::cmp::Ordering::Greater => break false,
+                }
+            };
+            cursor
+        });
+    }
+
     pub fn find_harris_michael_read_loop(
         &self,
         key: &K,
@@ -648,9 +700,51 @@ pub mod read {
         }
     }
 
+    pub struct HMList<K, V> {
+        inner: List<K, V>,
+    }
+
+    impl<K, V> ConcurrentMap<K, V> for HMList<K, V>
+    where
+        K: Default + Ord + 'static,
+        V: Default + 'static,
+    {
+        type Handle = Handle<K, V>;
+
+        fn new() -> Self {
+            Self { inner: List::new() }
+        }
+
+        fn get(&self, key: &K, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
+            self.inner
+                .get(List::find_harris_michael_read, key, handle, guard)
+        }
+
+        fn insert(
+            &self,
+            key: K,
+            value: V,
+            handle: &mut Self::Handle,
+            guard: &mut EpochGuard,
+        ) -> bool {
+            self.inner
+                .insert(List::find_harris_michael_read, key, value, handle, guard)
+        }
+
+        fn remove(&self, key: &K, handle: &mut Self::Handle, guard: &mut EpochGuard) -> bool {
+            self.inner
+                .remove(List::find_harris_michael_read, key, handle, guard)
+        }
+    }
+
     #[test]
     fn smoke_h_list() {
         crate::cbr::concurrent_map::tests::smoke::<HList<i32, String>>();
+    }
+
+    #[test]
+    fn smoke_hm_list() {
+        crate::cbr::concurrent_map::tests::smoke::<HMList<i32, String>>();
     }
 }
 
