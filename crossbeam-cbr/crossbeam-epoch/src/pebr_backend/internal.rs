@@ -569,6 +569,22 @@ impl Local {
     /// Pins the `Local`.
     ///
     /// If there is an another pinned `Guard` for this thread, returns `None`.
+    ///
+    /// Note that creating a new pinned guard in a read phase (not in write phase) is not allowed.
+    ///
+    /// ```should_panic
+    /// use crossbeam_cbr_epoch as epoch;
+    ///
+    /// let mut guard = epoch::pin();
+    /// guard.read_loop(&mut (), &mut (), |_| (), |_, _| {
+    ///     // Creating a new guard in a read phase is dangerous,
+    ///     // as it may be forgotten if a ejection and `longjmp` occur.
+    ///
+    ///     /* ...farewell, cruel world! */
+    ///     let mut guard_inner = epoch::pin();
+    ///     epoch::ReadStatus::Finished
+    /// });
+    /// ```
     #[inline]
     pub fn pin(&self) -> EpochGuard {
         let guard = EpochGuard { local: self };
@@ -666,6 +682,8 @@ impl Local {
                 self.prev_epoch.set(new_epoch);
                 self.advance_count.set(0);
             }
+        } else if recovery::is_restartable() {
+            panic!("Attempted to pin another guard in a restartable read phase.");
         }
 
         guard

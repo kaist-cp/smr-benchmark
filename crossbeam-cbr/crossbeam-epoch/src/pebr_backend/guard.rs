@@ -472,6 +472,25 @@ impl EpochGuard {
     /// Conducts a read phase, and stores a result with protecting with hazard pointers.
     ///
     /// It takes a mutable borrow from `EpochGuard`. This prevents accessing `EpochGuard` in a read phase.
+    ///
+    /// Note that you cannot make a nested read phase, because creating a new pinned guard is not allowed
+    /// in a restartable read phase. 
+    ///
+    /// ```should_panic
+    /// use crossbeam_cbr_epoch as epoch;
+    ///
+    /// let mut guard = epoch::pin();
+    /// guard.read_loop(&mut (), &mut (), |_| (), |_, _| {
+    ///     // Creating a new guard in a read phase is dangerous,
+    ///     // as it may be forgotten if a ejection and `longjmp` occur.
+    ///     let mut guard_inner = epoch::pin();
+    ///     guard_inner.read_loop(&mut (), &mut (), |_| (), |_, _| {
+    ///         /* ...farewell, cruel world! */
+    ///         epoch::ReadStatus::Finished
+    ///     });
+    ///     epoch::ReadStatus::Finished
+    /// });
+    /// ```
     #[inline(never)]
     pub fn read<'r, F, D>(&mut self, defender: &mut D, f: F)
     where
@@ -563,6 +582,24 @@ impl EpochGuard {
     /// it avoids a starvation on crash-intensive workloads.
     ///
     /// It takes a mutable borrow from `EpochGuard`. This prevents accessing `EpochGuard` in a read phase.
+    ///
+    /// Note that a nested read phase is not allowed.
+    ///
+    /// ```should_panic
+    /// use crossbeam_cbr_epoch as epoch;
+    ///
+    /// let mut guard = epoch::pin();
+    /// guard.read_loop(&mut (), &mut (), |_| (), |_, _| {
+    ///     // Creating a new guard in a read phase is dangerous,
+    ///     // as it may be forgotten if a ejection and `longjmp` occur.
+    ///     let mut guard_inner = epoch::pin();
+    ///     guard_inner.read_loop(&mut (), &mut (), |_| (), |_, _| {
+    ///         /* ...farewell, cruel world! */
+    ///         epoch::ReadStatus::Finished
+    ///     });
+    ///     epoch::ReadStatus::Finished
+    /// });
+    /// ```
     #[inline(never)]
     pub fn read_loop<'r, F1, F2, D>(
         &mut self,
@@ -982,4 +1019,21 @@ pub trait Defender {
 
     /// Resets the pointer to `null`, allowing the previous memory block to be reclaimed.
     fn release(&mut self);
+}
+
+// An empty `Defender`.
+impl Defender for () {
+    type Read<'r> = ();
+
+    fn default(_: &EpochGuard) -> Self {
+        ()
+    }
+
+    unsafe fn defend_unchecked(&mut self, _: &Self::Read<'_>) {}
+
+    unsafe fn as_read<'r>(&mut self) -> Self::Read<'r> {
+        ()
+    }
+
+    fn release(&mut self) {}
 }
