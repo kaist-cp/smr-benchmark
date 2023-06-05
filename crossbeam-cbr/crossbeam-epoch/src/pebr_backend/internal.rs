@@ -40,7 +40,7 @@ use core::cmp;
 use core::mem::{self, ManuallyDrop};
 use core::ops::Deref;
 use core::ptr;
-use core::sync::atomic::{self, AtomicUsize, Ordering};
+use core::sync::atomic::{self, compiler_fence, AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
 use membarrier;
@@ -587,6 +587,13 @@ impl Local {
     /// ```
     #[inline]
     pub fn pin(&self) -> EpochGuard {
+        // Ensures that we are not creating a guard in a restartable read phase.
+        // This should be checked before incrementing `guard_count`.
+        if recovery::is_restartable() {
+            panic!("Attempted to pin another guard in a restartable read phase.");
+        }
+        compiler_fence(Ordering::SeqCst);
+
         let guard = EpochGuard { local: self };
 
         let guard_count = self.guard_count.get();

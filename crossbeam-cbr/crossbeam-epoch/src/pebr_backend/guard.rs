@@ -474,7 +474,7 @@ impl EpochGuard {
     /// It takes a mutable borrow from `EpochGuard`. This prevents accessing `EpochGuard` in a read phase.
     ///
     /// Note that you cannot make a nested read phase, because creating a new pinned guard is not allowed
-    /// in a restartable read phase. 
+    /// in a restartable read phase.
     ///
     /// ```should_panic
     /// use crossbeam_cbr_epoch as epoch;
