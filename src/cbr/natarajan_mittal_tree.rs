@@ -1,6 +1,6 @@
 use crossbeam_cbr::{
-    rc::{AcquiredPtr, Atomic, Defender, Rc, Shared, Shield},
-    EpochGuard, ReadGuard, ReadStatus, WriteResult,
+    AcquiredPtr, Atomic, Defender, EpochGuard, Rc, ReadGuard, ReadStatus, Shared, Shield,
+    WriteResult,
 };
 
 use std::sync::atomic::Ordering;
