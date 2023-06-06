@@ -38,12 +38,11 @@ check:
     - rustup component add rustfmt clippy
     - cargo install cargo-audit
   script:
-    # TODO(@jeonghyeon): uncomment after adding documents and resolving warnings
     # TODO(@jeonghyeon): change the working directory into cbr
-    # - cargo check --verbose
+    - cargo check --verbose
     - cargo fmt -- --check
     # - cargo clippy -- -D warnings
-    # - cargo test -- --nocapture
+    - cargo test -- --nocapture
     # - cargo audit
 
 debug:

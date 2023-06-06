@@ -969,6 +969,14 @@ impl WriteGuard {
 
 /// A common trait for `Guard` types which allow mutating shared memory locations.
 ///
+/// `EpochGuard` and `ReadGuard` implement this trait.
+pub trait Readable {}
+
+impl Readable for EpochGuard {}
+impl Readable for ReadGuard {}
+
+/// A common trait for `Guard` types which allow mutating shared memory locations.
+///
 /// `EpochGuard` and `WriteGuard` implement this trait.
 pub trait Writable {
     /// Stores a function so that it can be executed at some point when:

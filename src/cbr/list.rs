@@ -1,8 +1,8 @@
 use crossbeam_cbr::{
-    AcquiredPtr, Atomic, Defender, EpochGuard, Rc, ReadGuard, ReadStatus, Shared, Shield,
-    WriteResult,
+    AcquiredPtr, Atomic, Defender, EpochGuard, GeneralPtr, Rc, ReadGuard, ReadStatus, Shared,
+    Shield, WriteResult,
 };
-use std::mem;
+use std::{mem, sync::atomic::Ordering};
 
 use super::concurrent_map::Shields;
 
@@ -137,13 +137,9 @@ impl<K: 'static, V: 'static> Defender for Cursor<K, V> {
 
 impl<K, V> Cursor<K, V> {
     fn initialize(&mut self, head: &Atomic<Node<K, V>>, guard: &mut EpochGuard) {
-        head.defend_with(&mut self.prev, guard);
-        self.prev
-            .as_ref()
-            .unwrap()
-            .next
-            .defend_with(&mut self.curr, guard);
-        self.curr.copy_to(&mut self.prev_next, guard);
+        self.prev.defend(head, guard);
+        self.curr.defend(&self.prev.as_ref().unwrap().next, guard);
+        self.prev_next.copy_from(&self.curr, guard);
         self.found = false;
     }
 }
@@ -151,8 +147,12 @@ impl<K, V> Cursor<K, V> {
 impl<'r, K: Ord, V> ReadCursor<'r, K, V> {
     /// Creates a cursor.
     fn new(head: &'r Atomic<Node<K, V>>, guard: &'r ReadGuard) -> Self {
-        let prev = head.load(guard);
-        let curr = prev.as_ref(guard).unwrap().next.load(guard);
+        let prev = head.load(Ordering::Relaxed, guard);
+        let curr = prev
+            .as_ref(guard)
+            .unwrap()
+            .next
+            .load(Ordering::Acquire, guard);
         Self {
             prev,
             prev_next: curr,
@@ -183,7 +183,7 @@ where
                     None => break false,
                 };
 
-                curr_node.next.defend_with(&mut cursor.next, guard);
+                cursor.next.defend(&curr_node.next, guard);
                 if cursor.next.tag() > 0 {
                     cursor.next.set_tag(0);
                     mem::swap(&mut cursor.next, &mut cursor.curr);
@@ -193,7 +193,7 @@ where
                 match curr_node.key.cmp(key) {
                     std::cmp::Ordering::Less => {
                         mem::swap(&mut cursor.prev, &mut cursor.curr);
-                        cursor.next.copy_to(&mut cursor.prev_next, guard);
+                        cursor.prev_next.copy_from(&cursor.next, guard);
                         mem::swap(&mut cursor.curr, &mut cursor.next);
                         continue;
                     }
@@ -209,7 +209,13 @@ where
                     .as_ref()
                     .unwrap()
                     .next
-                    .try_compare_exchange(&cursor.prev_next, &cursor.curr, guard)
+                    .try_compare_exchange(
+                        cursor.prev_next.shared(),
+                        &cursor.curr,
+                        Ordering::Release,
+                        Ordering::Relaxed,
+                        guard,
+                    )
                     .is_ok()
             {
                 return;
@@ -228,7 +234,7 @@ where
                         None => break false,
                     };
 
-                    let next = curr_node.next.load(guard);
+                    let next = curr_node.next.load(Ordering::Acquire, guard);
                     if next.tag() > 0 {
                         cursor.curr = next.with_tag(0);
                         continue;
@@ -255,7 +261,13 @@ where
                     .as_ref()
                     .unwrap()
                     .next
-                    .try_compare_exchange(&cursor.prev_next, &cursor.curr, guard)
+                    .try_compare_exchange(
+                        cursor.prev_next.shared(),
+                        &cursor.curr,
+                        Ordering::Release,
+                        Ordering::Relaxed,
+                        guard,
+                    )
                     .is_ok()
             {
                 return;
@@ -283,7 +295,7 @@ where
                         }
                     };
 
-                    let next = curr_node.next.load(guard);
+                    let next = curr_node.next.load(Ordering::Acquire, guard);
                     if next.tag() > 0 {
                         cursor.curr = next.with_tag(0);
                         return ReadStatus::Continue;
@@ -311,7 +323,13 @@ where
                     .as_ref()
                     .unwrap()
                     .next
-                    .try_compare_exchange(&cursor.prev_next, &cursor.curr, guard)
+                    .try_compare_exchange(
+                        cursor.prev_next.shared(),
+                        &cursor.curr,
+                        Ordering::Release,
+                        Ordering::Relaxed,
+                        guard,
+                    )
                     .is_ok()
             {
                 return;
@@ -333,7 +351,7 @@ where
                     Some(node) => node,
                     None => break false,
                 };
-                curr_node.next.defend_with(&mut cursor.next, guard);
+                cursor.next.defend(&curr_node.next, guard);
 
                 if cursor.next.tag() != 0 {
                     cursor.next.set_tag(0);
@@ -342,7 +360,13 @@ where
                         .as_ref()
                         .unwrap()
                         .next
-                        .try_compare_exchange(&cursor.curr, &cursor.next, guard)
+                        .try_compare_exchange(
+                            cursor.curr.shared(),
+                            &cursor.next,
+                            Ordering::Release,
+                            Ordering::Relaxed,
+                            guard,
+                        )
                         .is_err()
                     {
                         continue 'find;
@@ -378,7 +402,7 @@ where
                     Some(node) => node,
                     None => break false,
                 };
-                let next = curr_node.next.load(guard);
+                let next = curr_node.next.load(Ordering::Acquire, guard);
 
                 if next.tag() != 0 {
                     let next = next.with_tag(0);
@@ -389,7 +413,13 @@ where
                                 .as_ref()
                                 .unwrap()
                                 .next
-                                .try_compare_exchange(curr, next, guard)
+                                .try_compare_exchange(
+                                    curr.shared(),
+                                    next,
+                                    Ordering::Release,
+                                    Ordering::Relaxed,
+                                    guard,
+                                )
                                 .is_ok()
                             {
                                 return WriteResult::Finished;
@@ -436,7 +466,7 @@ where
                         }
                     };
 
-                    let mut next = curr_node.next.load(guard);
+                    let mut next = curr_node.next.load(Ordering::Acquire, guard);
                     if next.tag() != 0 {
                         next = next.with_tag(0);
                         guard.write::<_, [Shield<Node<K, V>>; 3]>(
@@ -446,7 +476,13 @@ where
                                     .as_ref()
                                     .unwrap()
                                     .next
-                                    .try_compare_exchange(curr, next, guard)
+                                    .try_compare_exchange(
+                                        curr.shared(),
+                                        next,
+                                        Ordering::Release,
+                                        Ordering::Relaxed,
+                                        guard,
+                                    )
                                     .is_ok()
                                 {
                                     return WriteResult::Finished;
@@ -501,30 +537,41 @@ where
     where
         F: Fn(&List<K, V>, &K, &mut Handle<K, V>, &mut EpochGuard),
     {
-        let mut new_node = Node::new(key, value);
+        let new_node = Rc::new(Node::new(key, value), guard);
         loop {
-            find(self, &new_node.key, handle, guard);
-            let cursor = &handle.0;
+            find(self, &new_node.as_ref().unwrap().key, handle, guard);
+            let cursor = &mut handle.0;
             if cursor.found {
                 return false;
             }
 
-            new_node.next.store(&cursor.curr, guard);
-            let new_node_ptr = Rc::from_obj(new_node, guard);
+            new_node.as_ref().unwrap().next.swap(
+                cursor.curr.to_rc(guard),
+                Ordering::Relaxed,
+                guard,
+            );
+            loop {
+                match unsafe { cursor.next.try_defend(new_node.shared(), guard) } {
+                    Ok(_) => break,
+                    Err(_) => guard.repin(),
+                }
+            }
 
             if cursor
                 .prev
                 .as_ref()
                 .unwrap()
                 .next
-                .try_compare_exchange(&cursor.curr, &new_node_ptr, guard)
+                .try_compare_exchange(
+                    cursor.curr.shared(),
+                    &cursor.next,
+                    Ordering::Release,
+                    Ordering::Relaxed,
+                    guard,
+                )
                 .is_ok()
             {
                 return true;
-            } else {
-                // Safety: As we failed to insert `new_node_ptr` into the data structure,
-                // only current thread has a reference to this node.
-                new_node = unsafe { new_node_ptr.into_owned() };
             }
         }
     }
@@ -548,18 +595,32 @@ where
             }
 
             let curr_node = cursor.curr.as_ref().unwrap();
-            curr_node.next.defend_with(&mut cursor.next, guard);
-            if cursor.next.tag() > 0
-                || !curr_node
-                    .next
-                    .try_compare_exchange_tag(&cursor.next, 1, guard)
+            cursor.next.defend(&curr_node.next, guard);
+            if cursor.next.tag() > 0 {
+                continue;
+            }
+
+            cursor.next.set_tag(1);
+            if curr_node
+                .next
+                .try_compare_exchange(
+                    cursor.next.shared().with_tag(0),
+                    &cursor.next,
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
+                    guard,
+                )
+                .is_err()
             {
                 continue;
             }
 
+            cursor.next.set_tag(0);
             let _ = cursor.prev.as_ref().unwrap().next.try_compare_exchange(
-                &cursor.curr,
+                cursor.curr.shared(),
                 &cursor.next,
+                Ordering::Release,
+                Ordering::Relaxed,
                 guard,
             );
 
