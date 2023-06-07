@@ -128,7 +128,7 @@ impl<K, V> Cursor<K, V> {
     fn initialize(&mut self, head: &Atomic<Node<K, V>>, guard: &mut EpochGuard) {
         self.prev.defend(head, guard);
         self.curr.defend(&self.prev.as_ref().unwrap().next, guard);
-        self.prev_next.copy_from(&self.curr, guard);
+        self.prev_next.defend(&self.curr, guard);
         self.found = false;
     }
 }
@@ -180,7 +180,7 @@ where
                         .as_ref()
                         .unwrap()
                         .next
-                        .try_compare_exchange(
+                        .compare_exchange(
                             cursor.curr.shared(),
                             &cursor.next,
                             Ordering::Release,
@@ -233,7 +233,7 @@ where
                                     .as_ref()
                                     .unwrap()
                                     .next
-                                    .try_compare_exchange(
+                                    .compare_exchange(
                                         curr.shared(),
                                         next,
                                         Ordering::Release,
@@ -308,19 +308,14 @@ where
                 Ordering::Relaxed,
                 guard,
             );
-            loop {
-                match unsafe { cursor.next.try_defend(new_node.shared(), guard) } {
-                    Ok(_) => break,
-                    Err(_) => guard.repin(),
-                }
-            }
+            cursor.next.defend(&new_node, guard);
 
             if cursor
                 .prev
                 .as_ref()
                 .unwrap()
                 .next
-                .try_compare_exchange(
+                .compare_exchange(
                     cursor.curr.shared(),
                     &cursor.next,
                     Ordering::Release,
@@ -361,7 +356,7 @@ where
             cursor.next.set_tag(1);
             if curr_node
                 .next
-                .try_compare_exchange(
+                .compare_exchange(
                     cursor.next.shared().with_tag(0),
                     &cursor.next,
                     Ordering::AcqRel,
@@ -374,7 +369,7 @@ where
             }
 
             cursor.next.set_tag(0);
-            let _ = cursor.prev.as_ref().unwrap().next.try_compare_exchange(
+            let _ = cursor.prev.as_ref().unwrap().next.compare_exchange(
                 cursor.curr.shared(),
                 &cursor.next,
                 Ordering::Release,

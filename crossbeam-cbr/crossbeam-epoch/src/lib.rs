@@ -47,7 +47,7 @@ cfg_if! {
         pub use self::pebr_backend::{
             collector::{Collector, LocalHandle},
             guard::{
-                unprotected, EpochGuard, ReadGuard, WriteGuard,
+                unprotected, EpochGuard, ReadGuard, WriteGuard, Readable,
                 Writable, ReadStatus, WriteResult, Defender
             },
             recovery::{ejection_signal, set_ejection_signal},

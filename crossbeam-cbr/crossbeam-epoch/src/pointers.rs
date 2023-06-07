@@ -57,7 +57,7 @@ impl<T> Atomic<T> {
     /// Loads a `Shared` from the atomic pointer. This can be called only in a read phase.
     #[inline]
     pub fn load<'r, G: Readable>(&self, ord: Ordering, _: &'r G) -> Shared<'r, T> {
-        Shared::new(unsafe { crate::pebr_backend::Shared::from_usize(self.link.load(ord)) })
+        Shared::new(self.link.load(ord))
     }
 
     /// TODO(@jeonghyeon): Rewrite this document (return type is changed)
@@ -73,58 +73,14 @@ impl<T> Atomic<T> {
     /// **Note that this function is not wait-free, to protect and return a precise pointer on a failure.**
     /// If you don't need an actual pointer on a failure, use `try_compare_exchange` which is wait-free.
     #[inline]
-    pub fn compare_exchange<'s, G: Writable>(
-        &self,
-        expected: Shared<'_, T>,
-        desired: &Shield<T>,
-        err_shield: &'s mut Shield<T>,
-        success: Ordering,
-        failure: Ordering,
-        guard: &mut EpochGuard,
-    ) -> Result<Rc<T>, &'s mut Shield<T>> {
-        loop {
-            err_shield.defend(self, guard);
-            match self.link.compare_exchange(
-                expected.as_raw() as usize,
-                desired.as_raw() as usize,
-                success,
-                failure,
-            ) {
-                Ok(_) => {
-                    let rc = Rc::from_atomic_rmw(expected.as_untagged_raw());
-                    if let Some(desired) = unsafe { desired.as_untagged_raw().as_ref() } {
-                        desired.add_refs(1);
-                    }
-                    return Ok(rc);
-                }
-                Err(actual) => {
-                    if actual == err_shield.as_raw() {
-                        return Err(err_shield);
-                    }
-                }
-            }
-        }
-    }
-
-    /// TODO(@jeonghyeon): Rewrite this document (return type is changed)
-    ///
-    /// Stores the pointer `desired` (either `Rc` or `Shield`) into the atomic pointer if the current
-    /// value is the same as `expected`. The tag is also taken into account, so two pointers to the
-    /// same object, but with different tags, will not be considered equal.
-    ///
-    /// The return value is a result indicating whether the new pointer was written. On success a `true`
-    /// is returned. On failure a `false` is returned.
-    ///
-    /// If you need an actual pointer on a failure, use `compare_exchange`.
-    #[inline]
-    pub fn try_compare_exchange<G: Writable>(
+    pub fn compare_exchange<'r, G: Writable>(
         &self,
         expected: Shared<'_, T>,
         desired: &Shield<T>,
         success: Ordering,
         failure: Ordering,
-        _: &G,
-    ) -> Result<Rc<T>, ()> {
+        _: &'r G,
+    ) -> Result<Rc<T>, Shared<'r, T>> {
         match self.link.compare_exchange(
             expected.as_raw() as usize,
             desired.as_raw() as usize,
@@ -138,7 +94,7 @@ impl<T> Atomic<T> {
                 }
                 return Ok(rc);
             }
-            Err(_) => Err(()),
+            Err(actual) => Err(Shared::new(actual)),
         }
     }
 
@@ -148,13 +104,7 @@ impl<T> Atomic<T> {
     /// new tag to the result. Returns the previous pointer.
     #[inline]
     pub fn fetch_or<'r, G: Writable>(&self, tag: usize, ord: Ordering, _: &'r G) -> Shared<'r, T> {
-        Shared {
-            inner: unsafe {
-                crate::pebr_backend::Shared::from_usize(
-                    self.link.fetch_or(decompose_data::<Counted<T>>(tag).1, ord),
-                )
-            },
-        }
+        Shared::new(self.link.fetch_or(decompose_data::<Counted<T>>(tag).1, ord))
     }
 }
 
@@ -195,8 +145,10 @@ impl<'r, T> Copy for Shared<'r, T> {}
 
 impl<'r, T> Shared<'r, T> {
     #[inline]
-    pub(crate) fn new(ptr: crate::pebr_backend::Shared<'r, Counted<T>>) -> Self {
-        Self { inner: ptr }
+    pub(crate) fn new(ptr: usize) -> Self {
+        Self {
+            inner: unsafe { crate::pebr_backend::Shared::from_usize(ptr) },
+        }
     }
 
     /// Returns a new null shared pointer.
@@ -240,7 +192,7 @@ impl<'r, T> Shared<'r, T> {
     /// unused bits of the pointer to `T`.
     #[inline]
     pub fn with_tag(&self, tag: usize) -> Self {
-        Self::new(self.inner.with_tag(tag))
+        Self::new(self.inner.with_tag(tag).into_usize())
     }
 }
 
@@ -273,14 +225,6 @@ impl<T> Shield<T> {
             ptr: self.as_raw() as _,
             delayed_decr: false,
             _marker: PhantomData,
-        }
-    }
-
-    /// Defends a hazard pointer which is defended by the other shield.
-    #[inline]
-    pub fn copy_from(&mut self, src: &Shield<T>, guard: &mut EpochGuard) {
-        while self.inner.defend_usize(src.inner.data, guard).is_err() {
-            guard.repin();
         }
     }
 
@@ -328,33 +272,20 @@ impl<T> Shield<T> {
     ///
     /// This may fail if the current epoch is ejected. In this case, defending must be retried
     /// after repinning the epoch.
-    ///
-    /// # Safety
-    ///
-    /// Do not manually repin the epoch after loading the shared pointer and before `try_defend`.
-    /// In that scenario, `try_defend` would pass, but the defended pointer may be already reclaimed.
     #[inline]
-    pub unsafe fn try_defend<'r>(
+    pub fn try_defend<'r>(
         &mut self,
         ptr: Shared<'r, T>,
-        guard: &mut EpochGuard,
+        guard: &'r mut EpochGuard,
     ) -> Result<(), ShieldError> {
         self.inner.defend(ptr.inner, guard)
     }
 
-    /// Loads a pointer from the atomic pointer, and defend it. Tries again until it
+    /// Loads a pointer from the given pointer, and defends it. Tries again until it
     /// succeeds to defend the pointer.
     #[inline]
-    pub fn defend(&mut self, link: &Atomic<T>, guard: &mut EpochGuard) {
-        loop {
-            let ptr = link.load(Ordering::Acquire, guard);
-            if self
-                .inner
-                .defend_usize(ptr.inner.into_usize(), guard)
-                .is_ok()
-            {
-                return;
-            }
+    pub fn defend<P: GeneralPtr<T>>(&mut self, ptr: &P, guard: &mut EpochGuard) {
+        while self.inner.defend_usize(ptr.as_raw(), guard).is_err() {
             guard.repin();
         }
     }
@@ -489,7 +420,7 @@ impl<T> Drop for Rc<T> {
 
 /// A general pointer trait.
 ///
-/// The main three pointer types implements this trait: `Shared`, `Shield` and `Rc`.
+/// The main four pointer types implements this trait: `Atomic`, `Shared`, `Shield` and `Rc`.
 pub trait GeneralPtr<T> {
     /// Gets a `usize` representing a tagged pointer value.
     ///
@@ -503,6 +434,13 @@ pub trait GeneralPtr<T> {
         decompose_data::<Counted<T>>(self.as_raw() as _)
             .0
             .cast_const()
+    }
+}
+
+impl<T> GeneralPtr<T> for Atomic<T> {
+    #[inline]
+    fn as_raw(&self) -> usize {
+        self.link.load(Ordering::Acquire)
     }
 }
 
@@ -549,9 +487,7 @@ impl<T> AcquiredPtr<T> for Shield<T> {
 impl<T> AcquiredPtr<T> for Rc<T> {
     #[inline]
     fn shared<'p>(&'p self) -> Shared<'p, T> {
-        Shared {
-            inner: unsafe { crate::pebr_backend::Shared::from_usize(self.ptr) },
-        }
+        Shared::new(self.ptr)
     }
 }
 
@@ -570,9 +506,7 @@ impl<T: 'static> Defender for Shield<T> {
 
     #[inline]
     unsafe fn as_read<'r>(&mut self) -> Self::Read<'r> {
-        Shared {
-            inner: crate::pebr_backend::Shared::from_usize(self.inner.shared().as_raw() as _),
-        }
+        Shared::new(self.inner.shared().into_usize())
     }
 
     #[inline]
@@ -608,9 +542,7 @@ macro_rules! impl_defender_for_array {(
             unsafe fn as_read<'r>(&mut self) -> Self::Read<'r> {
                 let mut result: [MaybeUninit<Shared<'r, T>>; $N] = zeroed();
                 for (shield, shared) in self.iter().zip(result.iter_mut()) {
-                    shared.write(Shared {
-                        inner: crate::pebr_backend::Shared::from_usize(shield.inner.shared().as_raw() as _)
-                    });
+                    shared.write(Shared::new(shield.inner.shared().into_usize()));
                 }
                 transmute(result)
             }
