@@ -12,7 +12,7 @@ bitflags! {
     /// A remove operation is registered by marking the corresponding edges: the (parent, target)
     /// edge is _flagged_ and the (parent, sibling) edge is _tagged_.
     struct Marks: usize {
-        const STOP = 1usize.wrapping_shl(2);
+        const INVALID = 1usize.wrapping_shl(2);
         const FLAG = 1usize.wrapping_shl(1);
         const TAG  = 1usize.wrapping_shl(0);
     }
@@ -20,13 +20,13 @@ bitflags! {
 
 impl Marks {
     fn new(stop: bool, flag: bool, tag: bool) -> Self {
-        (if stop { Marks::STOP } else { Marks::empty() })
+        (if stop { Marks::INVALID } else { Marks::empty() })
             | (if flag { Marks::FLAG } else { Marks::empty() })
             | (if tag { Marks::TAG } else { Marks::empty() })
     }
 
-    fn stop(self) -> bool {
-        !(self & Marks::STOP).is_empty()
+    fn invalid(self) -> bool {
+        !(self & Marks::INVALID).is_empty()
     }
 
     fn flag(self) -> bool {
@@ -352,7 +352,7 @@ where
         let s = untagged(self.r.left.load(Ordering::Relaxed));
         let s_node = unsafe { &*s };
 
-        // We doesn't have to defend with hazard pointers here
+        // no protection needed here
         record.ancestor = &self.r as *const _ as *mut _;
         record.successor = s; // TODO: should preserve tag?
 
@@ -360,7 +360,7 @@ where
 
         let leaf = untagged(s_node.left.load(Ordering::Relaxed));
 
-        // We doesn't have to defend with hazard pointers here
+        // no protection needed here
         record.parent = s;
 
         record
@@ -408,7 +408,7 @@ where
                             Direction::L => src.left.load(Ordering::Acquire),
                             Direction::R => src.right.load(Ordering::Acquire),
                         }))
-                        .stop()
+                        .invalid()
                     },
                 ) {
                     Ok(_) => break,
@@ -475,7 +475,7 @@ where
                             Direction::L => src.left.load(Ordering::Acquire),
                             Direction::R => src.right.load(Ordering::Acquire),
                         }))
-                        .stop()
+                        .invalid()
                     },
                 ) {
                     Ok(_) => break,
