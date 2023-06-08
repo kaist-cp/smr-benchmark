@@ -1,4 +1,4 @@
-use hp_pp::{tag, tagged, untagged, HazardPointer};
+use hp_pp::{tag, tagged, untagged, HazardPointer, light_membarrier};
 use hp_pp::{try_unlink, ProtectError};
 
 use crate::hp::concurrent_map::ConcurrentMap;
@@ -378,21 +378,36 @@ where
         let mut curr = unsafe { &*record.leaf }.left.load(Ordering::Relaxed);
 
         while !untagged(curr).is_null() {
-            if !prev_tag {
-                // untagged edge: advance ancestor and successor pointers
-                record
-                    .handle
-                    .ancestor_h
-                    .protect_raw(untagged(record.parent));
+            if prev_tag {
+                // only advance parent
+                //   p  O              O
+                //     / \            / \
+                // l  O   O  ==>  p  O   O
+                //   / \            / \
+                //  O   O          O   O
+                record.parent = record.leaf;
+                mem::swap(&mut record.handle.parent_h, &mut record.handle.leaf_h);
+            } else {
+                // advance parent, ancestor, successor
+                //   p  O             a  O
+                //     / \              / \
+                // l  O   O  ==>  p,s  O   O
+                //   / \              / \
+                //  O   O            O   O
+                HazardPointer::swap(&mut record.handle.ancestor_h, &mut record.handle.parent_h);
+                HazardPointer::swap(&mut record.handle.successor_h, &mut record.handle.leaf_h);
+                record.handle.parent_h.protect_raw(record.leaf);
+                light_membarrier();
+                if record.leaf != record.leaf_addr().load(Ordering::Relaxed) {
+                    return Err(());
+                }
                 record.ancestor = record.parent;
-                record.handle.successor_h.protect_raw(untagged(record.leaf));
                 record.successor = record.leaf;
                 record.successor_dir = record.leaf_dir;
+                record.parent = record.leaf;
             }
 
-            // advance parent and leaf pointers
-            mem::swap(&mut record.parent, &mut record.leaf);
-            mem::swap(&mut record.handle.parent_h, &mut record.handle.leaf_h);
+            // advance leaf
             let mut curr_base = untagged(curr);
             let parent_ref = unsafe { &*record.parent };
             loop {
