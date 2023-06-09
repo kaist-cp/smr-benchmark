@@ -14,6 +14,17 @@ use crate::{
     pin,
 };
 
+/// A result of unsuccessful `compare_exchange_rc`.
+///
+/// It returns the ownership of [`Rc`] pointer which was given as a parameter.
+#[derive(Debug)]
+pub struct CompareExchangeError<'p, T, P> {
+    /// The `desired` pointer which was given as a parameter of `compare_exchange`.
+    pub desired: P,
+    /// The actual pointer value inside the atomic pointer.
+    pub actual: Shared<'p, T>,
+}
+
 /// An reference counting atomic pointer that can be safely shared between threads.
 #[derive(Debug)]
 pub struct Atomic<T> {
@@ -45,7 +56,7 @@ impl<T> Atomic<T> {
         }
     }
 
-    /// Stores a `Rc` pointer into the atomic pointer, returning the previous `Rc`.
+    /// Stores a [`Rc`] pointer into the atomic pointer, returning the previous [`Rc`].
     #[inline]
     pub fn swap<G: Writable>(&self, ptr: Rc<T>, ord: Ordering, _: &G) -> Rc<T> {
         let old = self.link.swap(ptr.as_raw() as _, ord) as *const Counted<T>;
@@ -54,33 +65,35 @@ impl<T> Atomic<T> {
         Rc::from_atomic_rmw(old)
     }
 
-    /// Loads a `Shared` from the atomic pointer. This can be called only in a read phase.
+    /// Loads a [`Shared`] from the atomic pointer. This can be called only in a read phase.
     #[inline]
     pub fn load<'r, G: Readable>(&self, ord: Ordering, _: &'r G) -> Shared<'r, T> {
         Shared::new(self.link.load(ord))
     }
 
-    /// TODO(@jeonghyeon): Rewrite this document (return type is changed)
+    /// Stores the pointer `desired` into the atomic pointer if the current value is the
+    /// same as `expected`. The tag is also taken into account, so two pointers to the same object,
+    /// but with different tags, will not be considered equal.
     ///
-    /// Stores the pointer `desired` (either `Rc` or `Shield`) into the atomic pointer if the current
-    /// value is the same as `expected`. The tag is also taken into account, so two pointers to the
-    /// same object, but with different tags, will not be considered equal.
+    /// [`Shield`], `&Shield`, [`TaggedShield`], or [`Rc`] is allowed to be `desired`.
     ///
-    /// The return value is a result indicating whether the new pointer was written. On success a `true`
-    /// is returned. On failure the actual current value is protected with `err_shield` and a `false` is
-    /// returned.
-    ///
-    /// **Note that this function is not wait-free, to protect and return a precise pointer on a failure.**
-    /// If you don't need an actual pointer on a failure, use `try_compare_exchange` which is wait-free.
+    /// The return value is a result indicating whether the new pointer was written. On success a
+    /// [`Rc`] which is taken out from the atomic pointer is returned. On failure a
+    /// [`CompareExchangeError`] which contains an actual value from the atomic pointer and
+    /// the ownership of `desired` pointer which was given as a parameter is returned.
     #[inline]
-    pub fn compare_exchange<'r, G: Writable>(
+    pub fn compare_exchange<'p, 'r, P, G>(
         &self,
-        expected: Shared<'_, T>,
-        desired: &Shield<T>,
+        expected: Shared<'p, T>,
+        desired: P,
         success: Ordering,
         failure: Ordering,
         _: &'r G,
-    ) -> Result<Rc<T>, Shared<'r, T>> {
+    ) -> Result<Rc<T>, CompareExchangeError<'p, T, P>>
+    where
+        P: AcquiredPtr<T>,
+        G: Writable,
+    {
         match self.link.compare_exchange(
             expected.as_raw() as usize,
             desired.as_raw() as usize,
@@ -89,12 +102,19 @@ impl<T> Atomic<T> {
         ) {
             Ok(_) => {
                 let rc = Rc::from_atomic_rmw(expected.as_untagged_raw());
-                if let Some(desired) = unsafe { desired.as_untagged_raw().as_ref() } {
-                    desired.add_refs(1);
-                }
+                // Here, `into_ref_count` increment the reference count of `desired` only if `desired`
+                // is `DefendedPtr`.
+                //
+                // If `desired` is `Rc`, semantically the ownership of the reference count from
+                // `desired` is moved to `self`. Because of this reason, we must skip decrementing
+                // the reference count of `desired`.
+                desired.into_ref_count();
                 return Ok(rc);
             }
-            Err(actual) => Err(Shared::new(actual)),
+            Err(actual) => Err(CompareExchangeError {
+                desired,
+                actual: Shared::new(actual),
+            }),
         }
     }
 
@@ -125,9 +145,9 @@ impl<T> Drop for Atomic<T> {
 ///
 /// This pointer is valid for use only during the lifetime `'r`.
 ///
-/// This is the most basic shared pointer type, which can be loaded directly from `Atomic`.
-/// Also it is worth noting that any protected pointer types like `Shield` and `Rc` can
-/// create a `Shared` which has a lifetime parameter of the original pointer.
+/// This is the most basic shared pointer type, which can be loaded directly from [`Atomic`].
+/// Also it is worth noting that any protected pointer types like [`Shield`] and [`Rc`] can
+/// create a [`Shared`] which has a lifetime parameter of the original pointer.
 #[derive(Debug)]
 pub struct Shared<'r, T> {
     inner: crate::pebr_backend::Shared<'r, Counted<T>>,
@@ -140,6 +160,14 @@ impl<'r, T> Clone for Shared<'r, T> {
         }
     }
 }
+
+impl<'r, T> PartialEq<Shared<'r, T>> for Shared<'r, T> {
+    fn eq(&self, other: &Shared<'r, T>) -> bool {
+        self.inner == other.inner
+    }
+}
+
+impl<'r, T> Eq for Shared<'r, T> {}
 
 impl<'r, T> Copy for Shared<'r, T> {}
 
@@ -169,8 +197,8 @@ impl<'r, T> Shared<'r, T> {
     ///
     /// Returns `None` if the pointer is null, or else a reference to the object wrapped in `Some`.
     ///
-    /// It is possible to directly dereference a `Shared` if and only if the current context is
-    /// in a read phase which can be started by `EpochGuard::read` or `EpochGuard::read_loop`.
+    /// It is possible to directly dereference a [`Shared`] if and only if the current context is
+    /// in a read phase which can be started by `read` and `read_loop` method or [`EpochGuard`].
     #[inline]
     pub fn as_ref(&self, _: &ReadGuard) -> Option<&'r T> {
         unsafe { self.inner.as_ref().map(|cnt| cnt.data()) }
@@ -207,7 +235,7 @@ pub struct Shield<T> {
 unsafe impl<T> Sync for Shield<T> {}
 
 impl<T> Shield<T> {
-    /// Returns a new null `Shield`.
+    /// Returns a new null [`Shield`].
     #[inline]
     pub fn null(guard: &EpochGuard) -> Self {
         Self {
@@ -215,7 +243,7 @@ impl<T> Shield<T> {
         }
     }
 
-    /// Constructs a new `Rc` from `Shield`.
+    /// Constructs a new [`Rc`] from [`Shield`].
     #[inline]
     pub fn to_rc<G: Writable>(&self, _: &G) -> Rc<T> {
         if let Some(counted) = unsafe { self.as_untagged_raw().as_ref() } {
@@ -236,6 +264,19 @@ impl<T> Shield<T> {
         unsafe { self.inner.as_ref().map(|cnt| cnt.data()) }
     }
 
+    /// Converts the pointer to a mutable reference.
+    ///
+    /// Returns `None` if the pointer is null, or else a reference to the object wrapped in `Some`.
+    #[inline]
+    pub fn as_mut<'s>(&'s self) -> Option<&'s mut T> {
+        unsafe {
+            self.as_untagged_raw()
+                .cast_mut()
+                .as_mut()
+                .map(|cnt| cnt.data_mut())
+        }
+    }
+
     /// Returns `true` if the defended pointer is null.
     #[inline]
     pub fn is_null(&self) -> bool {
@@ -246,6 +287,13 @@ impl<T> Shield<T> {
     #[inline]
     pub fn tag(&self) -> usize {
         self.inner.tag()
+    }
+
+    /// Returns the same pointer, but wrapped with `tag`. `tag` is truncated to be fit into the
+    /// unused bits of the pointer to `T`.
+    #[inline]
+    pub fn with_tag<'s>(&'s self, tag: usize) -> TaggedShield<'s, T> {
+        TaggedShield { inner: self, tag }
     }
 
     /// Changes the tag bits to `tag`. `tag` is truncated to be fit into the
@@ -268,7 +316,7 @@ impl<T> Shield<T> {
     /// Defends a hazard pointer.
     ///
     /// This method registers a shared pointer as hazardous so that other threads will not destroy
-    /// the pointer, and returns a `Shield` pointer as a handle for the registration.
+    /// the pointer, and returns a [`Shield`] pointer as a handle for the registration.
     ///
     /// This may fail if the current epoch is ejected. In this case, defending must be retried
     /// after repinning the epoch.
@@ -276,7 +324,7 @@ impl<T> Shield<T> {
     pub fn try_defend<'r>(
         &mut self,
         ptr: Shared<'r, T>,
-        guard: &'r mut EpochGuard,
+        guard: &'r EpochGuard,
     ) -> Result<(), ShieldError> {
         self.inner.defend(ptr.inner, guard)
     }
@@ -297,6 +345,27 @@ impl<T> Drop for Shield<T> {
     }
 }
 
+/// A reference of a [`Shield`] with a overwriting tag value.
+///
+/// # Motivation
+///
+/// `with_tag` for [`Rc`] and [`Shared`] can be implemented by taking the ownership of the original
+/// pointer and returning the same one but tagged with the given value. However, for [`Shield`],
+/// taking ownership is not a good option because [`Shield`]s usually live as fields of [`Defender`]
+/// and we cannot take partial ownership in most cases.
+///
+/// Before proposing [`TaggedShield`], we just provided `set_tag` only for a [`Shield`], which changes
+/// a tag value only. Unfortunately, it was not easy to use because there were many circumstances
+/// where we just want to make a temporary tagged operand for atomic operators.
+///
+/// For this reason, a method to easily produce a tagged [`Shield`] pointer for a temporary use is
+/// needed.
+#[derive(Debug)]
+pub struct TaggedShield<'s, T> {
+    inner: &'s Shield<T>,
+    tag: usize,
+}
+
 /// A pointer to an shared object, which is protected by a reference count.
 #[derive(Debug)]
 pub struct Rc<T> {
@@ -314,7 +383,7 @@ unsafe impl<T> Send for Rc<T> {}
 unsafe impl<T> Sync for Rc<T> {}
 
 impl<T> Rc<T> {
-    /// Constructs a new `Rc` by allocating the given object on the heap.
+    /// Constructs a new [`Rc`] by allocating the given object on the heap.
     #[inline]
     pub fn new<G: Writable>(obj: T, _: &G) -> Self {
         Self {
@@ -324,9 +393,9 @@ impl<T> Rc<T> {
         }
     }
 
-    /// Constructs a `Rc` which delays decrementing its reference count on `drop`.
+    /// Constructs a [`Rc`] which delays decrementing its reference count on `drop`.
     ///
-    /// If the reference count originated from `Atomic`,
+    /// If the reference count originated from [`Atomic`],
     /// we need to decrement its reference count with a delayed manner.
     pub(crate) fn from_atomic_rmw(ptr: *const Counted<T>) -> Self {
         Self {
@@ -336,7 +405,7 @@ impl<T> Rc<T> {
         }
     }
 
-    /// Returns a new null `Rc`.
+    /// Returns a new null [`Rc`].
     #[inline]
     pub fn null() -> Self {
         Self {
@@ -382,6 +451,19 @@ impl<T> Rc<T> {
         unsafe { self.as_untagged_raw().as_ref().map(|cnt| cnt.data()) }
     }
 
+    /// Converts the pointer to a mutable reference.
+    ///
+    /// Returns `None` if the pointer is null, or else a reference to the object wrapped in `Some`.
+    #[inline]
+    pub fn as_mut<'s>(&'s self) -> Option<&'s mut T> {
+        unsafe {
+            self.as_untagged_raw()
+                .cast_mut()
+                .as_mut()
+                .map(|cnt| cnt.data_mut())
+        }
+    }
+
     /// Returns the tag stored within the pointer.
     #[inline]
     pub fn tag(&self) -> usize {
@@ -420,7 +502,7 @@ impl<T> Drop for Rc<T> {
 
 /// A general pointer trait.
 ///
-/// The main four pointer types implements this trait: `Atomic`, `Shared`, `Shield` and `Rc`.
+/// All pointer types implements this trait: [`Atomic`], [`Shared`], [`Shield`], [`TaggedShield`] and [`Rc`].
 pub trait GeneralPtr<T> {
     /// Gets a `usize` representing a tagged pointer value.
     ///
@@ -458,6 +540,20 @@ impl<T> GeneralPtr<T> for Shield<T> {
     }
 }
 
+impl<T> GeneralPtr<T> for &Shield<T> {
+    #[inline]
+    fn as_raw(&self) -> usize {
+        self.inner.data
+    }
+}
+
+impl<'s, T> GeneralPtr<T> for TaggedShield<'s, T> {
+    #[inline]
+    fn as_raw(&self) -> usize {
+        data_with_tag::<Counted<T>>(self.inner.inner.data, self.tag)
+    }
+}
+
 impl<T> GeneralPtr<T> for Rc<T> {
     #[inline]
     fn as_raw(&self) -> usize {
@@ -467,12 +563,22 @@ impl<T> GeneralPtr<T> for Rc<T> {
 
 /// An aquired pointer trait.
 ///
-/// This represents pointers which are protected by other than epoch.
+/// This represents a pointer which is protected by other than epoch.
 ///
-/// The two pointer types implements this trait: `Shield` and `Rc`.
+/// The three pointer types implements this trait: [`Shield`], [`TaggedShield`], and [`Rc`].
 pub trait AcquiredPtr<T>: GeneralPtr<T> {
-    /// Gets a `Shared` pointer to the same object.
+    /// Gets a [`Shared`] pointer to the same object.
     fn shared<'p>(&'p self) -> Shared<'p, T>;
+
+    /// Consumes the aquired pointer, incrementing the reference count if we didn't increment
+    /// it before.
+    ///
+    /// Semantically, it is equivalent to giving ownership of a reference count outside the
+    /// environment.
+    ///
+    /// For example, we do nothing but forget its ownership if the pointer is [`Rc`],
+    /// but increment the reference count if the pointer is [`Shield`] or [`TaggedShield`].
+    fn into_ref_count(self);
 }
 
 impl<T> AcquiredPtr<T> for Shield<T> {
@@ -482,6 +588,43 @@ impl<T> AcquiredPtr<T> for Shield<T> {
             inner: self.inner.shared(),
         }
     }
+
+    #[inline]
+    fn into_ref_count(self) {
+        if let Some(counted) = unsafe { self.as_untagged_raw().as_ref() } {
+            counted.add_refs(1);
+        }
+    }
+}
+
+impl<T> AcquiredPtr<T> for &Shield<T> {
+    #[inline]
+    fn shared<'p>(&'p self) -> Shared<'p, T> {
+        Shared {
+            inner: self.inner.shared(),
+        }
+    }
+
+    #[inline]
+    fn into_ref_count(self) {
+        if let Some(counted) = unsafe { self.as_untagged_raw().as_ref() } {
+            counted.add_refs(1);
+        }
+    }
+}
+
+impl<'s, T> AcquiredPtr<T> for TaggedShield<'s, T> {
+    #[inline]
+    fn shared<'p>(&'p self) -> Shared<'p, T> {
+        Shared::new(data_with_tag::<Counted<T>>(self.inner.inner.data, self.tag))
+    }
+
+    #[inline]
+    fn into_ref_count(self) {
+        if let Some(counted) = unsafe { self.as_untagged_raw().as_ref() } {
+            counted.add_refs(1);
+        }
+    }
 }
 
 impl<T> AcquiredPtr<T> for Rc<T> {
@@ -489,7 +632,28 @@ impl<T> AcquiredPtr<T> for Rc<T> {
     fn shared<'p>(&'p self) -> Shared<'p, T> {
         Shared::new(self.ptr)
     }
+
+    #[inline]
+    fn into_ref_count(self) {
+        // As we have a reference count already, we don't have to do anything, but
+        // prevent calling a destructor which decrements it.
+        forget(self);
+    }
 }
+
+/// An defended pointer trait.
+///
+/// This represents a pointer which is protected by a hazard pointer. Thus, it is guaranteed that
+/// a reference count of a [`DefendedPtr`] doesn't go down as long as we have an ownership of it.
+///
+/// The two pointer types implements this trait: [`Shield`] and [`TaggedShield`].
+pub trait DefendedPtr<T>: AcquiredPtr<T> {}
+
+impl<T> DefendedPtr<T> for Shield<T> {}
+
+impl<T> DefendedPtr<T> for &Shield<T> {}
+
+impl<'s, T> DefendedPtr<T> for TaggedShield<'s, T> {}
 
 impl<T: 'static> Defender for Shield<T> {
     type Read<'r> = Shared<'r, T>;

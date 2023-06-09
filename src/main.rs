@@ -571,33 +571,45 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             _ => panic!("Unsupported data structure for CDRC EBR"),
         },
         MM::CBR_NAIVE => match config.ds {
-            DS::HList => bench_map_cbr::<cbr::list::naive::HList<String, String>, N>(
+            DS::HList => bench_map_cbr::<cbr::naive::HList<String, String>, N>(
                 config,
                 PrefillStrategy::Decreasing,
             ),
-            DS::HMList => bench_map_cbr::<cbr::list::naive::HMList<String, String>, N>(
+            DS::HMList => bench_map_cbr::<cbr::naive::HMList<String, String>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::NMTree => bench_map_cbr::<cbr::naive::NMTreeMap<String, String>, N>(
                 config,
                 PrefillStrategy::Decreasing,
             ),
             _ => panic!("Unsupported data structure for CBR with naive reference counting"),
         },
         MM::CBR_READ => match config.ds {
-            DS::HList => bench_map_cbr::<cbr::list::read::HList<String, String>, N>(
+            DS::HList => bench_map_cbr::<cbr::read::HList<String, String>, N>(
                 config,
                 PrefillStrategy::Decreasing,
             ),
-            DS::HMList => bench_map_cbr::<cbr::list::read::HMList<String, String>, N>(
+            DS::HMList => bench_map_cbr::<cbr::read::HMList<String, String>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::NMTree => bench_map_cbr::<cbr::read::NMTreeMap<String, String>, N>(
                 config,
                 PrefillStrategy::Decreasing,
             ),
             _ => panic!("Unsupported data structure for CBR with naive reference counting"),
         },
         MM::CBR_READ_LOOP => match config.ds {
-            DS::HList => bench_map_cbr::<cbr::list::read_loop::HList<String, String>, N>(
+            DS::HList => bench_map_cbr::<cbr::read_loop::HList<String, String>, N>(
                 config,
                 PrefillStrategy::Decreasing,
             ),
-            DS::HMList => bench_map_cbr::<cbr::list::read_loop::HMList<String, String>, N>(
+            DS::HMList => bench_map_cbr::<cbr::read_loop::HMList<String, String>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::NMTree => bench_map_cbr::<cbr::read_loop::NMTreeMap<String, String>, N>(
                 config,
                 PrefillStrategy::Decreasing,
             ),

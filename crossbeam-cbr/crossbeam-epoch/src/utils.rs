@@ -146,6 +146,11 @@ impl<T> Counted<T> {
         unsafe { &*self.storage.get() }
     }
 
+    #[inline(always)]
+    pub(crate) fn data_mut(&self) -> &mut T {
+        unsafe { &mut *self.storage.get() }
+    }
+
     /// Destroy the managed object, but keep the control data intact
     #[inline(always)]
     pub(crate) unsafe fn dispose(&self) {

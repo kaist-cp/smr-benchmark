@@ -406,12 +406,11 @@ where
                 continue;
             }
 
-            cursor.next.set_tag(1);
             if curr_node
                 .next
                 .compare_exchange(
-                    cursor.next.shared().with_tag(0),
-                    &cursor.next,
+                    cursor.next.shared(),
+                    cursor.next.with_tag(1),
                     Ordering::AcqRel,
                     Ordering::Relaxed,
                     guard,
@@ -421,7 +420,6 @@ where
                 continue;
             }
 
-            cursor.next.set_tag(0);
             let _ = cursor.prev.as_ref().unwrap().next.compare_exchange(
                 cursor.curr.shared(),
                 &cursor.next,
