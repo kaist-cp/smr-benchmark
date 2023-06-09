@@ -14,7 +14,7 @@ use crate::{
     pin,
 };
 
-/// A result of unsuccessful `compare_exchange_rc`.
+/// A result of unsuccessful `compare_exchange`.
 ///
 /// It returns the ownership of [`Rc`] pointer which was given as a parameter.
 #[derive(Debug)]
