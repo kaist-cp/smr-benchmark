@@ -581,7 +581,7 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             ),
             DS::NMTree => bench_map_cbr::<cbr::naive::NMTreeMap<String, String>, N>(
                 config,
-                PrefillStrategy::Decreasing,
+                PrefillStrategy::Random,
             ),
             _ => panic!("Unsupported data structure for CBR with naive reference counting"),
         },
@@ -596,9 +596,9 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             ),
             DS::NMTree => bench_map_cbr::<cbr::read::NMTreeMap<String, String>, N>(
                 config,
-                PrefillStrategy::Decreasing,
+                PrefillStrategy::Random,
             ),
-            _ => panic!("Unsupported data structure for CBR with naive reference counting"),
+            _ => panic!("Unsupported data structure for CBR with `read`"),
         },
         MM::CBR_READ_LOOP => match config.ds {
             DS::HList => bench_map_cbr::<cbr::read_loop::HList<String, String>, N>(
@@ -611,9 +611,9 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             ),
             DS::NMTree => bench_map_cbr::<cbr::read_loop::NMTreeMap<String, String>, N>(
                 config,
-                PrefillStrategy::Decreasing,
+                PrefillStrategy::Random,
             ),
-            _ => panic!("Unsupported data structure for CBR with naive reference counting"),
+            _ => panic!("Unsupported data structure for CBR with `read_loop`"),
         },
     };
     output
