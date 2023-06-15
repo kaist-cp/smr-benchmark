@@ -45,6 +45,7 @@ impl Global {
     /// use hp_sharp::crcu::Global;
     ///
     /// let global = Global::new();
+    ///
     /// let handle = global.register();
     /// ```
     #[inline]

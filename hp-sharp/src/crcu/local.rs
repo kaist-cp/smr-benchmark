@@ -15,6 +15,8 @@ use nix::sys::{
 };
 use static_assertions::const_assert;
 
+use crate::Deferred;
+
 use super::{
     epoch::{AtomicEpoch, Epoch},
     global::Global,
@@ -309,9 +311,9 @@ impl LocalHandle {
         unsafe { (*self.local).read(body) }
     }
 
-    /// Retires a detached pointer to reclaim after the current epoch ends.
+    /// Defers a task which can be accessed after the current epoch ends.
     #[inline]
-    pub fn defer(&self, ptr: usize, deleter: unsafe fn(usize)) {
+    pub fn defer(&self, def: Deferred) {
         todo!()
     }
 }

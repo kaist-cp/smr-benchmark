@@ -1,3 +1,5 @@
+use crate::Deferred;
+
 use super::local::Local;
 
 /// A crashable critical section guard.
@@ -41,8 +43,8 @@ impl WriteGuard {
         Self { local }
     }
 
-    /// Retires a detached pointer to reclaim after the current epoch ends.
-    pub fn defer(&self, ptr: usize, deleter: unsafe fn(usize)) {
+    /// Defers a task which can be accessed after the current epoch ends.
+    pub fn defer(&self, def: Deferred) {
         todo!()
     }
 }
