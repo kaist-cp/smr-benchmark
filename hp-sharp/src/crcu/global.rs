@@ -68,45 +68,11 @@ impl Global {
     ///
     /// ```
     /// use hp_sharp::crcu::Global;
-    /// use std::thread::scope;
-    /// use std::sync::atomic::{AtomicUsize, Ordering};
     ///
     /// let global = &Global::new();
-    /// let sync_clock = &AtomicUsize::new(0);
     ///
     /// // If there's no working thread, `try_advance` would trivially succeed.
     /// assert!(global.try_advance().is_ok());
-    ///
-    /// // Let's simulate a pinned slow thread.
-    /// scope(|s| {
-    ///     s.spawn(|| {
-    ///         let handle = global.register();
-    ///         unsafe {
-    ///             handle.read(|_| {
-    ///                 // Intentionally avoided using `Barrier` for synchronization.
-    ///                 // Although there will be no signaling in this example, it is worth
-    ///                 // noting that `Barrier` is not safe to use in a crashable section,
-    ///                 // because `Barrier` uses `Mutex` which involves a system call.
-    ///                 //
-    ///                 // Also, usually performing writing in `read` is not desirable. In this
-    ///                 // example, we used `fetch_add` just to demostrate the effect of
-    ///                 // `try_advance`.
-    ///                 sync_clock.fetch_add(1, Ordering::SeqCst);
-    ///                 while sync_clock.load(Ordering::SeqCst) == 1 {}
-    ///             });
-    ///         }
-    ///     });
-    ///
-    ///     while sync_clock.load(Ordering::SeqCst) == 0 {}
-    ///
-    ///     // The first advancing must succeed because the pinned participant
-    ///     // is on the global epoch.
-    ///     assert!(global.try_advance().is_ok());
-    ///     // However, the next advancing will fail.
-    ///     assert!(global.try_advance().is_err());
-    ///
-    ///     sync_clock.fetch_add(1, Ordering::SeqCst);
-    /// });
     /// ```
     #[cold]
     pub fn try_advance(&self) -> Result<Epoch, Epoch> {
@@ -149,42 +115,11 @@ impl Global {
     ///
     /// ```
     /// use hp_sharp::crcu::Global;
-    /// use std::thread::scope;
-    /// use std::sync::atomic::{AtomicUsize, Ordering};
     ///
     /// let global = &Global::new();
-    /// let sync_clock = &AtomicUsize::new(0);
     ///
-    /// // Let's simulate a pinned slow thread.
-    /// scope(|s| {
-    ///     s.spawn(|| {
-    ///         let handle = global.register();
-    ///         unsafe {
-    ///             handle.read(|_| {
-    ///                 // Intentionally avoided using `Barrier` for synchronization.
-    ///                 // It is worth noting that `Barrier` is not safe to use in a crashable
-    ///                 // section, because `Barrier` uses `Mutex` which involves a system call.
-    ///                 //
-    ///                 // Also, usually performing writing in `read` is not desirable. In this
-    ///                 // example, we used `fetch_add` just to demostrate the effect of
-    ///                 // `try_advance` and `advance`.
-    ///                 sync_clock.fetch_add(1, Ordering::SeqCst);
-    ///                 while sync_clock.load(Ordering::SeqCst) == 1 {}
-    ///             });
-    ///         }
-    ///     });
-    ///
-    ///     while sync_clock.load(Ordering::SeqCst) == 0 {}
-    ///
-    ///     // The first advancing must succeed because the pinned participant
-    ///     // is on the global epoch.
-    ///     assert!(global.try_advance().is_ok());
-    ///     // However, the next advancing will fail.
-    ///     assert!(global.try_advance().is_err());
-    ///
-    ///     // `advance` always succeeds, and it will restart any slow threads.
-    ///     global.advance();
-    /// });
+    /// // `advance` always succeeds, and it will restart any slow threads.
+    /// global.advance();
     /// ```
     #[cold]
     pub fn advance(&self) -> Epoch {
@@ -221,5 +156,89 @@ impl Global {
         let new_epoch = global_epoch.successor();
         self.epoch.store(new_epoch, Ordering::Release);
         new_epoch
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::Global;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::thread::scope;
+
+    #[test]
+    fn test_try_advance() {
+        let global = &Global::new();
+        let sync_clock = &AtomicUsize::new(0);
+
+        // If there's no working thread, `try_advance` would trivially succeed.
+        assert!(global.try_advance().is_ok());
+
+        // Let's simulate a pinned slow thread.
+        scope(|s| {
+            s.spawn(|| {
+                let handle = global.register();
+                unsafe {
+                    handle.read(|_| {
+                        // Intentionally avoided using `Barrier` for synchronization.
+                        // Although there will be no signaling in this example, it is worth
+                        // noting that `Barrier` is not safe to use in a crashable section,
+                        // because `Barrier` uses `Mutex` which involves a system call.
+                        //
+                        // Also, usually performing writing in `read` is not desirable. In this
+                        // example, we used `fetch_add` just to demostrate the effect of
+                        // `try_advance`.
+                        sync_clock.fetch_add(1, Ordering::SeqCst);
+                        while sync_clock.load(Ordering::SeqCst) == 1 {}
+                    });
+                }
+            });
+
+            while sync_clock.load(Ordering::SeqCst) == 0 {}
+
+            // The first advancing must succeed because the pinned participant
+            // is on the global epoch.
+            assert!(global.try_advance().is_ok());
+            // However, the next advancing will fail.
+            assert!(global.try_advance().is_err());
+
+            sync_clock.fetch_add(1, Ordering::SeqCst);
+        });
+    }
+
+    #[test]
+    fn test_advance() {
+        let global = &Global::new();
+        let sync_clock = &AtomicUsize::new(0);
+
+        // Let's simulate a pinned slow thread.
+        scope(|s| {
+            s.spawn(|| {
+                let handle = global.register();
+                unsafe {
+                    handle.read(|_| {
+                        // Intentionally avoided using `Barrier` for synchronization.
+                        // It is worth noting that `Barrier` is not safe to use in a crashable
+                        // section, because `Barrier` uses `Mutex` which involves a system call.
+                        //
+                        // Also, usually performing writing in `read` is not desirable. In this
+                        // example, we used `fetch_add` just to demostrate the effect of
+                        // `try_advance` and `advance`.
+                        sync_clock.fetch_add(1, Ordering::SeqCst);
+                        while sync_clock.load(Ordering::SeqCst) == 1 {}
+                    });
+                }
+            });
+
+            while sync_clock.load(Ordering::SeqCst) == 0 {}
+
+            // The first advancing must succeed because the pinned participant
+            // is on the global epoch.
+            assert!(global.try_advance().is_ok());
+            // However, the next advancing will fail.
+            assert!(global.try_advance().is_err());
+
+            // `advance` always succeeds, and it will restart any slow threads.
+            global.advance();
+        });
     }
 }
