@@ -42,7 +42,7 @@ impl WriteGuard {
     }
 
     /// Retires a detached pointer to reclaim after the current epoch ends.
-    pub fn defer<T>(&self, ptr: *mut T) {
+    pub fn defer(&self, ptr: usize, deleter: unsafe fn(usize)) {
         todo!()
     }
 }
