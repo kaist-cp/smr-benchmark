@@ -302,6 +302,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hp-sharp"
+version = "0.1.0"
+dependencies = [
+ "atomic",
+ "crossbeam-utils 0.8.14 (registry+https://github.com/rust-lang/crates.io-index)",
+ "nix",
+ "setjmp",
+ "static_assertions 1.1.0",
+]
+
+[[package]]
 name = "hp_pp"
 version = "0.1.0"
 dependencies = [
@@ -636,6 +647,7 @@ dependencies = [
  "crossbeam-pebr-epoch",
  "crossbeam-utils 0.8.14",
  "csv",
+ "hp-sharp",
  "hp_pp",
  "nbr-rs",
  "rand",
