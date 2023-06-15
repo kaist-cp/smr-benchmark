@@ -81,14 +81,20 @@ impl Global {
     /// scope(|s| {
     ///     s.spawn(|| {
     ///         let handle = global.register();
-    ///         handle.read(|_| {
-    ///             // Intentionally avoided using `Barrier` for synchronization.
-    ///             // Although there will be no signaling in this example, it is worth
-    ///             // noting that `Barrier` is not safe to use in a crashable section,
-    ///             // because `Barrier` uses `Mutex` which involves a system call.
-    ///             sync_clock.fetch_add(1, Ordering::SeqCst);
-    ///             while sync_clock.load(Ordering::SeqCst) == 1 {}
-    ///         });
+    ///         unsafe {
+    ///             handle.read(|_| {
+    ///                 // Intentionally avoided using `Barrier` for synchronization.
+    ///                 // Although there will be no signaling in this example, it is worth
+    ///                 // noting that `Barrier` is not safe to use in a crashable section,
+    ///                 // because `Barrier` uses `Mutex` which involves a system call.
+    ///                 //
+    ///                 // Also, usually performing writing in `read` is not desirable. In this
+    ///                 // example, we used `fetch_add` just to demostrate the effect of
+    ///                 // `try_advance`.
+    ///                 sync_clock.fetch_add(1, Ordering::SeqCst);
+    ///                 while sync_clock.load(Ordering::SeqCst) == 1 {}
+    ///             });
+    ///         }
     ///     });
     ///
     ///     while sync_clock.load(Ordering::SeqCst) == 0 {}
@@ -153,13 +159,19 @@ impl Global {
     /// scope(|s| {
     ///     s.spawn(|| {
     ///         let handle = global.register();
-    ///         handle.read(|_| {
-    ///             // Intentionally avoided using `Barrier` for synchronization.
-    ///             // It is worth noting that `Barrier` is not safe to use in a crashable section,
-    ///             // because `Barrier` uses `Mutex` which involves a system call.
-    ///             sync_clock.fetch_add(1, Ordering::SeqCst);
-    ///             while sync_clock.load(Ordering::SeqCst) == 1 {}
-    ///         });
+    ///         unsafe {
+    ///             handle.read(|_| {
+    ///                 // Intentionally avoided using `Barrier` for synchronization.
+    ///                 // It is worth noting that `Barrier` is not safe to use in a crashable
+    ///                 // section, because `Barrier` uses `Mutex` which involves a system call.
+    ///                 //
+    ///                 // Also, usually performing writing in `read` is not desirable. In this
+    ///                 // example, we used `fetch_add` just to demostrate the effect of
+    ///                 // `try_advance` and `advance`.
+    ///                 sync_clock.fetch_add(1, Ordering::SeqCst);
+    ///                 while sync_clock.load(Ordering::SeqCst) == 1 {}
+    ///             });
+    ///         }
     ///     });
     ///
     ///     while sync_clock.load(Ordering::SeqCst) == 0 {}

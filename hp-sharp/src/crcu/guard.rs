@@ -1,4 +1,4 @@
-use super::{local::Local, pointers::Shared};
+use super::local::Local;
 
 /// A crashable critical section guard.
 ///
@@ -42,7 +42,7 @@ impl WriteGuard {
     }
 
     /// Retires a detached pointer to reclaim after the current epoch ends.
-    pub fn retire<'r, T>(&self, ptr: Shared<'r, T>) {
+    pub fn defer<T>(&self, ptr: *mut T) {
         todo!()
     }
 }

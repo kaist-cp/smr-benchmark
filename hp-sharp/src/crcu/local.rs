@@ -19,7 +19,6 @@ use super::{
     epoch::{AtomicEpoch, Epoch},
     global::Global,
     guard::Guard,
-    pointers::Shared,
     recovery,
 };
 
@@ -118,7 +117,7 @@ impl Local {
         }
     }
 
-    fn read<F>(&self, body: F)
+    unsafe fn read<F>(&self, body: F)
     where
         F: Fn(&mut Guard),
     {
@@ -296,8 +295,14 @@ impl LocalHandle {
         unsafe { (*self.local).is_pinned() }
     }
 
+    /// Starts a crashable critical section where we cannot perform operations with side-effects,
+    /// such as system calls, non-atomic write on a global variable, etc.
+    ///
+    /// # Safety
+    ///
+    /// In a section body, only *rollback-safe* operations are allowed.
     #[inline]
-    pub fn read<F>(&self, body: F)
+    pub unsafe fn read<F>(&self, body: F)
     where
         F: Fn(&mut Guard),
     {
@@ -306,7 +311,7 @@ impl LocalHandle {
 
     /// Retires a detached pointer to reclaim after the current epoch ends.
     #[inline]
-    pub fn retire<'r, T>(&self, ptr: Shared<'r, T>) {
+    pub fn defer<T>(&self, ptr: *mut T) {
         todo!()
     }
 }
