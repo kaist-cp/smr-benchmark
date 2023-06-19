@@ -30,7 +30,7 @@ unsafe impl Sync for SealedBag {}
 impl SealedBag {
     /// Checks if it is safe to drop the bag w.r.t. the given global epoch.
     fn is_expired(&self, global_epoch: Epoch) -> bool {
-        global_epoch.value() - self.epoch.value() >= 3
+        global_epoch.value() - self.epoch.value() >= 2
     }
 }
 
@@ -102,7 +102,7 @@ impl Global {
 
     #[must_use]
     pub(crate) fn collect(&self, global_epoch: Epoch) -> Vec<Bag> {
-        let index = (global_epoch.value() - 3) as usize % (1 << BAGS_WIDTH);
+        let index = (global_epoch.value() - 2) as usize % (1 << BAGS_WIDTH);
         let bags = unsafe { self.bags.get_unchecked(index) };
 
         let deferred = bags.pop_all();
