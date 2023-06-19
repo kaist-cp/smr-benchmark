@@ -15,13 +15,13 @@ use nix::sys::{
 };
 use static_assertions::const_assert;
 
-use crate::{Bag, Deferred};
+use crate::crcu::{Bag, Deferred};
 
 use super::{
     epoch::{AtomicEpoch, Epoch},
     global::Global,
     guard::Guard,
-    recovery,
+    recovery, Writable,
 };
 
 const_assert!(Atomic::<Pthread>::is_lock_free());
@@ -311,14 +311,12 @@ impl LocalHandle {
     {
         unsafe { (*self.local).read(body) }
     }
+}
 
-    /// Defers a task which can be accessed after the current epoch ends.
-    ///
-    /// It returns a `Some(Vec<Deferred>)` if the global epoch is advanced and we have collected
-    /// some expired deferred tasks.
+impl Writable for LocalHandle {
     #[inline]
     #[must_use]
-    pub fn defer(&self, def: Deferred) -> Option<Vec<Deferred>> {
+    fn defer(&self, def: Deferred) -> Option<Vec<Deferred>> {
         unsafe { (*self.local).defer(def) }
     }
 }

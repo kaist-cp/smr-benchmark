@@ -314,7 +314,9 @@ dependencies = [
  "arrayvec 0.7.3",
  "atomic",
  "crossbeam-utils 0.8.14 (registry+https://github.com/rust-lang/crates.io-index)",
+ "membarrier 0.2.1 (git+https://github.com/jeehoonkang/membarrier-rs.git?branch=pebr)",
  "nix",
+ "rustc-hash",
  "setjmp",
  "static_assertions 1.1.0",
 ]

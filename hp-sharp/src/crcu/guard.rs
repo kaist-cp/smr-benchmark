@@ -3,7 +3,7 @@ use std::{
     sync::atomic::{compiler_fence, Ordering},
 };
 
-use crate::Deferred;
+use crate::crcu::Deferred;
 
 use super::{local::Local, recovery};
 
@@ -62,12 +62,24 @@ impl WriteGuard {
             advanced: Cell::new(false),
         }
     }
+}
 
+/// A common trait for `Guard` types which allow mutating shared memory locations.
+///
+/// [`crate::crcu::LocalHandle`] and [`WriteGuard`] implement this trait.
+pub trait Writable {
     /// Defers a task which can be accessed after the current epoch ends.
     ///
     /// It returns a `Some(Vec<Deferred>)` if the global epoch is advanced and we have collected
     /// some expired deferred tasks.
-    pub fn defer(&self, def: Deferred) -> Option<Vec<Deferred>> {
+    #[must_use]
+    fn defer(&self, def: Deferred) -> Option<Vec<Deferred>>;
+}
+
+impl Writable for WriteGuard {
+    #[inline]
+    #[must_use]
+    fn defer(&self, def: Deferred) -> Option<Vec<Deferred>> {
         let collected = unsafe { (*self.local).defer(def) };
         if collected.is_some() {
             self.advanced.set(true);

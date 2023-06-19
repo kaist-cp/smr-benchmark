@@ -1,3 +1,6 @@
+#![allow(unused)] // TODO(@jeonghyeon): remove it after implementing HP#
 pub mod crcu;
-
-pub use crcu::*;
+mod domain;
+mod hazard;
+mod pointers;
+mod thread;
