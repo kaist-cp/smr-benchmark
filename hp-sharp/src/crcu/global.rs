@@ -4,7 +4,7 @@ use atomic::fence;
 use crossbeam_utils::CachePadded;
 use nix::{errno::Errno, sys::pthread::pthread_self};
 
-use crate::{Bag, Local};
+use crate::Bag;
 
 use super::{
     epoch::{AtomicEpoch, Epoch},
@@ -100,11 +100,12 @@ impl Global {
         slot.push(SealedBag { epoch, inner: bag });
     }
 
-    pub(crate) fn collect(&self, global_epoch: Epoch, worker: &Local) -> Vec<Bag> {
+    #[must_use]
+    pub(crate) fn collect(&self, global_epoch: Epoch) -> Vec<Bag> {
         let index = (global_epoch.value() - 3) as usize % (1 << BAGS_WIDTH);
         let bags = unsafe { self.bags.get_unchecked(index) };
 
-        let mut deferred = bags.pop_all();
+        let deferred = bags.pop_all();
         let (collected, deferred): (Vec<_>, Vec<_>) = deferred
             .into_iter()
             .partition(|bag| bag.is_expired(global_epoch));

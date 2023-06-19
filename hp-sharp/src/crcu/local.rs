@@ -2,7 +2,6 @@ use std::{
     cell::{Cell, UnsafeCell},
     hint::black_box,
     marker::PhantomData,
-    mem::forget,
     ptr::null_mut,
     sync::atomic::{compiler_fence, fence, AtomicBool, AtomicPtr, Ordering},
 };
@@ -35,7 +34,6 @@ pub(crate) struct Local {
     global: *const Global,
     bag: UnsafeCell<Bag>,
     handle_count: Cell<usize>,
-    guard_exists: Cell<bool>,
     defer_count: Cell<usize>,
 }
 
@@ -53,63 +51,8 @@ impl Local {
             global,
             bag: UnsafeCell::new(Bag::new()),
             handle_count: Cell::new(0),
-            guard_exists: Cell::new(false),
             defer_count: Cell::new(0),
         }
-    }
-
-    /// Pins the `Local`.
-    pub(crate) fn pin(&self) -> Guard {
-        debug_assert!(
-            !self.guard_exists.get(),
-            "Creating multiple guards is not allowed."
-        );
-        self.guard_exists.set(true);
-
-        let guard = Guard::new(self);
-
-        let global_epoch = self.global().epoch.load(Ordering::Relaxed);
-        let new_epoch = global_epoch.pinned();
-
-        // Now we must store `new_epoch` into `self.epoch` and execute a `SeqCst` fence.
-        // The fence makes sure that any future loads from `Atomic`s will not happen before
-        // this store.
-        if cfg!(any(target_arch = "x86", target_arch = "x86_64")) {
-            // HACK(stjepang): On x86 architectures there are two different ways of executing
-            // a `SeqCst` fence.
-            //
-            // 1. `atomic::fence(SeqCst)`, which compiles into a `mfence` instruction.
-            // 2. `_.compare_exchange(_, _, SeqCst, SeqCst)`, which compiles into a `lock cmpxchg`
-            //    instruction.
-            //
-            // Both instructions have the effect of a full barrier, but benchmarks have shown
-            // that the second one makes pinning faster in this particular case.  It is not
-            // clear that this is permitted by the C++ memory model (SC fences work very
-            // differently from SC accesses), but experimental evidence suggests that this
-            // works fine.  Using inline assembly would be a viable (and correct) alternative,
-            // but alas, that is not possible on stable Rust.
-            let current = Epoch::starting();
-            let res =
-                self.epoch
-                    .compare_exchange(current, new_epoch, Ordering::SeqCst, Ordering::SeqCst);
-            debug_assert!(res.is_ok(), "participant was expected to be unpinned");
-            // We add a compiler fence to make it less likely for LLVM to do something wrong
-            // here.  Formally, this is not enough to get rid of data races; practically,
-            // it should go a long way.
-            compiler_fence(Ordering::SeqCst);
-        } else {
-            self.epoch.store(new_epoch, Ordering::Relaxed);
-            fence(Ordering::SeqCst);
-        }
-
-        guard
-    }
-
-    /// Unpins the [`Local`].
-    #[inline]
-    pub(crate) fn unpin(&self) {
-        self.guard_exists.set(false);
-        self.epoch.store(Epoch::starting(), Ordering::Release);
     }
 
     /// Unpins and then pins the [`Local`].
@@ -224,10 +167,12 @@ impl Local {
         }
     }
 
-    /// Adds `deferred` to the thread-local bag, and returns whether the global epoch is advanced
-    /// by this action.
+    /// Adds `deferred` to the thread-local bag.
+    ///
+    /// It returns a `Some(Vec<Deferred>)` if the global epoch is advanced and we have collected
+    /// some expired deferred tasks.
     #[inline]
-    pub(crate) fn defer(&self, mut def: Deferred) -> bool {
+    pub(crate) fn defer(&self, mut def: Deferred) -> Option<Vec<Deferred>> {
         let bag = unsafe { &mut *self.bag.get() };
 
         while let Err(d) = bag.try_push(def) {
@@ -238,21 +183,24 @@ impl Local {
         let defer_count = self.defer_count.get() + 1;
         self.defer_count.set(defer_count);
 
-        if defer_count >= Self::COUNTS_BETWEEN_FORCE_ADVANCE {
-            self.global().collect(self.global().advance(), self);
-            self.defer_count.set(0);
-            true
+        let collected = if defer_count >= Self::COUNTS_BETWEEN_FORCE_ADVANCE {
+            Some(self.global().collect(self.global().advance()))
         } else if defer_count % Self::COUNTS_BETWEEN_TRY_ADVANCE == 0 {
             if let Ok(global_epoch) = self.global().try_advance() {
-                self.global().collect(global_epoch, self);
-                self.defer_count.set(0);
-                true
+                Some(self.global().collect(global_epoch))
             } else {
-                false
+                None
             }
         } else {
-            false
-        }
+            None
+        }?;
+
+        Some(
+            collected
+                .into_iter()
+                .flat_map(|bag| bag.into_iter())
+                .collect(),
+        )
     }
 }
 
@@ -346,11 +294,6 @@ pub struct LocalHandle {
 
 impl LocalHandle {
     #[inline]
-    pub(crate) fn global(&self) -> &Global {
-        unsafe { (*self.local).global() }
-    }
-
-    #[inline]
     pub fn is_pinned(&self) -> bool {
         unsafe { (*self.local).is_pinned() }
     }
@@ -370,9 +313,13 @@ impl LocalHandle {
     }
 
     /// Defers a task which can be accessed after the current epoch ends.
+    ///
+    /// It returns a `Some(Vec<Deferred>)` if the global epoch is advanced and we have collected
+    /// some expired deferred tasks.
     #[inline]
-    pub fn defer(&self, def: Deferred) {
-        let _ = unsafe { (*self.local).defer(def) };
+    #[must_use]
+    pub fn defer(&self, def: Deferred) -> Option<Vec<Deferred>> {
+        unsafe { (*self.local).defer(def) }
     }
 }
 

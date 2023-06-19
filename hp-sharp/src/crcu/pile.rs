@@ -3,7 +3,7 @@
 use std::mem::ManuallyDrop;
 use std::ptr::{self, null_mut};
 use std::sync::atomic::AtomicPtr;
-use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
+use std::sync::atomic::Ordering::{AcqRel, Relaxed, Release};
 
 /// A lock-free pile, which we can push an element or pop all elements.
 #[derive(Debug)]
@@ -27,7 +27,7 @@ impl<T> Pile<T> {
 
     /// Pushes a value on top of the pile.
     pub fn push(&self, t: T) {
-        let mut n = Box::into_raw(Box::new(Node {
+        let n = Box::into_raw(Box::new(Node {
             data: ManuallyDrop::new(t),
             next: AtomicPtr::new(null_mut()),
         }));
