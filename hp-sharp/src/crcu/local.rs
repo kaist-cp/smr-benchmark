@@ -1,7 +1,8 @@
 use std::{
-    cell::Cell,
+    cell::{Cell, UnsafeCell},
     hint::black_box,
     marker::PhantomData,
+    mem::forget,
     ptr::null_mut,
     sync::atomic::{compiler_fence, fence, AtomicBool, AtomicPtr, Ordering},
 };
@@ -15,7 +16,7 @@ use nix::sys::{
 };
 use static_assertions::const_assert;
 
-use crate::Deferred;
+use crate::{Bag, Deferred};
 
 use super::{
     epoch::{AtomicEpoch, Epoch},
@@ -32,10 +33,17 @@ pub(crate) struct Local {
     next: AtomicPtr<Local>,
     using: AtomicBool,
     global: *const Global,
+    bag: UnsafeCell<Bag>,
+    handle_count: Cell<usize>,
     guard_exists: Cell<bool>,
+    defer_count: Cell<usize>,
 }
 
 impl Local {
+    const COUNTS_BETWEEN_TRY_ADVANCE: usize = 64;
+    const COUNTS_BETWEEN_FORCE_ADVANCE: usize = 4 * 64;
+
+    #[must_use]
     fn new(using: bool, global: &Global) -> Self {
         Self {
             epoch: CachePadded::new(AtomicEpoch::new(Epoch::starting())),
@@ -43,7 +51,10 @@ impl Local {
             next: AtomicPtr::new(null_mut()),
             using: AtomicBool::new(using),
             global,
+            bag: UnsafeCell::new(Bag::new()),
+            handle_count: Cell::new(0),
             guard_exists: Cell::new(false),
+            defer_count: Cell::new(0),
         }
     }
 
@@ -185,12 +196,63 @@ impl Local {
         }
     }
 
-    fn is_pinned(&self) -> bool {
-        self.epoch.load(Ordering::Relaxed).is_pinned()
+    #[inline]
+    pub(crate) fn is_pinned(&self) -> bool {
+        // Use `Acquire` to synchronize with `Release` from `advance`
+        self.epoch.load(Ordering::Acquire).is_pinned()
     }
 
+    #[inline]
     fn global(&self) -> &Global {
         unsafe { &*self.global }
+    }
+
+    #[inline]
+    fn acquire_handle(&self) -> LocalHandle {
+        let count = self.handle_count.get();
+        self.handle_count.set(count + 1);
+        LocalHandle { local: self }
+    }
+
+    #[inline]
+    fn release_handle(&self) {
+        let count = self.handle_count.get();
+        self.handle_count.set(count - 1);
+        if count == 1 {
+            self.epoch.store(Epoch::starting(), Ordering::Release);
+            self.using.store(false, Ordering::Release);
+        }
+    }
+
+    /// Adds `deferred` to the thread-local bag, and returns whether the global epoch is advanced
+    /// by this action.
+    #[inline]
+    pub(crate) fn defer(&self, mut def: Deferred) -> bool {
+        let bag = unsafe { &mut *self.bag.get() };
+
+        while let Err(d) = bag.try_push(def) {
+            self.global().push_bag(bag);
+            def = d;
+        }
+
+        let defer_count = self.defer_count.get() + 1;
+        self.defer_count.set(defer_count);
+
+        if defer_count >= Self::COUNTS_BETWEEN_FORCE_ADVANCE {
+            self.global().collect(self.global().advance(), self);
+            self.defer_count.set(0);
+            true
+        } else if defer_count % Self::COUNTS_BETWEEN_TRY_ADVANCE == 0 {
+            if let Ok(global_epoch) = self.global().try_advance() {
+                self.global().collect(global_epoch, self);
+                self.defer_count.set(0);
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
     }
 }
 
@@ -211,9 +273,9 @@ impl LocalList {
     /// If there is an available slot, it returns a reference to that slot.
     /// Otherwise, it tries to append a new slot at the end of the list,
     /// and if it succeeds, returns the allocated slot.
-    pub fn acquire<'c>(&'c self, tid: Pthread, global: &Global) -> &'c Local {
+    pub fn acquire<'c>(&'c self, tid: Pthread, global: &Global) -> LocalHandle {
         let mut prev_link = &self.head;
-        let thread = loop {
+        let local = loop {
             match unsafe { prev_link.load(Ordering::Acquire).as_ref() } {
                 Some(curr) => {
                     if !curr.using.load(Ordering::Acquire)
@@ -227,25 +289,26 @@ impl LocalList {
                     prev_link = &curr.next;
                 }
                 None => {
-                    let new_thread = Box::into_raw(Box::new(Local::new(true, global)));
+                    let new_local = Box::into_raw(Box::new(Local::new(true, global)));
                     if prev_link
                         .compare_exchange(
                             null_mut(),
-                            new_thread,
+                            new_local,
                             Ordering::Release,
                             Ordering::Relaxed,
                         )
                         .is_ok()
                     {
-                        break unsafe { &*new_thread };
+                        break unsafe { &*new_local };
                     } else {
-                        unsafe { drop(Box::from_raw(new_thread)) };
+                        unsafe { drop(Box::from_raw(new_local)) };
                     }
                 }
             }
         };
-        thread.owner.store(tid, Ordering::Release);
-        thread
+        local.owner.store(tid, Ordering::Release);
+        local.handle_count.set(1);
+        LocalHandle { local }
     }
 
     /// Returns an iterator over all objects.
@@ -283,11 +346,6 @@ pub struct LocalHandle {
 
 impl LocalHandle {
     #[inline]
-    pub(crate) fn new(local: &Local) -> Self {
-        Self { local }
-    }
-
-    #[inline]
     pub(crate) fn global(&self) -> &Global {
         unsafe { (*self.local).global() }
     }
@@ -314,12 +372,18 @@ impl LocalHandle {
     /// Defers a task which can be accessed after the current epoch ends.
     #[inline]
     pub fn defer(&self, def: Deferred) {
-        todo!()
+        let _ = unsafe { (*self.local).defer(def) };
     }
 }
 
 impl Clone for LocalHandle {
     fn clone(&self) -> Self {
-        todo!()
+        unsafe { &*self.local }.acquire_handle()
+    }
+}
+
+impl Drop for LocalHandle {
+    fn drop(&mut self) {
+        unsafe { &*self.local }.release_handle()
     }
 }

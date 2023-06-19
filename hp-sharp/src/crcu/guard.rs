@@ -1,6 +1,11 @@
+use std::{
+    cell::Cell,
+    sync::atomic::{compiler_fence, Ordering},
+};
+
 use crate::Deferred;
 
-use super::local::Local;
+use super::{local::Local, recovery};
 
 /// A crashable critical section guard.
 ///
@@ -25,7 +30,18 @@ impl Guard {
     where
         F: Fn(&mut WriteGuard),
     {
-        todo!()
+        recovery::set_restartable(false);
+        compiler_fence(Ordering::SeqCst);
+
+        let mut guard = WriteGuard::new(unsafe { &*self.local });
+        body(&mut guard);
+        compiler_fence(Ordering::SeqCst);
+
+        recovery::set_restartable(true);
+        if unsafe { !(*self.local).is_pinned() } || guard.advanced.get() {
+            recovery::set_restartable(false);
+            unsafe { recovery::perform_longjmp() };
+        }
     }
 }
 
@@ -35,16 +51,22 @@ impl Guard {
 /// deletion for a data structure.
 pub struct WriteGuard {
     local: *const Local,
+    advanced: Cell<bool>,
 }
 
 /// A non-crashable section guard.
 impl WriteGuard {
     pub(crate) fn new(local: &Local) -> Self {
-        Self { local }
+        Self {
+            local,
+            advanced: Cell::new(false),
+        }
     }
 
     /// Defers a task which can be accessed after the current epoch ends.
     pub fn defer(&self, def: Deferred) {
-        todo!()
+        if unsafe { (*self.local).defer(def) } {
+            self.advanced.set(true);
+        }
     }
 }

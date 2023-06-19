@@ -2,25 +2,49 @@
 
 use atomic::fence;
 use crossbeam_utils::CachePadded;
-use nix::sys::pthread::pthread_self;
+use nix::{errno::Errno, sys::pthread::pthread_self};
+
+use crate::{Bag, Local};
 
 use super::{
     epoch::{AtomicEpoch, Epoch},
     local::{LocalHandle, LocalList},
+    pile::Pile,
     recovery,
 };
 use core::sync::atomic::Ordering;
+use std::mem;
+
+/// The width of the number of bags.
+const BAGS_WIDTH: u32 = 3;
+
+/// A pair of an epoch and a bag.
+struct SealedBag {
+    epoch: Epoch,
+    inner: Bag,
+}
+
+/// It is safe to share `SealedBag` because `is_expired` only inspects the epoch.
+unsafe impl Sync for SealedBag {}
+
+impl SealedBag {
+    /// Checks if it is safe to drop the bag w.r.t. the given global epoch.
+    fn is_expired(&self, global_epoch: Epoch) -> bool {
+        global_epoch.value() - self.epoch.value() >= 3
+    }
+}
 
 /// The global data for a garbage collector.
 pub struct Global {
     /// The intrusive linked list of `Local`s.
     locals: LocalList,
 
+    /// The global pool of bags of deferred functions.
+    bags: [CachePadded<Pile<SealedBag>>; 1 << BAGS_WIDTH],
+
     /// The global epoch.
     pub(crate) epoch: CachePadded<AtomicEpoch>,
 }
-
-unsafe impl Sync for Global {}
 
 impl Global {
     /// Creates a new global data for garbage collection.
@@ -34,6 +58,16 @@ impl Global {
     pub const fn new() -> Self {
         Self {
             locals: LocalList::new(),
+            bags: [
+                CachePadded::new(Pile::new()),
+                CachePadded::new(Pile::new()),
+                CachePadded::new(Pile::new()),
+                CachePadded::new(Pile::new()),
+                CachePadded::new(Pile::new()),
+                CachePadded::new(Pile::new()),
+                CachePadded::new(Pile::new()),
+                CachePadded::new(Pile::new()),
+            ],
             epoch: CachePadded::new(AtomicEpoch::new(Epoch::starting())),
         }
     }
@@ -53,7 +87,30 @@ impl Global {
         // Install a signal handler to handle manual crash triggered by a reclaimer.
         unsafe { recovery::install() };
         let tid = pthread_self();
-        LocalHandle::new(self.locals.acquire(tid, self))
+        self.locals.acquire(tid, self)
+    }
+
+    pub(crate) fn push_bag(&self, bag: &mut Bag) {
+        let bag = mem::take(bag);
+
+        fence(Ordering::SeqCst);
+
+        let epoch = self.epoch.load(Ordering::Relaxed);
+        let slot = &self.bags[epoch.value() as usize % (1 << BAGS_WIDTH)];
+        slot.push(SealedBag { epoch, inner: bag });
+    }
+
+    pub(crate) fn collect(&self, global_epoch: Epoch, worker: &Local) -> Vec<Bag> {
+        let index = (global_epoch.value() - 3) as usize % (1 << BAGS_WIDTH);
+        let bags = unsafe { self.bags.get_unchecked(index) };
+
+        let mut deferred = bags.pop_all();
+        let (collected, deferred): (Vec<_>, Vec<_>) = deferred
+            .into_iter()
+            .partition(|bag| bag.is_expired(global_epoch));
+
+        bags.append(deferred.into_iter());
+        collected.into_iter().map(|bag| bag.inner).collect()
     }
 
     /// Attempts to advance the global epoch.
@@ -132,10 +189,10 @@ impl Global {
 
             // If the participant was pinned in a different epoch, we eject its epoch.
             if local_epoch.is_pinned() && local_epoch.unpinned() != global_epoch {
-                if let Err(err) =
-                    unsafe { recovery::send_signal(local.owner.load(Ordering::Relaxed)) }
-                {
-                    panic!("Failed to restart the thread: {}", err);
+                match unsafe { recovery::send_signal(local.owner.load(Ordering::Relaxed)) } {
+                    // `ESRCH` indicates that the given pthread is already exited.
+                    Ok(_) | Err(Errno::ESRCH) => {}
+                    Err(err) => panic!("Failed to restart the thread: {}", err),
                 }
                 let _ = local.epoch.compare_exchange(
                     local_epoch,

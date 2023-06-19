@@ -21,6 +21,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrayvec"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8868f09ff8cea88b079da74ae569d9b8c62a23c68c746240b704ee6f7525c89c"
+
+[[package]]
 name = "atomic"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -161,7 +167,7 @@ dependencies = [
 name = "crossbeam-cbr-epoch"
 version = "0.7.1"
 dependencies = [
- "arrayvec",
+ "arrayvec 0.4.11",
  "bitflags",
  "cfg-if 0.1.10",
  "crossbeam-cbr-utils",
@@ -211,7 +217,7 @@ dependencies = [
 name = "crossbeam-pebr-epoch"
 version = "0.7.1"
 dependencies = [
- "arrayvec",
+ "arrayvec 0.4.11",
  "bitflags",
  "cfg-if 0.1.10",
  "crossbeam-pebr-utils",
@@ -305,6 +311,7 @@ dependencies = [
 name = "hp-sharp"
 version = "0.1.0"
 dependencies = [
+ "arrayvec 0.7.3",
  "atomic",
  "crossbeam-utils 0.8.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "nix",

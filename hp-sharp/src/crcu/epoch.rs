@@ -19,20 +19,14 @@ pub struct Epoch {
 impl Epoch {
     /// Returns the starting epoch in unpinned state.
     #[inline]
-    pub(crate) const fn starting() -> Self {
+    pub const fn starting() -> Self {
         Epoch { data: 0 }
     }
 
-    /// Returns the number of epochs `self` is ahead of `rhs`.
-    ///
-    /// Internally, epochs are represented as numbers in the range `(isize::MIN / 2) .. (isize::MAX
-    /// / 2)`, so the returned distance will be in the same interval.
-    #[allow(unused)] // TODO(@jeonghyeon): disallow after implementation
-    pub(crate) fn wrapping_sub(self, rhs: Self) -> isize {
-        // The result is the same with `(self.data & !1).wrapping_sub(rhs.data & !1) as isize >> 1`,
-        // because the possible difference of LSB in `(self.data & !1).wrapping_sub(rhs.data & !1)`
-        // will be ignored in the shift operation.
-        self.data.wrapping_sub(rhs.data & !1) as isize >> 1
+    /// Returns the number of epoch as `isize`.
+    #[inline]
+    pub fn value(&self) -> isize {
+        (self.data & !1) as isize >> 1
     }
 
     /// Returns `true` if the epoch is marked as pinned.
