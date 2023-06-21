@@ -185,11 +185,7 @@ impl Local {
         let collected = if defer_count >= Self::COUNTS_BETWEEN_FORCE_ADVANCE {
             Some(self.global().collect(self.global().advance()))
         } else if defer_count % Self::COUNTS_BETWEEN_TRY_ADVANCE == 0 {
-            if let Ok(global_epoch) = self.global().try_advance() {
-                Some(self.global().collect(global_epoch))
-            } else {
-                None
-            }
+            Some(self.global().collect(self.global().try_advance().ok()?))
         } else {
             None
         }?;
