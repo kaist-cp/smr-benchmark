@@ -1,4 +1,6 @@
 /// A thread-local recovery manager with signal handling
+///
+/// TODO(@jeonghyeon): modulize those recovery primitives. (RecoveryGuard?)
 use nix::libc::{c_void, siginfo_t};
 use nix::sys::pthread::{pthread_kill, Pthread};
 use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
@@ -32,9 +34,8 @@ pub(crate) unsafe fn install() {
         SigSet::all(),
     );
     SIG_ACTION.write(sig_action);
-    if sigaction(EJECTION_SIGNAL, SIG_ACTION.assume_init_ref()).is_err() {
-        panic!("failed to install signal handler");
-    }
+    sigaction(EJECTION_SIGNAL, SIG_ACTION.assume_init_ref())
+        .expect("Failed to install signal handler.");
 }
 
 #[inline]

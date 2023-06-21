@@ -3,7 +3,7 @@ use std::{
     hint::black_box,
     marker::PhantomData,
     ptr::null_mut,
-    sync::atomic::{compiler_fence, fence, AtomicBool, AtomicPtr, Ordering},
+    sync::atomic::{compiler_fence, AtomicBool, AtomicPtr, Ordering},
 };
 
 use atomic::Atomic;
@@ -20,7 +20,7 @@ use crate::crcu::{Bag, Deferred};
 use super::{
     epoch::{AtomicEpoch, Epoch},
     global::Global,
-    guard::Guard,
+    guard::EpochGuard,
     recovery, Writable,
 };
 
@@ -73,9 +73,9 @@ impl Local {
         }
     }
 
-    unsafe fn read<F>(&self, body: F)
+    unsafe fn pin<F>(&self, body: F)
     where
-        F: Fn(&mut Guard),
+        F: Fn(&mut EpochGuard),
     {
         let buf = recovery::jmp_buf();
 
@@ -95,14 +95,13 @@ impl Local {
         loop {
             // Make a checkpoint with `sigsetjmp` for recovering in this critical section.
             if unsafe { setjmp::sigsetjmp(buf, 0) } == 1 {
-                fence(Ordering::SeqCst);
+                compiler_fence(Ordering::SeqCst);
 
                 // Unblock the signal before restarting the section.
                 let mut oldset = SigSet::empty();
                 oldset.add(unsafe { recovery::ejection_signal() });
-                if pthread_sigmask(SigmaskHow::SIG_UNBLOCK, Some(&oldset), None).is_err() {
-                    panic!("Failed to unblock signal");
-                }
+                pthread_sigmask(SigmaskHow::SIG_UNBLOCK, Some(&oldset), None)
+                    .expect("Failed to unblock signal");
             }
             compiler_fence(Ordering::SeqCst);
 
@@ -121,7 +120,7 @@ impl Local {
             // the critical section would continues, as we would not `longjmp` from
             // the signal handler.
             self.repin();
-            let mut guard = Guard::new(self);
+            let mut guard = EpochGuard::new(self);
 
             // Execute the body of this section.
             body(&mut guard);
@@ -151,10 +150,10 @@ impl Local {
     }
 
     #[inline]
-    fn acquire_handle(&self) -> LocalHandle {
+    fn acquire_handle(&self) -> Handle {
         let count = self.handle_count.get();
         self.handle_count.set(count + 1);
-        LocalHandle { local: self }
+        Handle { local: self }
     }
 
     #[inline]
@@ -221,7 +220,7 @@ impl LocalList {
     /// If there is an available slot, it returns a reference to that slot.
     /// Otherwise, it tries to append a new slot at the end of the list,
     /// and if it succeeds, returns the allocated slot.
-    pub fn acquire<'c>(&'c self, tid: Pthread, global: &Global) -> LocalHandle {
+    pub fn acquire<'c>(&'c self, tid: Pthread, global: &Global) -> Handle {
         let mut prev_link = &self.head;
         let local = loop {
             match unsafe { prev_link.load(Ordering::Acquire).as_ref() } {
@@ -256,7 +255,7 @@ impl LocalList {
         };
         local.owner.store(tid, Ordering::Release);
         local.handle_count.set(1);
-        LocalHandle { local }
+        Handle { local }
     }
 
     /// Returns an iterator over all objects.
@@ -288,11 +287,11 @@ impl<'g> Iterator for LocalIter<'g> {
 }
 
 /// A thread-local handle managing local epoch and defering.
-pub struct LocalHandle {
+pub struct Handle {
     local: *const Local,
 }
 
-impl LocalHandle {
+impl Handle {
     #[inline]
     pub fn is_pinned(&self) -> bool {
         unsafe { (*self.local).is_pinned() }
@@ -303,17 +302,19 @@ impl LocalHandle {
     ///
     /// # Safety
     ///
-    /// In a section body, only *rollback-safe* operations are allowed.
+    /// In a section body, only *rollback-safe* operations are allowed. For example, non-atomic
+    /// writes on a global variable and system-calls(File I/O and etc.) are dangerous, as they
+    /// may cause an unexpected inconsistency on the whole system after a crash.
     #[inline]
-    pub unsafe fn read<F>(&self, body: F)
+    pub unsafe fn pin<F>(&self, body: F)
     where
-        F: Fn(&mut Guard),
+        F: Fn(&mut EpochGuard),
     {
-        unsafe { (*self.local).read(body) }
+        unsafe { (*self.local).pin(body) }
     }
 }
 
-impl Writable for LocalHandle {
+impl Writable for Handle {
     #[inline]
     #[must_use]
     fn defer(&self, def: Deferred) -> Option<Vec<Deferred>> {
@@ -321,13 +322,13 @@ impl Writable for LocalHandle {
     }
 }
 
-impl Clone for LocalHandle {
+impl Clone for Handle {
     fn clone(&self) -> Self {
         unsafe { &*self.local }.acquire_handle()
     }
 }
 
-impl Drop for LocalHandle {
+impl Drop for Handle {
     fn drop(&mut self) {
         unsafe { &*self.local }.release_handle()
     }

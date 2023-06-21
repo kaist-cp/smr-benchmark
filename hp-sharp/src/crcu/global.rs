@@ -8,7 +8,7 @@ use crate::crcu::Bag;
 
 use super::{
     epoch::{AtomicEpoch, Epoch},
-    local::{LocalHandle, LocalList},
+    local::{Handle, LocalList},
     pile::Pile,
     recovery,
 };
@@ -83,7 +83,7 @@ impl Global {
     /// let handle = global.register();
     /// ```
     #[inline]
-    pub fn register(&self) -> LocalHandle {
+    pub fn register(&self) -> Handle {
         // Install a signal handler to handle manual crash triggered by a reclaimer.
         unsafe { recovery::install() };
         let tid = pthread_self();
@@ -237,7 +237,7 @@ mod test {
             s.spawn(|| {
                 let handle = global.register();
                 unsafe {
-                    handle.read(|_| {
+                    handle.pin(|_| {
                         // Intentionally avoided using `Barrier` for synchronization.
                         // Although there will be no signaling in this example, it is worth
                         // noting that `Barrier` is not safe to use in a crashable section,
@@ -274,7 +274,7 @@ mod test {
             s.spawn(|| {
                 let handle = global.register();
                 unsafe {
-                    handle.read(|_| {
+                    handle.pin(|_| {
                         // Intentionally avoided using `Barrier` for synchronization.
                         // It is worth noting that `Barrier` is not safe to use in a crashable
                         // section, because `Barrier` uses `Mutex` which involves a system call.
