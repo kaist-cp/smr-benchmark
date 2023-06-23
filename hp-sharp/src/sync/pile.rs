@@ -1,9 +1,8 @@
 //! A lock-free pile.
 
-use std::mem::ManuallyDrop;
-use std::ptr::{self, null_mut};
+use std::ptr::null_mut;
 use std::sync::atomic::AtomicPtr;
-use std::sync::atomic::Ordering::{AcqRel, Relaxed, Release};
+use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
 
 /// A lock-free pile, which we can push an element or pop all elements.
 #[derive(Debug)]
@@ -13,7 +12,7 @@ pub struct Pile<T> {
 
 #[derive(Debug)]
 struct Node<T> {
-    data: ManuallyDrop<T>,
+    data: T,
     next: AtomicPtr<Node<T>>,
 }
 
@@ -28,7 +27,7 @@ impl<T> Pile<T> {
     /// Pushes a value on top of the pile.
     pub fn push(&self, t: T) {
         let n = Box::into_raw(Box::new(Node {
-            data: ManuallyDrop::new(t),
+            data: t,
             next: AtomicPtr::new(null_mut()),
         }));
 
@@ -49,14 +48,14 @@ impl<T> Pile<T> {
     pub fn append(&self, mut iter: impl Iterator<Item = T>) {
         let Some(first_value) = iter.next() else { return; };
         let first_node = Box::into_raw(Box::new(Node {
-            data: ManuallyDrop::new(first_value),
+            data: first_value,
             next: AtomicPtr::new(null_mut()),
         }));
         let mut last_node = first_node;
 
         while let Some(value) = iter.next() {
             let node = Box::into_raw(Box::new(Node {
-                data: ManuallyDrop::new(value),
+                data: value,
                 next: AtomicPtr::new(null_mut()),
             }));
             unsafe { &*last_node }.next.store(node, Relaxed);
@@ -83,12 +82,12 @@ impl<T> Pile<T> {
     #[must_use]
     pub fn pop_all(&self) -> Vec<T> {
         let mut result = vec![];
-        let node = self.head.swap(null_mut(), AcqRel);
+        let mut node = self.head.swap(null_mut(), AcqRel);
         while !node.is_null() {
-            let node_ref = unsafe { &*node };
-            let data = ManuallyDrop::into_inner(unsafe { ptr::read(&(*node_ref).data) });
-            drop(unsafe { Box::from_raw(node) });
+            let node_owned = unsafe { Box::from_raw(node) };
+            let data = node_owned.data;
             result.push(data);
+            node = node_owned.next.load(Acquire);
         }
         result
     }
@@ -104,4 +103,14 @@ impl<T> Drop for Pile<T> {
     fn drop(&mut self) {
         drop(self.pop_all());
     }
+}
+
+#[test]
+fn seq_append_pop() {
+    let pile = Pile::new();
+    pile.push(1);
+    pile.push(2);
+    pile.append(vec![6, 5, 4, 3].into_iter());
+    pile.push(7);
+    assert_eq!(pile.pop_all(), vec![7, 6, 5, 4, 3, 2, 1]);
 }
