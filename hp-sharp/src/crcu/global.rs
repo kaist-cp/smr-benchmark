@@ -5,11 +5,11 @@ use crossbeam_utils::CachePadded;
 use nix::{errno::Errno, sys::pthread::pthread_self};
 
 use crate::crcu::Bag;
+use crate::sync::Pile;
 
 use super::{
     epoch::{AtomicEpoch, Epoch},
     local::{Handle, LocalList},
-    pile::Pile,
     recovery,
 };
 use core::sync::atomic::Ordering;

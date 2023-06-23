@@ -6,7 +6,6 @@ mod epoch;
 mod global;
 mod guard;
 mod local;
-mod pile;
 mod recovery;
 
 pub use default::*;

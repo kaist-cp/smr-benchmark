@@ -32,7 +32,7 @@ impl EpochGuard {
     /// [`String`] or [`Box`] is dangerous to return as it will be leaked on a crash! On the other
     /// hand, [`Copy`] types is likely to be safe as they are totally defined by their bit-wise
     /// representations, and have no possibilities to be leaked after an unexpected crash.
-    pub fn mask<F, R>(&mut self, body: F) -> R
+    pub fn mask<F, R>(&self, body: F) -> R
     where
         F: Fn(&mut CrashGuard) -> R,
         R: Copy,
@@ -46,10 +46,8 @@ impl EpochGuard {
 
         recovery::set_restartable(true);
 
-        let ejected = unsafe { !(*self.local).is_pinned() };
-        if ejected || guard.is_advanced.get() {
-            recovery::set_restartable(false);
-            unsafe { recovery::perform_longjmp() };
+        if guard.is_crashed() || guard.is_advanced.get() {
+            unsafe { guard.repin_manually() };
         }
         result
     }
@@ -66,11 +64,30 @@ pub struct CrashGuard {
 
 /// A non-crashable section guard.
 impl CrashGuard {
+    #[inline]
     pub(crate) fn new(local: &Local) -> Self {
         Self {
             local,
             is_advanced: Cell::new(false),
         }
+    }
+
+    /// Repins its critical section if we are crashed(in other words, ejected).
+    ///
+    /// # Safety
+    ///
+    /// Developers must ensure that there is no possibilities of memory leaks across this.
+    #[inline]
+    pub unsafe fn repin_manually(&self) -> ! {
+        compiler_fence(Ordering::SeqCst);
+        recovery::set_restartable(false);
+        unsafe { recovery::perform_longjmp() };
+    }
+
+    #[inline]
+    pub fn is_crashed(&self) -> bool {
+        compiler_fence(Ordering::SeqCst);
+        unsafe { !(*self.local).is_pinned() }
     }
 }
 

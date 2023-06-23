@@ -1,25 +1,28 @@
 use std::{
     marker::PhantomData,
-    mem::{swap, zeroed},
+    mem::zeroed,
     ptr::null_mut,
     sync::atomic::{AtomicBool, AtomicPtr, Ordering},
 };
 
-use crate::thread::Thread;
+use crate::thread::Handle;
 
 /// A low-level owner of hazard pointer slot.
 ///
 /// A `Shield` owns a `HazardPointer` as its field.
 pub(crate) struct HazardPointer {
-    thread: *const Thread,
+    thread: *const Handle,
     idx: usize,
 }
 
 impl HazardPointer {
-    /// Create a hazard pointer in the given thread
-    pub fn new(thread: &mut Thread) -> Self {
-        let idx = thread.acquire();
-        Self { thread, idx }
+    /// Creates a hazard pointer in the given thread.
+    pub fn new(handle: &mut Handle) -> Self {
+        let idx = handle.acquire();
+        Self {
+            thread: handle,
+            idx,
+        }
     }
 
     #[inline]
@@ -31,12 +34,12 @@ impl HazardPointer {
     }
 
     /// Protect the given address.
-    pub fn protect_raw<T>(&mut self, ptr: *mut T) {
+    pub fn protect_raw<T>(&self, ptr: *mut T) {
         self.slot().store(ptr as *mut u8, Ordering::Release);
     }
 
     /// Release the protection awarded by this hazard pointer, if any.
-    pub fn reset_protection(&mut self) {
+    pub fn reset_protection(&self) {
         self.slot().store(null_mut(), Ordering::Release);
     }
 
@@ -58,7 +61,7 @@ impl HazardPointer {
     ///
     /// If "`src` still pointing to `pointer`" implies that `pointer` is not retired, then `Ok(())`
     /// means that this shield is validated.
-    pub fn try_protect<T>(&mut self, pointer: *mut T, src: &AtomicPtr<T>) -> Result<(), *mut T> {
+    pub fn try_protect<T>(&self, pointer: *mut T, src: &AtomicPtr<T>) -> Result<(), *mut T> {
         self.protect_raw(pointer);
         Self::validate(pointer, src)
     }
@@ -66,36 +69,19 @@ impl HazardPointer {
     /// Get a protected pointer from `src`.
     ///
     /// See `try_protect()`.
-    pub fn protect<T>(&mut self, src: &AtomicPtr<T>) -> *mut T {
+    pub fn protect<T>(&self, src: &AtomicPtr<T>) -> *mut T {
         let mut pointer = src.load(Ordering::Relaxed);
         while let Err(new) = self.try_protect(pointer, src) {
             pointer = new;
         }
         pointer
     }
-
-    #[inline]
-    pub fn swap(x: &mut HazardPointer, y: &mut HazardPointer) {
-        swap(&mut x.idx, &mut y.idx);
-    }
-
-    /// Copy protection to another hp. Previous protection of `to` is reset.
-    /// This is only possible when `to` is scanned after `self`.
-    /// Correctness of this is quite subtle, so avoid using it.
-    /// There are usually better alternative approaches.
-    pub fn copy_to(&mut self, to: &mut HazardPointer) -> Result<(), ()> {
-        if to.idx <= self.idx {
-            return Err(());
-        }
-        to.protect_raw(self.slot().load(Ordering::Relaxed));
-        Ok(())
-    }
 }
 
 impl Drop for HazardPointer {
     fn drop(&mut self) {
         self.reset_protection();
-        unsafe { (*(self.thread as *mut Thread)).release(self.idx) };
+        unsafe { (*(self.thread as *mut Handle)).release(self.idx) };
     }
 }
 
@@ -199,8 +185,8 @@ impl<'g> Iterator for ThreadRecordsIter<'g> {
 }
 
 impl ThreadRecord {
-    pub(crate) fn iter(&self, reader: &mut Thread) -> ThreadHazardArrayIter {
-        let mut hp = HazardPointer::new(reader);
+    pub(crate) fn iter(&self, reader: &mut Handle) -> ThreadHazardArrayIter {
+        let hp = HazardPointer::new(reader);
         let array = hp.protect(&self.hazptrs);
         ThreadHazardArrayIter {
             array: unsafe { &*array }.as_slice(),

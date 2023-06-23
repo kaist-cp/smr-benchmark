@@ -28,8 +28,8 @@ impl Deferred {
 
     /// Executes and finalizes this deferred task.
     #[inline]
-    pub fn execute(self) {
-        unsafe { (self.task)(self.data) };
+    pub unsafe fn execute(self) {
+        (self.task)(self.data);
         // Prevent calling the `drop` for this object.
         forget(self);
     }

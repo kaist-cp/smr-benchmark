@@ -75,7 +75,7 @@ impl Local {
 
     unsafe fn pin<F>(&self, body: F)
     where
-        F: Fn(&mut EpochGuard),
+        F: Fn(EpochGuard),
     {
         let buf = recovery::jmp_buf();
 
@@ -120,10 +120,9 @@ impl Local {
             // the critical section would continues, as we would not `longjmp` from
             // the signal handler.
             self.repin();
-            let mut guard = EpochGuard::new(self);
 
             // Execute the body of this section.
-            body(&mut guard);
+            body(EpochGuard::new(self));
             compiler_fence(Ordering::SeqCst);
 
             // Finaly, close this critical section by unsetting the `RESTARTABLE`.
@@ -304,7 +303,7 @@ impl Handle {
     #[inline]
     pub unsafe fn pin<F>(&self, body: F)
     where
-        F: Fn(&mut EpochGuard),
+        F: Fn(EpochGuard),
     {
         unsafe { (*self.local).pin(body) }
     }
