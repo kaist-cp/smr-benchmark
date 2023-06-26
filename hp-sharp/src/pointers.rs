@@ -392,14 +392,28 @@ pub trait Defender {
             handle.crcu_handle.pin(|guard| {
                 // Load the saved intermediate result, if one exists.
                 let mut guard = EpochGuard::new(guard, handle, Some(&backup_idx));
+
+                // Initialize the first `result`. It is either a checkpointed result or an very
+                // first result(probably pointing a root of a data structure) returned by
+                // `init_result`. 
                 let mut result = defs
                     .get(backup_idx.load(Ordering::Relaxed))
                     .and_then(|def| def.as_read())
-                    .unwrap_or_else(|| init_result(transmute(&mut guard)));
+                    .unwrap_or_else(|| {
+                        // As `F1` takes a mutable reference to `guard`, `init_result` returns
+                        // `Read<'r>` and `guard`'s lifetime becomes an another arbitrary value.
+                        // They must be synchronized to use them on `step_forward`. 
+                        transmute(init_result(&mut guard))
+                    });
 
                 for iter in 0.. {
                     // Execute a single step.
-                    let step_result = step_forward(&mut result, transmute(&mut guard));
+                    // 
+                    // `transmute` synchronizes the lifetime parameters of `result` and `guard`.
+                    // After a single `step_forward`, the lifetimes become different to each other,
+                    // for example, `'r` and `'g` respectively. On the next iteration, they are
+                    // synchronized again with the same value.
+                    let step_result = step_forward(transmute(&mut result), &mut guard);
 
                     let finished = step_result == ReadStatus::Finished;
                     // TODO(@jeonghyeon): Apply an adaptive checkpointing.
