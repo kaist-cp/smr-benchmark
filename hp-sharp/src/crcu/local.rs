@@ -75,7 +75,7 @@ impl Local {
 
     unsafe fn pin<F>(&self, body: F)
     where
-        F: Fn(EpochGuard),
+        F: Fn(&mut EpochGuard),
     {
         let buf = recovery::jmp_buf();
 
@@ -122,7 +122,7 @@ impl Local {
             self.repin();
 
             // Execute the body of this section.
-            body(EpochGuard::new(self));
+            body(&mut EpochGuard::new(self));
             compiler_fence(Ordering::SeqCst);
 
             // Finaly, close this critical section by unsetting the `RESTARTABLE`.
@@ -181,20 +181,19 @@ impl Local {
         let defer_count = self.defer_count.get() + 1;
         self.defer_count.set(defer_count);
 
-        let collected = if defer_count >= Self::COUNTS_BETWEEN_FORCE_ADVANCE {
+        if defer_count >= Self::COUNTS_BETWEEN_FORCE_ADVANCE {
             Some(self.global().collect(self.global().advance()))
         } else if defer_count % Self::COUNTS_BETWEEN_TRY_ADVANCE == 0 {
             Some(self.global().collect(self.global().try_advance().ok()?))
         } else {
             None
-        }?;
-
-        Some(
+        }
+        .map(|collected| {
             collected
                 .into_iter()
                 .flat_map(|bag| bag.into_iter())
-                .collect(),
-        )
+                .collect()
+        })
     }
 }
 
@@ -303,7 +302,7 @@ impl Handle {
     #[inline]
     pub unsafe fn pin<F>(&self, body: F)
     where
-        F: Fn(EpochGuard),
+        F: Fn(&mut EpochGuard),
     {
         unsafe { (*self.local).pin(body) }
     }

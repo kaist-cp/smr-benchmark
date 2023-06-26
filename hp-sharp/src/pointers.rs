@@ -395,20 +395,20 @@ pub trait Defender {
 
                 // Initialize the first `result`. It is either a checkpointed result or an very
                 // first result(probably pointing a root of a data structure) returned by
-                // `init_result`. 
+                // `init_result`.
                 let mut result = defs
                     .get(backup_idx.load(Ordering::Relaxed))
                     .and_then(|def| def.as_read())
                     .unwrap_or_else(|| {
                         // As `F1` takes a mutable reference to `guard`, `init_result` returns
                         // `Read<'r>` and `guard`'s lifetime becomes an another arbitrary value.
-                        // They must be synchronized to use them on `step_forward`. 
+                        // They must be synchronized to use them on `step_forward`.
                         transmute(init_result(&mut guard))
                     });
 
                 for iter in 0.. {
                     // Execute a single step.
-                    // 
+                    //
                     // `transmute` synchronizes the lifetime parameters of `result` and `guard`.
                     // After a single `step_forward`, the lifetimes become different to each other,
                     // for example, `'r` and `'g` respectively. On the next iteration, they are

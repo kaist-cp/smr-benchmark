@@ -19,14 +19,14 @@ use crate::{
 /// writing data on non-atomic storage. To conduct jobs with side-effects, we must open a
 /// non-crashable section by `mask` method.
 pub struct EpochGuard {
-    inner: crcu::EpochGuard,
+    inner: *const crcu::EpochGuard,
     handle: *const Handle,
     backup_idx: Option<NonNull<AtomicUsize>>,
 }
 
 impl EpochGuard {
     pub(crate) fn new(
-        inner: crcu::EpochGuard,
+        inner: &crcu::EpochGuard,
         handle: &Handle,
         backup_idx: Option<&AtomicUsize>,
     ) -> Self {
@@ -51,7 +51,7 @@ impl EpochGuard {
     {
         // Note that protecting must be conducted in a crash-free section.
         // Otherwise it may forget to drop acquired hazard slot on crashing.
-        self.inner.mask(|guard| {
+        unsafe { &*self.inner }.mask(|guard| {
             let result = {
                 // Allocate fresh hazard slots to protect pointers.
                 let def = D::empty(unsafe { &mut *self.handle.cast_mut() });
