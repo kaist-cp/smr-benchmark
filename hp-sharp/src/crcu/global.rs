@@ -151,12 +151,14 @@ impl Global {
         // All pinned participants were pinned in the current global epoch.
         // Now let's advance the global epoch...
         //
-        // Note that if another thread already advanced it before us, this store will simply
-        // overwrite the global epoch with the same value. This is true because `try_advance` was
-        // called from a thread that was pinned in `global_epoch`, and the global epoch cannot be
-        // advanced two steps ahead of it.
+        // Note that advancing here may fail if other thread already have advanced the epoch.
         let new_epoch = global_epoch.successor();
-        self.epoch.store(new_epoch, Ordering::Release);
+        let _ = self.epoch.compare_exchange(
+            global_epoch,
+            new_epoch,
+            Ordering::Release,
+            Ordering::Relaxed,
+        );
         Ok(new_epoch)
     }
 
@@ -207,12 +209,14 @@ impl Global {
         // All pinned participants were pinned in the current global epoch.
         // Now let's advance the global epoch...
         //
-        // Note that if another thread already advanced it before us, this store will simply
-        // overwrite the global epoch with the same value. This is true because `try_advance` was
-        // called from a thread that was pinned in `global_epoch`, and the global epoch cannot be
-        // advanced two steps ahead of it.
+        // Note that advancing here may fail if other thread already have advanced the epoch.
         let new_epoch = global_epoch.successor();
-        self.epoch.store(new_epoch, Ordering::Release);
+        let _ = self.epoch.compare_exchange(
+            global_epoch,
+            new_epoch,
+            Ordering::Release,
+            Ordering::Relaxed,
+        );
         new_epoch
     }
 }
