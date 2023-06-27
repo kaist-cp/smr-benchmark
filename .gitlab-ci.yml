@@ -13,15 +13,6 @@ variables:
 
 image: rust:latest
 
-before_script:
-  # Install dependencies to build
-  # `clang` is necessary for `setjmp`
-  - apt-get update -qy
-  - apt-get install -y build-essential clang
-
-after_script:
-  - apt-get clean
-
 stages:
   - install
   - test
@@ -30,7 +21,8 @@ stages:
 install:
   stage: install
   script:
-    - rustc --version # triggering installation
+    # triggering installation
+    - rustc --version
 
 check:
   stage: test
@@ -42,21 +34,30 @@ check:
     - apt-get update -qy
     - apt-get install -y build-essential clang
   script:
-    # TODO(@jeonghyeon): change the working directory into cbr
     - cargo check --verbose
     - cargo fmt -- --check
-    # - cargo clippy -- -D warnings
+    - cargo clippy -p hp-sharp -- -D warnings
     - cargo test -- --nocapture
-    # - cargo audit
+    - cargo audit
 
 debug:
   stage: test
+  before_script:
+    # Install dependencies to build
+    # `clang` is necessary for `setjmp`
+    - apt-get update -qy
+    - apt-get install -y build-essential clang
   script:
     - cargo test
     - cargo build
 
 release:
   stage: test
+  before_script:
+    # Install dependencies to build
+    # `clang` is necessary for `setjmp`
+    - apt-get update -qy
+    - apt-get install -y build-essential clang
   script:
     - cargo test --release
     - cargo build --release

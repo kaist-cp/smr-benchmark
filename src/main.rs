@@ -8,7 +8,7 @@ extern crate crossbeam_pebr;
 extern crate smr_benchmark;
 
 use ::hp_pp::DEFAULT_DOMAIN;
-use clap::{arg_enum, value_t, App, Arg, ArgMatches};
+use clap::{value_parser, Arg, ArgMatches, Command, ValueEnum};
 use crossbeam_utils::thread::scope;
 use csv::Writer;
 use rand::distributions::{Uniform, WeightedIndex};
@@ -29,32 +29,28 @@ use smr_benchmark::nbr;
 use smr_benchmark::pebr;
 use smr_benchmark::{cdrc, ebr};
 
-arg_enum! {
-    #[derive(PartialEq, Debug)]
-    pub enum DS {
-        HList,
-        HMList,
-        HHSList,
-        HashMap,
-        NMTree,
-        BonsaiTree,
-        EFRBTree,
-        SkipList,
-    }
+#[derive(PartialEq, Debug, ValueEnum, Clone)]
+pub enum DS {
+    HList,
+    HMList,
+    HHSList,
+    HashMap,
+    NMTree,
+    BonsaiTree,
+    EFRBTree,
+    SkipList,
 }
 
-arg_enum! {
-    #[derive(PartialEq, Debug)]
-    #[allow(non_camel_case_types)]
-    pub enum MM {
-        NR,
-        EBR,
-        PEBR,
-        HP,
-        HP_PP,
-        NBR,
-        CDRC_EBR,
-    }
+#[derive(PartialEq, Debug, ValueEnum, Clone)]
+#[allow(non_camel_case_types)]
+pub enum MM {
+    NR,
+    EBR,
+    PEBR,
+    HP,
+    HP_PP,
+    NBR,
+    CDRC_EBR,
 }
 
 pub enum OpsPerCs {
@@ -89,12 +85,12 @@ struct Config {
 
     aux_thread: usize,
     aux_thread_period: Duration,
-    non_coop: usize,
+    non_coop: u8,
     non_coop_period: Duration,
     sampling: bool,
     sampling_period: Duration,
 
-    get_rate: usize,
+    get_rate: u8,
     op_dist: WeightedIndex<i32>,
     key_dist: Uniform<usize>,
     prefill: usize,
@@ -139,76 +135,68 @@ cfg_if! {
 }
 
 fn main() {
-    let matches = App::new("smr_benchmark")
+    let matches = Command::new("smr_benchmark")
         .arg(
-            Arg::with_name("data structure")
-                .short("d")
-                .value_name("DS")
-                .possible_values(&DS::variants())
+            Arg::new("data structure")
+                .short('d')
+                .value_parser(value_parser!(DS))
                 .required(true)
-                .case_insensitive(true)
+                .ignore_case(true)
                 .help("Data structure(s)"),
         )
         .arg(
-            Arg::with_name("memory manager")
-                .short("m")
-                .value_name("MM")
-                .possible_values(&MM::variants())
+            Arg::new("memory manager")
+                .short('m')
+                .value_parser(value_parser!(MM))
                 .required(true)
-                .case_insensitive(true)
+                .ignore_case(true)
                 .help("Memeory manager(s)"),
         )
         .arg(
-            Arg::with_name("threads")
-                .short("t")
-                .value_name("THREADS")
-                .takes_value(true)
+            Arg::new("threads")
+                .short('t')
+                .value_parser(value_parser!(usize))
                 .required(true)
                 .help("Numbers of threads to run."),
         )
         .arg(
-            Arg::with_name("non-coop")
-                .short("n")
-                .takes_value(true)
+            Arg::new("non-coop")
+                .short('n')
                 .help(
                     "The degree of non-cooperation. \
                      1: 1ms, 2: 10ms, 3: stall",
                 )
-                .possible_values(&["0", "1", "2", "3"])
+                .value_parser(value_parser!(u8).range(0..4))
                 .default_value("0"),
         )
         .arg(
-            Arg::with_name("get rate")
-                .short("g")
-                .takes_value(true)
+            Arg::new("get rate")
+                .short('g')
                 .help(
                     "The proportion of `get`(read) operations. \
                      0: 0%, 1: 50%, 2: 90%, 3: 100%",
                 )
-                .possible_values(&["0", "1", "2", "3"])
+                .value_parser(value_parser!(u8).range(0..4))
                 .default_value("0"),
         )
         .arg(
-            Arg::with_name("range")
-                .short("r")
-                .value_name("RANGE")
-                .takes_value(true)
+            Arg::new("range")
+                .short('r')
+                .value_parser(value_parser!(usize))
                 .help("Key range: [0..RANGE]")
                 .default_value("100000"),
         )
         .arg(
-            Arg::with_name("interval")
-                .short("i")
-                .value_name("INTERVAL")
-                .takes_value(true)
+            Arg::new("interval")
+                .short('i')
+                .value_parser(value_parser!(u64))
                 .help("Time interval in seconds to run the benchmark")
                 .default_value("10"),
         )
         .arg(
-            Arg::with_name("sampling period")
-                .short("s")
-                .value_name("MEM_SAMPLING_PERIOD")
-                .takes_value(true)
+            Arg::new("sampling period")
+                .short('s')
+                .value_parser(value_parser!(u64))
                 .help(
                     "The period to query jemalloc stats.allocated (ms). 0 for no sampling. \
                      Only supported on linux.",
@@ -216,25 +204,17 @@ fn main() {
                 .default_value("1"),
         )
         .arg(
-            Arg::with_name("ops per cs")
-                .short("c")
-                .value_name("OPS_PER_CS")
-                .takes_value(true)
-                .possible_values(&["1", "4"])
+            Arg::new("ops per cs")
+                .short('c')
+                .value_parser(["1", "4"])
                 .help("Operations per each critical section")
                 .default_value("1"),
         )
-        .arg(
-            Arg::with_name("output")
-                .short("o")
-                .value_name("OUTPUT")
-                .takes_value(true)
-                .help(
-                    "Output CSV filename. \
+        .arg(Arg::new("output").short('o').help(
+            "Output CSV filename. \
                      Appends the data if the file already exists.\n\
                      [default: results/<DS>.csv]",
-                ),
-        )
+        ))
         .get_matches();
 
     let (config, mut output) = setup(matches);
@@ -245,20 +225,20 @@ fn main() {
 }
 
 fn setup(m: ArgMatches) -> (Config, Writer<File>) {
-    let ds = value_t!(m, "data structure", DS).unwrap();
-    let mm = value_t!(m, "memory manager", MM).unwrap();
-    let threads = value_t!(m, "threads", usize).unwrap();
-    let non_coop = value_t!(m, "non-coop", usize).unwrap();
-    let get_rate = value_t!(m, "get rate", usize).unwrap();
-    let range = value_t!(m, "range", usize).unwrap();
+    let ds = m.get_one::<DS>("data structure").cloned().unwrap();
+    let mm = m.get_one::<MM>("memory manager").cloned().unwrap();
+    let threads = m.get_one::<usize>("threads").copied().unwrap();
+    let non_coop = m.get_one::<u8>("non-coop").copied().unwrap();
+    let get_rate = m.get_one::<u8>("get rate").copied().unwrap();
+    let range = m.get_one::<usize>("range").copied().unwrap();
     let prefill = range / 2;
     let key_dist = Uniform::from(0..range);
-    let interval = value_t!(m, "interval", u64).unwrap();
-    let sampling_period = value_t!(m, "sampling period", u64).unwrap();
+    let interval = m.get_one::<u64>("interval").copied().unwrap();
+    let sampling_period = m.get_one::<u64>("sampling period").copied().unwrap();
     let sampling = sampling_period > 0 && cfg!(all(not(feature = "sanitize"), target_os = "linux"));
-    let ops_per_cs = match value_t!(m, "ops per cs", usize).unwrap() {
-        1 => OpsPerCs::One,
-        4 => OpsPerCs::Four,
+    let ops_per_cs = match m.get_one::<String>("ops per cs").unwrap().as_str() {
+        "1" => OpsPerCs::One,
+        "4" => OpsPerCs::Four,
         _ => panic!("ops_per_cs should be one or four"),
     };
     let duration = Duration::from_secs(interval);
@@ -271,15 +251,16 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
     };
     let op_dist = WeightedIndex::new(op_weights).unwrap();
 
-    let output_name = &m
-        .value_of("output")
-        .map_or(format!("results/{}.csv", ds), |o| o.to_string());
+    let output_name = m.get_one::<String>("output").cloned().unwrap_or(format!(
+        "results/{}.csv",
+        ds.to_possible_value().unwrap().get_name()
+    ));
     create_dir_all("results").unwrap();
     let output = match OpenOptions::new()
         .read(true)
         .write(true)
         .append(true)
-        .open(output_name)
+        .open(&output_name)
     {
         Ok(f) => csv::Writer::from_writer(f),
         Err(_) => {
@@ -287,7 +268,7 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
                 .read(true)
                 .write(true)
                 .create(true)
-                .open(output_name)
+                .open(&output_name)
                 .unwrap();
             let mut output = csv::Writer::from_writer(f);
             // NOTE: `write_record` on `bench`
@@ -347,7 +328,12 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
 fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
     println!(
         "{}: {}, {} threads, n{}, c{}, g{}",
-        config.ds, config.mm, config.threads, config.non_coop, config.ops_per_cs, config.get_rate
+        config.ds.to_possible_value().unwrap().get_name(),
+        config.mm.to_possible_value().unwrap().get_name(),
+        config.threads,
+        config.non_coop,
+        config.ops_per_cs,
+        config.get_rate
     );
     let (ops_per_sec, peak_mem, avg_mem, peak_garb, avg_garb) = match config.mm {
         MM::NR => match config.ds {
@@ -569,8 +555,18 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
     output
         .write_record(&[
             // chrono::Local::now().to_rfc3339(),
-            config.ds.to_string(),
-            config.mm.to_string(),
+            config
+                .ds
+                .to_possible_value()
+                .unwrap()
+                .get_name()
+                .to_string(),
+            config
+                .mm
+                .to_possible_value()
+                .unwrap()
+                .get_name()
+                .to_string(),
             config.threads.to_string(),
             config.sampling_period.as_millis().to_string(),
             config.non_coop.to_string(),

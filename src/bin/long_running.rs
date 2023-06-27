@@ -8,7 +8,7 @@ extern crate crossbeam_pebr;
 extern crate smr_benchmark;
 
 use ::hp_pp::DEFAULT_DOMAIN;
-use clap::{arg_enum, value_t, App, Arg, ArgMatches};
+use clap::{value_parser, Arg, ArgMatches, Command, ValueEnum};
 use crossbeam_utils::thread::scope;
 use csv::Writer;
 use rand::distributions::Uniform;
@@ -27,17 +27,15 @@ use smr_benchmark::hp_pp;
 use smr_benchmark::pebr;
 use smr_benchmark::{cdrc, ebr};
 
-arg_enum! {
-    #[derive(PartialEq, Debug)]
-    #[allow(non_camel_case_types)]
-    pub enum MM {
-        NR,
-        EBR,
-        PEBR,
-        HP,
-        HP_PP,
-        CDRC_EBR,
-    }
+#[derive(PartialEq, Debug, ValueEnum, Clone)]
+#[allow(non_camel_case_types)]
+pub enum MM {
+    NR,
+    EBR,
+    PEBR,
+    HP,
+    HP_PP,
+    CDRC_EBR,
 }
 
 pub enum OpsPerCs {
@@ -106,70 +104,58 @@ cfg_if! {
 }
 
 fn main() {
-    let matches = App::new("smr_benchmark")
+    let matches = Command::new("smr_benchmark")
         .arg(
-            Arg::with_name("memory manager")
-                .short("m")
-                .value_name("MM")
-                .possible_values(&MM::variants())
+            Arg::new("memory manager")
+                .short('m')
+                .value_parser(value_parser!(MM))
                 .required(true)
-                .case_insensitive(true)
+                .ignore_case(true)
                 .help("Memeory manager(s)"),
         )
         .arg(
-            Arg::with_name("writers")
-                .short("w")
-                .value_name("WRITERS")
-                .takes_value(true)
+            Arg::new("writers")
+                .short('w')
+                .value_parser(value_parser!(usize))
                 .required(true)
                 .help("Numbers of threads which perform only write operations."),
         )
         .arg(
-            Arg::with_name("readers")
-                .short("g")
-                .value_name("READERS")
-                .takes_value(true)
+            Arg::new("readers")
+                .short('g')
+                .value_parser(value_parser!(usize))
                 .required(true)
                 .help("Numbers of threads which perform only get operations."),
         )
         .arg(
-            Arg::with_name("range")
-                .short("r")
-                .value_name("RANGE")
-                .takes_value(true)
+            Arg::new("range")
+                .short('r')
+                .value_parser(value_parser!(usize))
                 .help("Key range: [0..RANGE]")
                 .default_value("100000"),
         )
         .arg(
-            Arg::with_name("interval")
-                .short("i")
-                .value_name("INTERVAL")
-                .takes_value(true)
+            Arg::new("interval")
+                .short('i')
+                .value_parser(value_parser!(u64))
                 .help("Time interval in seconds to run the benchmark")
                 .default_value("10"),
         )
         .arg(
-            Arg::with_name("sampling period")
-                .short("s")
-                .value_name("MEM_SAMPLING_PERIOD")
-                .takes_value(true)
+            Arg::new("sampling period")
+                .short('s')
+                .value_parser(value_parser!(u64))
                 .help(
                     "The period to query jemalloc stats.allocated (ms). 0 for no sampling. \
                      Only supported on linux.",
                 )
                 .default_value("1"),
         )
-        .arg(
-            Arg::with_name("output")
-                .short("o")
-                .value_name("OUTPUT")
-                .takes_value(true)
-                .help(
-                    "Output CSV filename. \
+        .arg(Arg::new("output").short('o').help(
+            "Output CSV filename. \
                      Appends the data if the file already exists.\n\
-                     [default: results/long-running.csv]",
-                ),
-        )
+                     [default: results/<DS>.csv]",
+        ))
         .get_matches();
 
     let (config, mut output) = setup(matches);
@@ -177,14 +163,14 @@ fn main() {
 }
 
 fn setup(m: ArgMatches) -> (Config, Writer<File>) {
-    let mm = value_t!(m, "memory manager", MM).unwrap();
-    let writers = value_t!(m, "writers", usize).unwrap();
-    let readers = value_t!(m, "readers", usize).unwrap();
-    let range = value_t!(m, "range", usize).unwrap();
+    let mm = m.get_one::<MM>("memory manager").cloned().unwrap();
+    let writers = m.get_one::<usize>("writers").copied().unwrap();
+    let readers = m.get_one::<usize>("readers").copied().unwrap();
+    let range = m.get_one::<usize>("range").copied().unwrap();
     let prefill = range / 2;
     let key_dist = Uniform::from(0..range);
-    let interval = value_t!(m, "interval", u64).unwrap();
-    let sampling_period = value_t!(m, "sampling period", u64).unwrap();
+    let interval = m.get_one::<u64>("interval").copied().unwrap();
+    let sampling_period = m.get_one::<u64>("sampling period").copied().unwrap();
     let sampling = sampling_period > 0 && cfg!(all(not(feature = "sanitize"), target_os = "linux"));
     let duration = Duration::from_secs(interval);
 
@@ -193,15 +179,16 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
         "The number of readers must be greater than zero!"
     );
 
-    let output_name = &m
-        .value_of("output")
-        .map_or(format!("results/long-running.csv"), |o| o.to_string());
+    let output_name = m
+        .get_one("output")
+        .cloned()
+        .unwrap_or("results/long-running.csv".to_string());
     create_dir_all("results").unwrap();
     let output = match OpenOptions::new()
         .read(true)
         .write(true)
         .append(true)
-        .open(output_name)
+        .open(&output_name)
     {
         Ok(f) => csv::Writer::from_writer(f),
         Err(_) => {
@@ -209,7 +196,7 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
                 .read(true)
                 .write(true)
                 .create(true)
-                .open(output_name)
+                .open(&output_name)
                 .unwrap();
             let mut output = csv::Writer::from_writer(f);
             // NOTE: `write_record` on `bench`
@@ -253,7 +240,9 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
 fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
     println!(
         "{}: {} writers, {} readers",
-        config.mm, config.writers, config.readers
+        config.mm.to_possible_value().unwrap().get_name(),
+        config.writers,
+        config.readers
     );
     let (ops_per_sec, peak_mem, avg_mem, peak_garb, avg_garb) = match config.mm {
         MM::NR => bench_map_nr(config, PrefillStrategy::Decreasing),
@@ -265,7 +254,12 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
     };
     output
         .write_record(&[
-            config.mm.to_string(),
+            config
+                .mm
+                .to_possible_value()
+                .unwrap()
+                .get_name()
+                .to_string(),
             config.sampling_period.as_millis().to_string(),
             ops_per_sec.to_string(),
             peak_mem.to_string(),
