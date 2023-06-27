@@ -266,11 +266,11 @@ impl<K, V> hp_pp::Invalidate for Node<K, V> {
         let left = self.left.load(Ordering::Acquire);
         let right = self.right.load(Ordering::Acquire);
         self.left.store(
-            tagged(left, Marks::new(true, true, true).bits),
+            tagged(left, Marks::new(true, true, true).bits()),
             Ordering::Release,
         );
         self.right.store(
-            tagged(right, Marks::new(true, true, true).bits),
+            tagged(right, Marks::new(true, true, true).bits()),
             Ordering::Release,
         );
     }

@@ -31,6 +31,7 @@ use hp_pp::{
 use crate::hp::concurrent_map::ConcurrentMap;
 
 bitflags! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     struct UpdateTag: usize {
         const CLEAN = 0b00;
         const DFLAG = 0b01;

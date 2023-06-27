@@ -5,6 +5,7 @@ use crossbeam_ebr::{unprotected, Atomic, CompareExchangeError, Guard, Owned, Sha
 use super::concurrent_map::ConcurrentMap;
 
 bitflags! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     struct UpdateTag: usize {
         const CLEAN = 0usize;
         const DFLAG = 1usize;
