@@ -47,7 +47,7 @@ impl EpochGuard {
         recovery::set_restartable(true);
 
         if guard.is_crashed() || guard.is_advanced.get() {
-            unsafe { guard.repin_manually() };
+            guard.repin();
         }
         result
     }
@@ -74,11 +74,9 @@ impl CrashGuard {
 
     /// Repins its critical section if we are crashed(in other words, ejected).
     ///
-    /// # Safety
-    ///
     /// Developers must ensure that there is no possibilities of memory leaks across this.
     #[inline]
-    pub unsafe fn repin_manually(&self) -> ! {
+    pub fn repin(&self) -> ! {
         compiler_fence(Ordering::SeqCst);
         recovery::set_restartable(false);
         unsafe { recovery::perform_longjmp() };

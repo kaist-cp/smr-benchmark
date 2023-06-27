@@ -63,7 +63,7 @@ impl EpochGuard {
                 // Restart if the thread is crashed while protecting.
                 if guard.is_crashed() {
                     drop(def);
-                    unsafe { guard.repin_manually() };
+                    guard.repin();
                 }
 
                 body(&def, &CrashGuard::new(guard, unsafe { &*self.handle }))
@@ -74,7 +74,7 @@ impl EpochGuard {
                 if let Some(backup_idx) = self.backup_idx {
                     unsafe { backup_idx.as_ref() }.store(2, Ordering::Relaxed);
                 }
-                unsafe { guard.repin_manually() };
+                guard.repin();
             }
         });
     }
