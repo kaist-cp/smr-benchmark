@@ -164,32 +164,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crossbeam-cbr-epoch"
-version = "0.7.1"
-dependencies = [
- "arrayvec 0.4.11",
- "bitflags",
- "cfg-if 0.1.10",
- "crossbeam-cbr-utils",
- "lazy_static",
- "membarrier 0.2.1 (git+https://github.com/jeehoonkang/membarrier-rs.git?rev=80647e6810b7e9e4545301e2b546e26c6b46b704)",
- "memoffset 0.7.1",
- "murmur3 0.4.1 (git+https://github.com/kaist-cp/murmur3.git?rev=06b202c65b2eec6bf6db3f6dd4a0dc39142705e4)",
- "nix",
- "scopeguard",
- "setjmp",
- "static_assertions 1.1.0",
-]
-
-[[package]]
-name = "crossbeam-cbr-utils"
-version = "0.6.5"
-dependencies = [
- "cfg-if 0.1.10",
- "lazy_static",
-]
-
-[[package]]
 name = "crossbeam-epoch"
 version = "0.9.13"
 dependencies = [
@@ -224,7 +198,7 @@ dependencies = [
  "lazy_static",
  "membarrier 0.2.1",
  "memoffset 0.7.1",
- "murmur3 0.4.1",
+ "murmur3",
  "scopeguard",
  "static_assertions 0.3.3",
 ]
@@ -405,17 +379,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "membarrier"
-version = "0.2.1"
-source = "git+https://github.com/jeehoonkang/membarrier-rs.git?rev=80647e6810b7e9e4545301e2b546e26c6b46b704#80647e6810b7e9e4545301e2b546e26c6b46b704"
-dependencies = [
- "cfg-if 0.1.10",
- "kernel32-sys",
- "lazy_static",
- "libc",
-]
-
-[[package]]
 name = "memchr"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -448,15 +411,6 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 [[package]]
 name = "murmur3"
 version = "0.4.1"
-dependencies = [
- "byteorder",
- "static_assertions 0.3.3",
-]
-
-[[package]]
-name = "murmur3"
-version = "0.4.1"
-source = "git+https://github.com/kaist-cp/murmur3.git?rev=06b202c65b2eec6bf6db3f6dd4a0dc39142705e4#06b202c65b2eec6bf6db3f6dd4a0dc39142705e4"
 dependencies = [
  "byteorder",
  "static_assertions 0.3.3",
@@ -651,7 +605,6 @@ dependencies = [
  "cdrc-rs",
  "cfg-if 1.0.0",
  "clap",
- "crossbeam-cbr-epoch",
  "crossbeam-epoch 0.9.13",
  "crossbeam-pebr-epoch",
  "crossbeam-utils 0.8.14",

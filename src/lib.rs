@@ -30,7 +30,6 @@ extern crate scopeguard;
 #[macro_use]
 mod utils;
 
-pub mod cbr;
 pub mod cdrc;
 pub mod ebr;
 pub mod hp;
