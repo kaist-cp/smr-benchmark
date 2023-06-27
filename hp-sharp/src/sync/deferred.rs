@@ -69,17 +69,6 @@ impl Bag {
         Self::default()
     }
 
-    /// Returns `true` if the bag is empty.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.defs.is_empty()
-    }
-
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.defs.len()
-    }
-
     /// Attempts to insert a deferred function into the bag.
     ///
     /// Returns `Ok(())` if successful, and `Err(deferred)` for the given `deferred` if the bag is

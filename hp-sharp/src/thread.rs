@@ -4,9 +4,9 @@ use core::{mem, ptr};
 use membarrier::heavy_membarrier;
 
 use crate::crcu;
-use crate::crcu::Deferred;
 use crate::domain::Global;
 use crate::hazard::ThreadRecord;
+use crate::sync::Deferred;
 
 pub struct Handle {
     pub(crate) domain: *const Global,

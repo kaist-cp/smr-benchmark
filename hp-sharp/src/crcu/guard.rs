@@ -3,7 +3,7 @@ use std::{
     sync::atomic::{compiler_fence, Ordering},
 };
 
-use crate::crcu::Deferred;
+use crate::sync::Deferred;
 
 use super::{local::Local, recovery};
 

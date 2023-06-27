@@ -15,7 +15,7 @@ use nix::sys::{
 };
 use static_assertions::const_assert;
 
-use crate::crcu::{Bag, Deferred};
+use crate::sync::{Bag, Deferred};
 
 use super::{
     epoch::{AtomicEpoch, Epoch},

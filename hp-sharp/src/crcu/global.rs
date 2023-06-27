@@ -4,8 +4,7 @@ use atomic::fence;
 use crossbeam_utils::CachePadded;
 use nix::{errno::Errno, sys::pthread::pthread_self};
 
-use crate::crcu::Bag;
-use crate::sync::Pile;
+use crate::sync::{Bag, Pile};
 
 use super::{
     epoch::{AtomicEpoch, Epoch},

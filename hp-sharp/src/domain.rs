@@ -3,8 +3,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crossbeam_utils::CachePadded;
 use rustc_hash::FxHashSet;
 
-use crate::crcu::{self, Deferred};
-use crate::sync::Pile;
+use crate::crcu;
+use crate::sync::{Deferred, Pile};
 use crate::{hazard::ThreadRecords, thread::Handle};
 
 pub struct Global {
