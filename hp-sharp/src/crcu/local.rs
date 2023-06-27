@@ -57,7 +57,7 @@ impl Local {
 
     /// Unpins and then pins the [`Local`].
     #[inline]
-    pub(crate) fn repin(&self) {
+    pub(crate) fn repin(&mut self) {
         let epoch = self.epoch.load(Ordering::Relaxed);
         let global_epoch = self.global().epoch.load(Ordering::Relaxed).pinned();
 
