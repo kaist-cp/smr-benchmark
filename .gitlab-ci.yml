@@ -1,8 +1,8 @@
 # Setup a cache to cache job parts between jobs to ensure faster builds
 cache:
   key: "$CI_COMMIT_REF_SLUG"
+  untracked: true
   paths:
-    - /var/cache/apt/archives/
     - $HOME/.cargo/
     - target/
 
@@ -25,12 +25,14 @@ install:
     # `clang` is necessary for `setjmp`
     - apt-get update -qy
     - apt-get install -y build-essential clang
-    # triggering installation
+    # Trigger installation
     - rustc --version
 
 check:
   stage: test
   before_script:
+    # Install dependencies to build
+    # `clang` is necessary for `setjmp`
     - apt-get update -qy
     - apt-get install -y build-essential clang
     - rustup component add rustfmt clippy
@@ -41,13 +43,17 @@ check:
     - cargo clippy -p hp-sharp -- -D warnings
     - cargo audit
 
-    - cargo build
     - cargo build --release
     - cargo test -- --nocapture
-    - cargo test --release  --nocapture
+    - cargo test --release -- --nocapture
 
 pages:
   stage: deploy
+  before_script:
+    # Install dependencies to build
+    # `clang` is necessary for `setjmp`
+    - apt-get update -qy
+    - apt-get install -y build-essential clang
   script:
     - cargo doc
     - mkdir -p public && cp -r target/doc/* public
