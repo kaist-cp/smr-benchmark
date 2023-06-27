@@ -9,7 +9,7 @@ use membarrier::light_membarrier;
 
 use crate::{
     crcu::Deferrable,
-    hpsharp::{guard::EpochGuard, guard::Invalidate, hazard::HazardPointer, thread::Handle},
+    hpsharp::{guard::EpochGuard, guard::Invalidate, hazard::HazardPointer, handle::Handle},
 };
 
 /// A result of unsuccessful `compare_exchange`.

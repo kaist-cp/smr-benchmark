@@ -4,7 +4,7 @@ use core::{mem, ptr};
 
 use membarrier::heavy_membarrier;
 
-use super::domain::Global;
+use super::global::Global;
 use super::hazard::ThreadRecord;
 use crate::crcu;
 use crate::sync::Deferred;

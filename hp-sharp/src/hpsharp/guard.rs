@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     crcu::{self, Deferrable},
-    hpsharp::{thread::free, Defender, Handle, Pointer, Shared, WriteResult},
+    hpsharp::{handle::free, Defender, Handle, Pointer, Shared, WriteResult},
     sync::Deferred,
 };
 

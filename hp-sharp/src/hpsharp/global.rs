@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crossbeam_utils::CachePadded;
 use rustc_hash::FxHashSet;
 
-use super::{hazard::ThreadRecords, thread::Handle};
+use super::{hazard::ThreadRecords, handle::Handle};
 use crate::crcu;
 use crate::sync::{Deferred, Pile};
 
