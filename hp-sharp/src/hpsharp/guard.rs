@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     crcu::{self, Deferrable},
-    hpsharp::{handle::free, Defender, Handle, Pointer, Shared, WriteResult},
+    hpsharp::{handle::free, Protector, Handle, Pointer, Shared, WriteResult},
     sync::Deferred,
 };
 
@@ -47,7 +47,7 @@ impl EpochGuard {
     pub fn mask<'r, F, D>(&'r self, to_deref: D::Read<'r>, body: F)
     where
         F: Fn(&D, &CrashGuard) -> WriteResult,
-        D: Defender,
+        D: Protector,
     {
         // Note that protecting must be conducted in a crash-free section.
         // Otherwise it may forget to drop acquired hazard slot on crashing.
@@ -56,7 +56,7 @@ impl EpochGuard {
                 // Allocate fresh hazard slots to protect pointers.
                 let def = D::empty(unsafe { &mut *self.handle.cast_mut() });
                 // Store pointers in hazard slots and issue a light fence.
-                unsafe { def.defend_unchecked(&to_deref) };
+                unsafe { def.protect_unchecked(&to_deref) };
                 membarrier::light_membarrier();
 
                 // Restart if the thread is crashed while protecting.
@@ -105,7 +105,7 @@ pub trait Invalidate {
 
 pub trait Retire {
     /// Retires a given shared pointer, so that it can be reclaimed when the current epoch is ended
-    /// and there is no hazard pointer defending the pointer.
+    /// and there is no hazard pointer protecting the pointer.
     ///
     /// # Safety
     ///

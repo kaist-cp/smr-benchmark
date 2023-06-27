@@ -243,7 +243,7 @@ impl<T> Shield<T> {
         unsafe { decompose_data::<T>(self.inner.get()).0.as_mut() }
     }
 
-    /// Returns `true` if the defended pointer is null.
+    /// Returns `true` if the protected pointer is null.
     #[inline]
     pub fn is_null(&self) -> bool {
         decompose_data::<T>(self.inner.get()).0 as usize == 0
@@ -290,11 +290,11 @@ impl<T> Pointer<T> for Shield<T> {
 }
 
 /// A trait for `Shield` which can protect `Shared`.
-pub trait Defender {
+pub trait Protector {
     /// A set of `Shared` pointers which is protected by an epoch.
     type Read<'r>: Clone + Copy;
 
-    /// Returns a default `Defender` with nulls for [`Shield`]s and defaults for other types.
+    /// Returns a default [`Protector`] with nulls for [`Shield`]s and defaults for other types.
     fn empty(handle: &mut Handle) -> Self;
 
     /// Stores the given `Read` pointers in hazard slots without any validations.
@@ -305,7 +305,7 @@ pub trait Defender {
     /// truly protected, as the memory block may already be reclaimed. We must validate whether
     /// the memory block is reclaimed or not, by reloading the atomic pointer or checking the
     /// local CRCU epoch.
-    unsafe fn defend_unchecked(&self, read: &Self::Read<'_>);
+    unsafe fn protect_unchecked(&self, read: &Self::Read<'_>);
 
     /// Loads currently protected pointers and checks whether any of them are invalidated.
     /// If not, creates a new `Read` and returns it.
@@ -317,7 +317,7 @@ pub trait Defender {
     /// Starts a crashable critical section where we cannot perform operations with side-effects,
     /// such as system calls, non-atomic write on a global variable, etc.
     ///
-    /// After finishing the section, it defends the returned `Read` pointers, so that they can be
+    /// After finishing the section, it protects the returned `Read` pointers, so that they can be
     /// dereferenced outside of the phase.
     ///
     /// # Safety
@@ -336,10 +336,10 @@ pub trait Defender {
             compiler_fence(Ordering::SeqCst);
 
             // Store pointers in hazard slots and issue a light fence.
-            self.defend_unchecked(&result);
+            self.protect_unchecked(&result);
             light_membarrier();
 
-            // If we successfully defended pointers without an intermediate crash,
+            // If we successfully protected pointers without an intermediate crash,
             // it has the same meaning with a well-known HP validation:
             // we can safely assume that the pointers are not reclaimed yet.
         })
@@ -350,9 +350,9 @@ pub trait Defender {
     ///
     /// This is similar to `pin`, as it manages CRCU critical section. However, this `pin_loop`
     /// prevents a starvation in crash-intensive workload by saving intermediate results on a
-    /// backup `Defender`.
+    /// backup [`Protector`].
     ///
-    /// After finishing the section, it defends the final `Read` pointers, so that they can be
+    /// After finishing the section, it protects the final `Read` pointers, so that they can be
     /// dereferenced outside of the phase.
     ///
     /// # Safety
@@ -414,7 +414,7 @@ pub trait Defender {
 
                     if finished || should_checkpoint {
                         if iter % ITER_BETWEEN_CHECKPOINTS == 0 {
-                            // Select an available defender to protect a backup.
+                            // Select an available protector to protect a backup.
                             let (curr_def, next_def, next_idx) = {
                                 let backup_idx = backup_idx.load(Ordering::Relaxed);
                                 (
@@ -425,7 +425,7 @@ pub trait Defender {
                             };
 
                             // Store pointers in hazard slots and issue a light fence.
-                            unsafe { next_def.defend_unchecked(&result) };
+                            unsafe { next_def.protect_unchecked(&result) };
                             membarrier::light_membarrier();
 
                             // Success! We are not ejected so the protection is valid!
@@ -453,8 +453,8 @@ pub trait Defender {
     }
 }
 
-/// An empty `Defender`.
-impl Defender for () {
+/// An empty [`Protector`].
+impl Protector for () {
     type Read<'r> = ();
 
     #[inline]
@@ -463,7 +463,7 @@ impl Defender for () {
     }
 
     #[inline]
-    unsafe fn defend_unchecked(&self, _: &Self::Read<'_>) {}
+    unsafe fn protect_unchecked(&self, _: &Self::Read<'_>) {}
 
     #[inline]
     unsafe fn as_read<'r>(&self) -> Option<Self::Read<'r>> {
@@ -474,8 +474,8 @@ impl Defender for () {
     fn release(&self) {}
 }
 
-/// A unit `Defender` with a single `Shield`.
-impl<T: Invalidate> Defender for Shield<T> {
+/// A unit [`Protector`] with a single [`Shield`].
+impl<T: Invalidate> Protector for Shield<T> {
     type Read<'r> = Shared<'r, T>;
 
     #[inline]
@@ -484,7 +484,7 @@ impl<T: Invalidate> Defender for Shield<T> {
     }
 
     #[inline]
-    unsafe fn defend_unchecked(&self, read: &Self::Read<'_>) {
+    unsafe fn protect_unchecked(&self, read: &Self::Read<'_>) {
         let raw = read.untagged().as_raw();
         self.hazptr.protect_raw(raw as *const T as *mut T);
         self.inner.set(raw);
@@ -507,11 +507,11 @@ impl<T: Invalidate> Defender for Shield<T> {
     }
 }
 
-macro_rules! impl_defender_for_array {(
+macro_rules! impl_protector_for_array {(
     $($N:literal)*
 ) => (
     $(
-        impl<T: Invalidate> Defender for [Shield<T>; $N] {
+        impl<T: Invalidate> Protector for [Shield<T>; $N] {
             type Read<'r> = [Shared<'r, T>; $N];
 
             #[inline]
@@ -524,9 +524,9 @@ macro_rules! impl_defender_for_array {(
             }
 
             #[inline]
-            unsafe fn defend_unchecked(&self, read: &Self::Read<'_>) {
+            unsafe fn protect_unchecked(&self, read: &Self::Read<'_>) {
                 for (shield, shared) in self.iter().zip(read) {
-                    shield.defend_unchecked(shared);
+                    shield.protect_unchecked(shared);
                 }
             }
 
@@ -552,7 +552,7 @@ macro_rules! impl_defender_for_array {(
     )*
 )}
 
-impl_defender_for_array! {
+impl_protector_for_array! {
     00
     01 02 03 04 05 06 07 08
     09 10 11 12 13 14 15 16
