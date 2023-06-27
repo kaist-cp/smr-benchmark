@@ -99,7 +99,7 @@ impl Local {
 
                 // Unblock the signal before restarting the section.
                 let mut oldset = SigSet::empty();
-                oldset.add(unsafe { recovery::ejection_signal() });
+                oldset.add(recovery::EJECTION_SIGNAL);
                 pthread_sigmask(SigmaskHow::SIG_UNBLOCK, Some(&oldset), None)
                     .expect("Failed to unblock signal");
             }

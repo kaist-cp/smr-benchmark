@@ -1,6 +1,4 @@
 /// A thread-local recovery manager with signal handling
-///
-/// TODO(@jeonghyeon): modulize those recovery primitives. (RecoveryGuard?)
 use nix::libc::{c_void, siginfo_t};
 use nix::sys::pthread::{pthread_kill, Pthread};
 use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
@@ -9,8 +7,7 @@ use std::cell::RefCell;
 use std::mem::MaybeUninit;
 use std::sync::atomic::{compiler_fence, AtomicBool, Ordering};
 
-static mut EJECTION_SIGNAL: Signal = Signal::SIGUSR1;
-static mut SIG_ACTION: MaybeUninit<SigAction> = MaybeUninit::uninit();
+pub const EJECTION_SIGNAL: Signal = Signal::SIGUSR1;
 
 thread_local! {
     static JMP_BUF: RefCell<MaybeUninit<sigjmp_buf>> = RefCell::new(MaybeUninit::uninit());
@@ -19,23 +16,23 @@ thread_local! {
 
 /// Install a signal handler.
 ///
-/// Note that if a signal handler is installed for the parent thread
-/// before spawning childs, we don't have to call `sigaction` for every child thread.
+/// Note that if a signal handler is installed for the parent thread before spawning childs, we
+/// don't have to call `sigaction` for every child thread.
 ///
-/// By default, SIGUSR1 is used as a ejection signal.
-/// To use the other signal, use `set_ejection_signal`.
+/// By default, SIGUSR1 is used as an ejection signal.
 #[inline]
 pub(crate) unsafe fn install() {
-    let sig_action = SigAction::new(
-        SigHandler::SigAction(handle_signal),
-        // Restart any interrupted sys calls instead of silently failing
-        SaFlags::SA_RESTART | SaFlags::SA_SIGINFO,
-        // Block signals during handler
-        SigSet::all(),
-    );
-    SIG_ACTION.write(sig_action);
-    sigaction(EJECTION_SIGNAL, SIG_ACTION.assume_init_ref())
-        .expect("Failed to install signal handler.");
+    sigaction(
+        EJECTION_SIGNAL,
+        &SigAction::new(
+            SigHandler::SigAction(handle_signal),
+            // Restart any interrupted sys calls instead of silently failing
+            SaFlags::SA_RESTART | SaFlags::SA_SIGINFO,
+            // Block signals during handler
+            SigSet::all(),
+        ),
+    )
+    .expect("Failed to install signal handler.");
 }
 
 #[inline]
@@ -56,38 +53,8 @@ pub(crate) fn set_restartable(set_rest: bool) {
     RESTARTABLE.with(|rest| rest.store(set_rest, Ordering::Relaxed));
 }
 
-/// Get a current ejection signal.
-///
-/// By default, SIGUSR1 is used as a ejection signal.
-/// To use the other signal, use `set_ejection_signal`.
-///
-/// # Safety
-///
-/// This function accesses and modify static variable.
-/// To avoid potential race conditions, do not
-/// call this function concurrently.
-pub unsafe fn ejection_signal() -> Signal {
-    EJECTION_SIGNAL
-}
-
-/// Set user-defined ejection signal.
-/// This function allows a user to use the other signal
-/// than SIGUSR1 for a ejection signal.
-/// Note that it must called before creating
-/// a Collector object.
-///
-/// # Safety
-///
-/// This function accesses and modify static variable.
-/// To avoid potential race conditions, do not
-/// call this function concurrently.
-pub unsafe fn set_ejection_signal(signal: Signal) {
-    EJECTION_SIGNAL = signal;
-}
-
-/// Get a mutable thread-local pointer to `sigjmp_buf`,
-/// which is used for `sigsetjmp` at the entrance of
-/// read phase.
+/// Get a mutable thread-local pointer to `sigjmp_buf`, which is used for `sigsetjmp` at the
+/// entrance of read phase.
 #[inline]
 pub(crate) fn jmp_buf() -> *mut sigjmp_buf {
     JMP_BUF.with(|buf| buf.borrow_mut().as_mut_ptr())
@@ -102,11 +69,9 @@ extern "C" fn handle_signal(_: i32, _: *mut siginfo_t, _: *mut c_void) {
     unsafe { perform_longjmp() };
 }
 
-/// Perform `siglongjmp` without changing any phase-related variables
-/// like `RESTARTABLE`.
+/// Perform `siglongjmp` without changing any phase-related variables like `RESTARTABLE`.
 ///
-/// It assume that the `jmp_buf` is properly initialized
-/// by calling `siglongjmp`
+/// It assume that the `jmp_buf` is properly initialized by calling `siglongjmp`.
 #[inline]
 pub(crate) unsafe fn perform_longjmp() -> ! {
     let buf = jmp_buf();
