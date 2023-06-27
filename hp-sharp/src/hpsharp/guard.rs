@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     crcu::{self, Deferrable},
-    hpsharp::{handle::free, Protector, Handle, Pointer, Shared, WriteResult},
+    hpsharp::{handle::free, Handle, Pointer, Protector, Shared, WriteResult},
     sync::Deferred,
 };
 
@@ -60,7 +60,7 @@ impl EpochGuard {
                 membarrier::light_membarrier();
 
                 // Restart if the thread is crashed while protecting.
-                if guard.is_crashed() {
+                if guard.is_ejected() {
                     drop(def);
                     guard.repin();
                 }

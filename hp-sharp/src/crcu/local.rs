@@ -75,8 +75,6 @@ impl Local {
     where
         F: Fn(&mut EpochGuard),
     {
-        let buf = recovery::jmp_buf();
-
         // A dummy loop to bypass a false stack overflow from AdressSanitizer.
         //
         // # HACK: A dummy loop and `blackbox`
@@ -91,41 +89,24 @@ impl Local {
         //
         // So, they are added to avoid false positives from the sanitizer.
         loop {
-            // Make a checkpoint with `sigsetjmp` for recovering in this critical section.
-            if unsafe { setjmp::sigsetjmp(buf, 0) } == 1 {
-                compiler_fence(Ordering::SeqCst);
+            {
+                // Makes a checkpoint and create a `RecoveryGuard`.
+                let guard = recovery::guard!();
 
-                // Unblock the signal before restarting the section.
-                let mut oldset = SigSet::empty();
-                oldset.add(recovery::EJECTION_SIGNAL);
-                pthread_sigmask(SigmaskHow::SIG_UNBLOCK, Some(&oldset), None)
-                    .expect("Failed to unblock signal");
+                // Repin the current epoch.
+                // Acquiring an epoch must be proceeded after starting the crashable section,
+                // not before. This is because if we acquire it before allowing a crash,
+                // it is possible to be ejected before allowing. Although an ejection is occured,
+                // the critical section would continues, as we would not `longjmp` from
+                // the signal handler.
+                self.repin();
+
+                // Execute the body of this section.
+                let mut guard = EpochGuard::new(self, guard);
+                body(&mut guard);
+
+                // Finaly, close this critical section by dropping `guard`.
             }
-            compiler_fence(Ordering::SeqCst);
-
-            // Get ready to open the section by setting atomic indicators.
-            debug_assert!(
-                !recovery::is_restartable(),
-                "restartable value should be false before starting a critical section"
-            );
-            recovery::set_restartable(true);
-            compiler_fence(Ordering::SeqCst);
-
-            // Repin the current epoch.
-            // Acquiring an epoch must be proceeded after starting the crashable section,
-            // not before. This is because if we acquire it before allowing a crash,
-            // it is possible to be ejected before allowing. Although an ejection is occured,
-            // the critical section would continues, as we would not `longjmp` from
-            // the signal handler.
-            self.repin();
-
-            // Execute the body of this section.
-            body(&mut EpochGuard::new(self));
-            compiler_fence(Ordering::SeqCst);
-
-            // Finaly, close this critical section by unsetting the `RESTARTABLE`.
-            recovery::set_restartable(false);
-            compiler_fence(Ordering::SeqCst);
 
             // # HACK: A dummy loop and `blackbox`
             // (See comments on the loop for more information.)

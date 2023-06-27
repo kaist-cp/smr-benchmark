@@ -5,7 +5,7 @@ use std::{
 
 use crate::sync::Deferred;
 
-use super::{local::Local, recovery};
+use super::{local::Local, RecoveryGuard};
 
 /// A crashable critical section guard.
 ///
@@ -14,11 +14,12 @@ use super::{local::Local, recovery};
 /// non-crashable section by `mask` method.
 pub struct EpochGuard {
     local: *mut Local,
+    inner: RecoveryGuard,
 }
 
 impl EpochGuard {
-    pub(crate) fn new(local: &mut Local) -> Self {
-        Self { local }
+    pub(crate) fn new(local: &mut Local, inner: RecoveryGuard) -> Self {
+        Self { local, inner }
     }
 
     /// Starts a non-crashable section where we can conduct operations with global side-effects.
@@ -37,17 +38,14 @@ impl EpochGuard {
         F: Fn(&mut CrashGuard) -> R,
         R: Copy,
     {
-        recovery::set_restartable(false);
-        compiler_fence(Ordering::SeqCst);
+        let (result, guard) = self.inner.atomic(|guard| {
+            let mut guard = CrashGuard::new(unsafe { &*self.local }, guard);
+            let result = body(&mut guard);
+            (result, guard)
+        });
 
-        let mut guard = CrashGuard::new(unsafe { &*self.local });
-        let result = body(&mut guard);
-        compiler_fence(Ordering::SeqCst);
-
-        recovery::set_restartable(true);
-
-        if guard.is_crashed() || guard.is_advanced.get() {
-            guard.repin();
+        if guard.is_advanced.get() {
+            self.inner.restart();
         }
         result
     }
@@ -59,15 +57,17 @@ impl EpochGuard {
 /// deletion for a data structure.
 pub struct CrashGuard {
     local: *const Local,
+    inner: *const RecoveryGuard,
     is_advanced: Cell<bool>,
 }
 
 /// A non-crashable section guard.
 impl CrashGuard {
     #[inline]
-    pub(crate) fn new(local: &Local) -> Self {
+    pub(crate) fn new(local: &Local, inner: &RecoveryGuard) -> Self {
         Self {
             local,
+            inner,
             is_advanced: Cell::new(false),
         }
     }
@@ -77,13 +77,11 @@ impl CrashGuard {
     /// Developers must ensure that there is no possibilities of memory leaks across this.
     #[inline]
     pub fn repin(&self) -> ! {
-        compiler_fence(Ordering::SeqCst);
-        recovery::set_restartable(false);
-        unsafe { recovery::perform_longjmp() };
+        unsafe { (*self.inner).restart() }
     }
 
     #[inline]
-    pub fn is_crashed(&self) -> bool {
+    pub fn is_ejected(&self) -> bool {
         compiler_fence(Ordering::SeqCst);
         unsafe { !(*self.local).is_pinned() }
     }
