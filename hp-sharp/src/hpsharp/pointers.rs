@@ -292,7 +292,7 @@ impl<T> Pointer<T> for Shield<T> {
 /// A trait for `Shield` which can protect `Shared`.
 pub trait Protector {
     /// A set of `Shared` pointers which is protected by an epoch.
-    type Read<'r>: Clone + Copy;
+    type Target<'r>: Clone + Copy;
 
     /// Returns a default [`Protector`] with nulls for [`Shield`]s and defaults for other types.
     fn empty(handle: &mut Handle) -> Self;
@@ -305,11 +305,11 @@ pub trait Protector {
     /// truly protected, as the memory block may already be reclaimed. We must validate whether
     /// the memory block is reclaimed or not, by reloading the atomic pointer or checking the
     /// local CRCU epoch.
-    unsafe fn protect_unchecked(&self, read: &Self::Read<'_>);
+    unsafe fn protect_unchecked(&self, read: &Self::Target<'_>);
 
     /// Loads currently protected pointers and checks whether any of them are invalidated.
     /// If not, creates a new `Read` and returns it.
-    unsafe fn as_read<'r>(&self) -> Option<Self::Read<'r>>;
+    unsafe fn as_read<'r>(&self) -> Option<Self::Target<'r>>;
 
     /// Resets all hazard slots, allowing the previous memory block to be reclaimed.
     fn release(&self);
@@ -327,7 +327,7 @@ pub trait Protector {
     /// may cause an unexpected inconsistency on the whole system after a crash.
     unsafe fn pin<F>(&mut self, handle: &mut Handle, body: F)
     where
-        F: for<'r> Fn(&'r mut EpochGuard) -> Self::Read<'r>,
+        F: for<'r> Fn(&'r mut EpochGuard) -> Self::Target<'r>,
     {
         handle.crcu_handle.borrow_mut().pin(|guard| {
             // Execute the body of this read phase.
@@ -367,8 +367,8 @@ pub trait Protector {
         init_result: F1,
         step_forward: F2,
     ) where
-        F1: for<'r> Fn(&'r mut EpochGuard) -> Self::Read<'r>,
-        F2: for<'r> Fn(&mut Self::Read<'r>, &'r mut EpochGuard) -> ReadStatus,
+        F1: for<'r> Fn(&'r mut EpochGuard) -> Self::Target<'r>,
+        F2: for<'r> Fn(&mut Self::Target<'r>, &'r mut EpochGuard) -> ReadStatus,
         Self: Sized,
     {
         const ITER_BETWEEN_CHECKPOINTS: usize = 512;
@@ -455,7 +455,7 @@ pub trait Protector {
 
 /// An empty [`Protector`].
 impl Protector for () {
-    type Read<'r> = ();
+    type Target<'r> = ();
 
     #[inline]
     fn empty(_: &mut Handle) -> Self {
@@ -463,10 +463,10 @@ impl Protector for () {
     }
 
     #[inline]
-    unsafe fn protect_unchecked(&self, _: &Self::Read<'_>) {}
+    unsafe fn protect_unchecked(&self, _: &Self::Target<'_>) {}
 
     #[inline]
-    unsafe fn as_read<'r>(&self) -> Option<Self::Read<'r>> {
+    unsafe fn as_read<'r>(&self) -> Option<Self::Target<'r>> {
         Some(())
     }
 
@@ -476,7 +476,7 @@ impl Protector for () {
 
 /// A unit [`Protector`] with a single [`Shield`].
 impl<T: Invalidate> Protector for Shield<T> {
-    type Read<'r> = Shared<'r, T>;
+    type Target<'r> = Shared<'r, T>;
 
     #[inline]
     fn empty(handle: &mut Handle) -> Self {
@@ -484,14 +484,14 @@ impl<T: Invalidate> Protector for Shield<T> {
     }
 
     #[inline]
-    unsafe fn protect_unchecked(&self, read: &Self::Read<'_>) {
+    unsafe fn protect_unchecked(&self, read: &Self::Target<'_>) {
         let raw = read.untagged().as_raw();
         self.hazptr.protect_raw(raw as *const T as *mut T);
         self.inner.set(raw);
     }
 
     #[inline]
-    unsafe fn as_read<'r>(&self) -> Option<Self::Read<'r>> {
+    unsafe fn as_read<'r>(&self) -> Option<Self::Target<'r>> {
         let read = Shared::new(self.inner.get());
         if let Some(value) = self.as_ref() {
             if value.is_invalidated() {
@@ -512,7 +512,7 @@ macro_rules! impl_protector_for_array {(
 ) => (
     $(
         impl<T: Invalidate> Protector for [Shield<T>; $N] {
-            type Read<'r> = [Shared<'r, T>; $N];
+            type Target<'r> = [Shared<'r, T>; $N];
 
             #[inline]
             fn empty(handle: &mut Handle) -> Self {
@@ -524,14 +524,14 @@ macro_rules! impl_protector_for_array {(
             }
 
             #[inline]
-            unsafe fn protect_unchecked(&self, read: &Self::Read<'_>) {
+            unsafe fn protect_unchecked(&self, read: &Self::Target<'_>) {
                 for (shield, shared) in self.iter().zip(read) {
                     shield.protect_unchecked(shared);
                 }
             }
 
             #[inline]
-            unsafe fn as_read<'r>(&self) -> Option<Self::Read<'r>> {
+            unsafe fn as_read<'r>(&self) -> Option<Self::Target<'r>> {
                 let mut result: [MaybeUninit<Shared<'r, T>>; $N] = zeroed();
                 for (shield, shared) in self.iter().zip(result.iter_mut()) {
                     match shield.as_read() {

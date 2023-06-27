@@ -44,7 +44,7 @@ impl EpochGuard {
     /// In this section, we do not restart immediately when we receive signals from reclaimers.
     /// The whole critical section restarts after this `mask` section ends, if a reclaimer sent
     /// a signal, or we advanced our epoch to reclaim a full local garbage bag.
-    pub fn mask<'r, F, D>(&'r self, to_deref: D::Read<'r>, body: F)
+    pub fn mask<'r, F, D>(&'r self, to_deref: D::Target<'r>, body: F)
     where
         F: Fn(&D, &CrashGuard) -> WriteResult,
         D: Protector,
