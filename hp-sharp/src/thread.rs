@@ -1,3 +1,4 @@
+use core::cell::RefCell;
 use core::sync::atomic::{AtomicPtr, Ordering};
 use core::{mem, ptr};
 
@@ -10,7 +11,7 @@ use crate::sync::Deferred;
 
 pub struct Handle {
     pub(crate) domain: *const Global,
-    pub(crate) crcu_handle: crcu::Handle,
+    pub(crate) crcu_handle: RefCell<crcu::Handle>,
     pub(crate) hazards: *const ThreadRecord,
     /// Available slots of hazard array
     available_indices: Vec<usize>,
@@ -21,7 +22,7 @@ pub struct Handle {
 impl Handle {
     pub fn new(domain: &Global) -> Self {
         let (thread, available_indices) = domain.threads.acquire();
-        let crcu_handle = domain.crcu.register();
+        let crcu_handle = RefCell::new(domain.crcu.register());
         Self {
             domain,
             crcu_handle,

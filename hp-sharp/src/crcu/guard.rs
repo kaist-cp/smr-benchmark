@@ -13,11 +13,11 @@ use super::{local::Local, recovery};
 /// writing data on non-atomic storage. To conduct jobs with side-effects, we must open a
 /// non-crashable section by `mask` method.
 pub struct EpochGuard {
-    local: *const Local,
+    local: *mut Local,
 }
 
 impl EpochGuard {
-    pub(crate) fn new(local: &Local) -> Self {
+    pub(crate) fn new(local: &mut Local) -> Self {
         Self { local }
     }
 
@@ -32,7 +32,7 @@ impl EpochGuard {
     /// [`String`] or [`Box`] is dangerous to return as it will be leaked on a crash! On the other
     /// hand, [`Copy`] types is likely to be safe as they are totally defined by their bit-wise
     /// representations, and have no possibilities to be leaked after an unexpected crash.
-    pub fn mask<F, R>(&self, body: F) -> R
+    pub fn mask<F, R>(&mut self, body: F) -> R
     where
         F: Fn(&mut CrashGuard) -> R,
         R: Copy,

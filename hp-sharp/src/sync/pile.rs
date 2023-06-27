@@ -31,16 +31,13 @@ impl<T> Pile<T> {
             next: AtomicPtr::new(null_mut()),
         }));
 
+        let mut head = self.head.load(Relaxed);
         loop {
-            let head = self.head.load(Relaxed);
             unsafe { &*n }.next.store(head, Relaxed);
 
-            if self
-                .head
-                .compare_exchange(head, n, Release, Relaxed)
-                .is_ok()
-            {
-                break;
+            match self.head.compare_exchange(head, n, Release, Relaxed) {
+                Ok(_) => return,
+                Err(new_head) => head = new_head,
             }
         }
     }
@@ -62,23 +59,21 @@ impl<T> Pile<T> {
             last_node = node;
         }
 
+        let mut head = self.head.load(Relaxed);
         loop {
-            let head = self.head.load(Relaxed);
             unsafe { &*last_node }.next.store(head, Relaxed);
 
-            if self
+            match self
                 .head
                 .compare_exchange(head, first_node, Release, Relaxed)
-                .is_ok()
             {
-                break;
+                Ok(_) => return,
+                Err(new_head) => head = new_head,
             }
         }
     }
 
-    /// Attempts to pop all elements from the pile.
-    ///
-    /// Returns `None` if the pile is empty.
+    /// Pops and returns all elements from the pile.
     #[must_use]
     pub fn pop_all(&self) -> Vec<T> {
         let mut result = vec![];
@@ -113,4 +108,32 @@ fn seq_append_pop() {
     pile.append(vec![6, 5, 4, 3].into_iter());
     pile.push(7);
     assert_eq!(pile.pop_all(), vec![7, 6, 5, 4, 3, 2, 1]);
+}
+
+#[test]
+fn con_push_pop() {
+    use std::thread::scope;
+    const THREADS: usize = 32;
+    const PUSH_COUNT: usize = 1000;
+
+    let pile = Pile::new();
+
+    scope(|s| {
+        for i in 0..THREADS {
+            let pile = &pile;
+            s.spawn(move || {
+                for j in 0..PUSH_COUNT {
+                    pile.push(i * PUSH_COUNT + j);
+                }
+            });
+        }
+
+        let mut appeared = [false; THREADS * PUSH_COUNT];
+        while appeared.iter().any(|v| !*v) {
+            for v in pile.pop_all() {
+                assert!(!appeared[v]);
+                appeared[v] = true;
+            }
+        }
+    });
 }

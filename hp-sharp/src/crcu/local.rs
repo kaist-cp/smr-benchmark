@@ -73,7 +73,7 @@ impl Local {
         }
     }
 
-    unsafe fn pin<F>(&self, body: F)
+    unsafe fn pin<F>(&mut self, body: F)
     where
         F: Fn(&mut EpochGuard),
     {
@@ -149,14 +149,14 @@ impl Local {
     }
 
     #[inline]
-    fn acquire_handle(&self) -> Handle {
+    fn acquire_handle(&mut self) -> Handle {
         let count = self.handle_count.get();
         self.handle_count.set(count + 1);
         Handle { local: self }
     }
 
     #[inline]
-    fn release_handle(&self) {
+    fn release_handle(&mut self) {
         let count = self.handle_count.get();
         self.handle_count.set(count - 1);
         if count == 1 {
@@ -217,7 +217,7 @@ impl LocalList {
     pub fn acquire<'c>(&'c self, tid: Pthread, global: &Global) -> Handle {
         let mut prev_link = &self.head;
         let local = loop {
-            match unsafe { prev_link.load(Ordering::Acquire).as_ref() } {
+            match unsafe { prev_link.load(Ordering::Acquire).as_mut() } {
                 Some(curr) => {
                     if !curr.using.load(Ordering::Acquire)
                         && curr
@@ -240,7 +240,7 @@ impl LocalList {
                         )
                         .is_ok()
                     {
-                        break unsafe { &*new_local };
+                        break unsafe { &mut *new_local };
                     } else {
                         unsafe { drop(Box::from_raw(new_local)) };
                     }
@@ -282,15 +282,10 @@ impl<'g> Iterator for LocalIter<'g> {
 
 /// A thread-local handle managing local epoch and defering.
 pub struct Handle {
-    local: *const Local,
+    local: *mut Local,
 }
 
 impl Handle {
-    #[inline]
-    pub fn is_pinned(&self) -> bool {
-        unsafe { (*self.local).is_pinned() }
-    }
-
     /// Starts a crashable critical section where we cannot perform operations with side-effects,
     /// such as system calls, non-atomic write on a global variable, etc.
     ///
@@ -300,7 +295,7 @@ impl Handle {
     /// writes on a global variable and system-calls(File I/O and etc.) are dangerous, as they
     /// may cause an unexpected inconsistency on the whole system after a crash.
     #[inline]
-    pub unsafe fn pin<F>(&self, body: F)
+    pub unsafe fn pin<F>(&mut self, body: F)
     where
         F: Fn(&mut EpochGuard),
     {
@@ -318,12 +313,12 @@ impl Deferrable for Handle {
 
 impl Clone for Handle {
     fn clone(&self) -> Self {
-        unsafe { &*self.local }.acquire_handle()
+        unsafe { &mut *self.local }.acquire_handle()
     }
 }
 
 impl Drop for Handle {
     fn drop(&mut self) {
-        unsafe { &*self.local }.release_handle()
+        unsafe { &mut *self.local }.release_handle()
     }
 }

@@ -337,7 +337,7 @@ pub trait Defender {
     where
         F: for<'r> Fn(&'r mut EpochGuard) -> Self::Read<'r>,
     {
-        handle.crcu_handle.pin(|guard| {
+        handle.crcu_handle.borrow_mut().pin(|guard| {
             // Execute the body of this read phase.
             let mut guard = EpochGuard::new(guard, handle, None);
             let result = body(&mut guard);
@@ -389,7 +389,7 @@ pub trait Defender {
         {
             let defs = [&mut *self, backup];
 
-            handle.crcu_handle.pin(|guard| {
+            handle.crcu_handle.borrow_mut().pin(|guard| {
                 // Load the saved intermediate result, if one exists.
                 let mut guard = EpochGuard::new(guard, handle, Some(&backup_idx));
 

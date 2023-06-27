@@ -246,7 +246,7 @@ mod test {
         // Let's simulate a pinned slow thread.
         scope(|s| {
             s.spawn(|| {
-                let handle = global.register();
+                let mut handle = global.register();
                 unsafe {
                     handle.pin(|_| {
                         // Intentionally avoided using `Barrier` for synchronization.
@@ -283,7 +283,7 @@ mod test {
         // Let's simulate a pinned slow thread.
         scope(|s| {
             s.spawn(|| {
-                let handle = global.register();
+                let mut handle = global.register();
                 unsafe {
                     handle.pin(|_| {
                         // Intentionally avoided using `Barrier` for synchronization.

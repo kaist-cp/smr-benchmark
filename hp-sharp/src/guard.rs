@@ -20,14 +20,14 @@ use crate::{
 /// writing data on non-atomic storage. To conduct jobs with side-effects, we must open a
 /// non-crashable section by `mask` method.
 pub struct EpochGuard {
-    inner: *const crcu::EpochGuard,
+    inner: *mut crcu::EpochGuard,
     handle: *const Handle,
     backup_idx: Option<NonNull<AtomicUsize>>,
 }
 
 impl EpochGuard {
     pub(crate) fn new(
-        inner: &crcu::EpochGuard,
+        inner: &mut crcu::EpochGuard,
         handle: &Handle,
         backup_idx: Option<&AtomicUsize>,
     ) -> Self {
@@ -52,7 +52,7 @@ impl EpochGuard {
     {
         // Note that protecting must be conducted in a crash-free section.
         // Otherwise it may forget to drop acquired hazard slot on crashing.
-        unsafe { &*self.inner }.mask(|guard| {
+        unsafe { &mut *self.inner }.mask(|guard| {
             let result = {
                 // Allocate fresh hazard slots to protect pointers.
                 let def = D::empty(unsafe { &mut *self.handle.cast_mut() });
@@ -66,7 +66,7 @@ impl EpochGuard {
                     guard.repin();
                 }
 
-                body(&def, &CrashGuard::new(guard, unsafe { &*self.handle }))
+                body(&def, &CrashGuard::new(guard, self.handle))
             };
 
             if result == WriteResult::RepinEpoch {
@@ -89,16 +89,13 @@ impl EpochGuard {
 /// Unlike a [`EpochGuard`], it may perform jobs with side-effects such as retiring, or physical
 /// deletion for a data structure.
 pub struct CrashGuard {
-    _inner: *const crcu::CrashGuard,
+    inner: *mut crcu::CrashGuard,
     handle: *const Handle,
 }
 
 impl CrashGuard {
-    pub(crate) fn new(inner: &crcu::CrashGuard, handle: &Handle) -> Self {
-        Self {
-            _inner: inner,
-            handle,
-        }
+    pub(crate) fn new(inner: &mut crcu::CrashGuard, handle: *const Handle) -> Self {
+        Self { inner, handle }
     }
 }
 
@@ -123,7 +120,7 @@ impl Retire for Handle {
         // Invalidate immediately to prevent a slow thread to resume its traversal after a crash.
         ptr.deref_unchecked().invalidate();
 
-        let collected = self.crcu_handle.defer(Deferred::new(
+        let collected = self.crcu_handle.borrow().defer(Deferred::new(
             ptr.untagged().as_raw() as *const u8 as *mut u8,
             free::<T>,
         ));
@@ -139,6 +136,18 @@ impl Retire for Handle {
 impl Retire for CrashGuard {
     #[inline]
     unsafe fn retire<'r, T: Invalidate>(&mut self, ptr: Shared<'r, T>) {
-        (*self.handle.cast_mut()).retire(ptr);
+        // Invalidate immediately to prevent a slow thread to resume its traversal after a crash.
+        ptr.deref_unchecked().invalidate();
+
+        let collected = (*self.inner).defer(Deferred::new(
+            ptr.untagged().as_raw() as *const u8 as *mut u8,
+            free::<T>,
+        ));
+
+        if let Some(collected) = collected {
+            for def in collected.into_iter() {
+                (*self.handle.cast_mut()).retire_inner(def);
+            }
+        }
     }
 }
