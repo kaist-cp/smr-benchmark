@@ -297,9 +297,7 @@ pub trait Protector {
     /// Returns a default [`Protector`] with nulls for [`Shield`]s and defaults for other types.
     fn empty(handle: &mut Handle) -> Self;
 
-    /// Stores the given `Read` pointers in hazard slots without any validations.
-    ///
-    /// # Safety
+    /// Stores the given `Target` pointers in hazard slots without any validations.
     ///
     /// Just storing a pointer in a hazard slot doesn't guarantee that the pointer is
     /// truly protected, as the memory block may already be reclaimed. We must validate whether
@@ -308,7 +306,7 @@ pub trait Protector {
     unsafe fn protect_unchecked(&self, read: &Self::Target<'_>);
 
     /// Loads currently protected pointers and checks whether any of them are invalidated.
-    /// If not, creates a new `Read` and returns it.
+    /// If not, creates a new `Target` and returns it.
     unsafe fn as_read<'r>(&self) -> Option<Self::Target<'r>>;
 
     /// Resets all hazard slots, allowing the previous memory block to be reclaimed.
@@ -317,7 +315,7 @@ pub trait Protector {
     /// Starts a crashable critical section where we cannot perform operations with side-effects,
     /// such as system calls, non-atomic write on a global variable, etc.
     ///
-    /// After finishing the section, it protects the returned `Read` pointers, so that they can be
+    /// After finishing the section, it protects the returned `Target` pointers, so that they can be
     /// dereferenced outside of the phase.
     ///
     /// # Safety
@@ -352,7 +350,7 @@ pub trait Protector {
     /// prevents a starvation in crash-intensive workload by saving intermediate results on a
     /// backup [`Protector`].
     ///
-    /// After finishing the section, it protects the final `Read` pointers, so that they can be
+    /// After finishing the section, it protects the final `Target` pointers, so that they can be
     /// dereferenced outside of the phase.
     ///
     /// # Safety
