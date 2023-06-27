@@ -45,11 +45,14 @@ pub(crate) unsafe fn send_signal(pthread: Pthread) -> nix::Result<()> {
 
 #[inline]
 pub(crate) fn is_restartable() -> bool {
-    RESTARTABLE.with(|rest| rest.load(Ordering::Acquire))
+    let rest = RESTARTABLE.with(|rest| rest.load(Ordering::Relaxed));
+    compiler_fence(Ordering::SeqCst);
+    rest
 }
 
 #[inline]
 pub(crate) fn set_restartable(set_rest: bool) {
+    compiler_fence(Ordering::SeqCst);
     RESTARTABLE.with(|rest| rest.store(set_rest, Ordering::Relaxed));
 }
 
