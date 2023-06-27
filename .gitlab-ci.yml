@@ -40,25 +40,6 @@ check:
     - cargo test -- --nocapture
     - cargo audit
 
-debug:
-  stage: test
-  before_script:
-    # Install dependencies to build
-    # `clang` is necessary for `setjmp`
-    - apt-get update -qy
-    - apt-get install -y build-essential clang
-  script:
-    - cargo test
-    - cargo build
-
-release:
-  stage: test
-  before_script:
-    # Install dependencies to build
-    # `clang` is necessary for `setjmp`
-    - apt-get update -qy
-    - apt-get install -y build-essential clang
-  script:
     - cargo test --release
     - cargo build --release
 
