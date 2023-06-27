@@ -8,8 +8,8 @@ use std::{
 use membarrier::light_membarrier;
 
 use crate::{
-    crcu::Deferrable, guard::EpochGuard, guard::Invalidate, hazard::HazardPointer, thread::Handle,
-    THREAD,
+    crcu::Deferrable,
+    hpsharp::{guard::EpochGuard, guard::Invalidate, hazard::HazardPointer, thread::Handle},
 };
 
 /// A result of unsuccessful `compare_exchange`.
@@ -267,14 +267,6 @@ impl<T> Shield<T> {
     pub fn release(&self) {
         self.inner.set(0);
         self.hazptr.reset_protection();
-    }
-}
-
-impl<T> Default for Shield<T> {
-    /// Creates a [`Shield`] with a default [`Thread`].
-    #[inline]
-    fn default() -> Self {
-        THREAD.with(|t| Self::null(&mut t.borrow_mut()))
     }
 }
 

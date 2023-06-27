@@ -5,9 +5,8 @@ use std::{
 
 use crate::{
     crcu::{self, Deferrable},
+    hpsharp::{thread::free, Defender, Handle, Pointer, Shared, WriteResult},
     sync::Deferred,
-    thread::{free, Handle},
-    Defender, Pointer, Shared, WriteResult,
 };
 
 /// A high-level crashable critical section guard.

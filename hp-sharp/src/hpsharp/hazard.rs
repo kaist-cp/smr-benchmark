@@ -5,7 +5,7 @@ use std::{
     sync::atomic::{AtomicBool, AtomicPtr, Ordering},
 };
 
-use crate::thread::Handle;
+use super::Handle;
 
 /// A low-level owner of hazard pointer slot.
 ///
