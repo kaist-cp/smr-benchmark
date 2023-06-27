@@ -33,7 +33,6 @@ pub(crate) struct Local {
     using: AtomicBool,
     global: *const Global,
     bag: UnsafeCell<Bag>,
-    handle_count: Cell<usize>,
     defer_count: Cell<usize>,
 }
 
@@ -50,7 +49,6 @@ impl Local {
             using: AtomicBool::new(using),
             global,
             bag: UnsafeCell::new(Bag::new()),
-            handle_count: Cell::new(0),
             defer_count: Cell::new(0),
         }
     }
@@ -148,23 +146,6 @@ impl Local {
         unsafe { &*self.global }
     }
 
-    #[inline]
-    fn acquire_handle(&mut self) -> Handle {
-        let count = self.handle_count.get();
-        self.handle_count.set(count + 1);
-        Handle { local: self }
-    }
-
-    #[inline]
-    fn release_handle(&mut self) {
-        let count = self.handle_count.get();
-        self.handle_count.set(count - 1);
-        if count == 1 {
-            self.epoch.store(Epoch::starting(), Ordering::Release);
-            self.using.store(false, Ordering::Release);
-        }
-    }
-
     /// Adds `deferred` to the thread-local bag.
     ///
     /// It returns a `Some(Vec<Deferred>)` if the global epoch is advanced and we have collected
@@ -248,7 +229,6 @@ impl LocalList {
             }
         };
         local.owner.store(tid, Ordering::Release);
-        local.handle_count.set(1);
         Handle { local }
     }
 
@@ -311,14 +291,10 @@ impl Deferrable for Handle {
     }
 }
 
-impl Clone for Handle {
-    fn clone(&self) -> Self {
-        unsafe { &mut *self.local }.acquire_handle()
-    }
-}
-
 impl Drop for Handle {
     fn drop(&mut self) {
-        unsafe { &mut *self.local }.release_handle()
+        let local = unsafe { &*self.local };
+        local.epoch.store(Epoch::starting(), Ordering::Release);
+        local.using.store(false, Ordering::Release);
     }
 }
