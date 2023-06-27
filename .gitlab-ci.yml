@@ -24,6 +24,12 @@ install:
     # triggering installation
     - rustc --version
 
+# We want to run `test` scripts sequentially, because...
+# 1. in our project, Cargo needs to download a lot of packages. Downloading the same packages in
+#    three parallel instance burstly often slows down the entire progress, and even somtimes
+#    triggers network timeout errors.
+# 2. while performing git operations, instances race to acquire a shared lock of the git
+#    repository. It sometimes makes the CI fail.
 check:
   stage: test
   before_script:
