@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    crcu::{self, Writable},
+    crcu::{self, Deferrable},
     sync::Deferred,
     thread::{free, Handle},
     Defender, Pointer, Shared, WriteResult,

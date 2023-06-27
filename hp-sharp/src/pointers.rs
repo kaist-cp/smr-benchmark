@@ -8,7 +8,7 @@ use std::{
 use membarrier::light_membarrier;
 
 use crate::{
-    crcu::Writable, guard::EpochGuard, guard::Invalidate, hazard::HazardPointer, thread::Handle,
+    crcu::Deferrable, guard::EpochGuard, guard::Invalidate, hazard::HazardPointer, thread::Handle,
     THREAD,
 };
 
@@ -50,14 +50,14 @@ impl<T> Atomic<T> {
 
     /// Stores a [`Shared`] pointer into the atomic pointer, returning the previous [`Shared`].
     #[inline]
-    pub fn swap<G: Writable>(&self, ptr: Shared<T>, order: Ordering, _: &G) -> Shared<T> {
+    pub fn swap<G: Deferrable>(&self, ptr: Shared<T>, order: Ordering, _: &G) -> Shared<T> {
         let prev = self.link.swap(ptr.inner, order);
         Shared::new(prev)
     }
 
     /// Stores a [`Shared`] pointer into the atomic pointer.
     #[inline]
-    pub fn store<G: Writable>(&self, ptr: Shared<T>, order: Ordering, _: &G) {
+    pub fn store<G: Deferrable>(&self, ptr: Shared<T>, order: Ordering, _: &G) {
         self.link.store(ptr.inner, order);
     }
 
@@ -77,7 +77,7 @@ impl<T> Atomic<T> {
     /// [`CompareExchangeError`] which contains an actual value from the atomic pointer and
     /// the ownership of `new` pointer which was given as a parameter is returned.
     #[inline]
-    pub fn compare_exchange<'p, 'r, G: Writable>(
+    pub fn compare_exchange<'p, 'r, G: Deferrable>(
         &self,
         current: Shared<'p, T>,
         new: Shared<'r, T>,
@@ -102,7 +102,7 @@ impl<T> Atomic<T> {
     /// Performs a bitwise "or" operation on the current tag and the argument `tag`, and sets the
     /// new tag to the result. Returns the previous pointer.
     #[inline]
-    pub fn fetch_or<'r, G: Writable>(
+    pub fn fetch_or<'r, G: Deferrable>(
         &self,
         tag: usize,
         order: Ordering,

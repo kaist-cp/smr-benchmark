@@ -21,7 +21,7 @@ use super::{
     epoch::{AtomicEpoch, Epoch},
     global::Global,
     guard::EpochGuard,
-    recovery, Writable,
+    recovery, Deferrable,
 };
 
 const_assert!(Atomic::<Pthread>::is_lock_free());
@@ -308,7 +308,7 @@ impl Handle {
     }
 }
 
-impl Writable for Handle {
+impl Deferrable for Handle {
     #[inline]
     #[must_use]
     fn defer(&self, def: Deferred) -> Option<Vec<Deferred>> {

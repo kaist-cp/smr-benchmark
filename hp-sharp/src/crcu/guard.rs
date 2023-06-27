@@ -28,7 +28,7 @@ impl EpochGuard {
     /// a signal, or we advanced our epoch to reclaim a full local garbage bag.
     ///
     /// The body may return an arbitrary value, and it will be returned without any modifications.
-    /// However, it is recommended to return a *rollback-safe* variable from the body. For example,
+    /// However, it is required to return a *rollback-safe* variable from the body. For example,
     /// [`String`] or [`Box`] is dangerous to return as it will be leaked on a crash! On the other
     /// hand, [`Copy`] types is likely to be safe as they are totally defined by their bit-wise
     /// representations, and have no possibilities to be leaked after an unexpected crash.
@@ -89,10 +89,10 @@ impl CrashGuard {
     }
 }
 
-/// A common trait for `Guard` types which allow mutating shared memory locations.
+/// A common trait for `Guard` types which allow defering tasks on a shared memory.
 ///
 /// [`crate::crcu::Handle`] and [`CrashGuard`] implement this trait.
-pub trait Writable {
+pub trait Deferrable {
     /// Defers a task which can be accessed after the current epoch ends.
     ///
     /// It returns a `Some(Vec<Deferred>)` if the global epoch is advanced and we have collected
@@ -101,7 +101,7 @@ pub trait Writable {
     fn defer(&self, def: Deferred) -> Option<Vec<Deferred>>;
 }
 
-impl Writable for CrashGuard {
+impl Deferrable for CrashGuard {
     #[inline]
     #[must_use]
     fn defer(&self, def: Deferred) -> Option<Vec<Deferred>> {
