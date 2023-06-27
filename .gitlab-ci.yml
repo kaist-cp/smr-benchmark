@@ -1,8 +1,8 @@
 # Setup a cache to cache job parts between jobs to ensure faster builds
 cache:
-    key: "$CI_JOB_NAME"
-    untracked: true
-    paths:
+  key: "$CI_COMMIT_REF_SLUG"
+  paths:
+    - /var/cache/apt/archives/
     - $HOME/.cargo/
     - target/
 
@@ -21,33 +21,30 @@ stages:
 install:
   stage: install
   script:
-    # triggering installation
-    - rustc --version
-
-# We want to run `test` scripts sequentially, because...
-# 1. in our project, Cargo needs to download a lot of packages. Downloading the same packages in
-#    three parallel instance burstly often slows down the entire progress, and even somtimes
-#    triggers network timeout errors.
-# 2. while performing git operations, instances race to acquire a shared lock of the git
-#    repository. It sometimes makes the CI fail.
-check:
-  stage: test
-  before_script:
-    - rustup component add rustfmt clippy
-    - cargo install cargo-audit
     # Install dependencies to build
     # `clang` is necessary for `setjmp`
     - apt-get update -qy
     - apt-get install -y build-essential clang
+    # triggering installation
+    - rustc --version
+
+check:
+  stage: test
+  before_script:
+    - apt-get update -qy
+    - apt-get install -y build-essential clang
+    - rustup component add rustfmt clippy
+    - cargo install cargo-audit
   script:
     - cargo check --verbose
     - cargo fmt -- --check
     - cargo clippy -p hp-sharp -- -D warnings
-    - cargo test -- --nocapture
     - cargo audit
 
-    - cargo test --release
+    - cargo build
     - cargo build --release
+    - cargo test -- --nocapture
+    - cargo test --release  --nocapture
 
 pages:
   stage: deploy
