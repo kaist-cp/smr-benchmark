@@ -71,6 +71,12 @@ impl Local {
         }
     }
 
+    /// Unpins the [`Local`].
+    #[inline]
+    pub(crate) fn unpin(&mut self) {
+        self.epoch.store(Epoch::starting(), Ordering::Release);
+    }
+
     unsafe fn pin<F>(&mut self, body: F)
     where
         F: Fn(&mut EpochGuard),
@@ -100,6 +106,7 @@ impl Local {
                 // the critical section would continues, as we would not `longjmp` from
                 // the signal handler.
                 self.repin();
+                compiler_fence(Ordering::SeqCst);
 
                 // Execute the body of this section.
                 let mut guard = EpochGuard::new(self, guard);
@@ -107,6 +114,10 @@ impl Local {
 
                 // Finaly, close this critical section by dropping `guard`.
             }
+
+            // We are now out of the critical(crashable) section.
+            // Unpin the local epoch to help reclaimers to freely collect bags.
+            self.unpin();
 
             // # HACK: A dummy loop and `blackbox`
             // (See comments on the loop for more information.)
