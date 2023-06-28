@@ -15,6 +15,23 @@ const DEFERRING_RESTART: u8 = 1u8 << 2;
 
 thread_local! {
     static JMP_BUF: RefCell<MaybeUninit<sigjmp_buf>> = RefCell::new(MaybeUninit::uninit());
+    /// Represents a thread-local state.
+    ///
+    /// A thread entering a crashable section sets its `STATE` by calling `guard!` macro.
+    ///
+    /// Note that `STATE` must be a type which can be read and written in tear-free manner.
+    /// For this reason, using non-atomic type such as `u8` is not safe, as any writes on this
+    /// variable may be splitted into multiple instructions and the thread may read inconsistent
+    /// value in its signal handler.
+    ///
+    /// According to ISO/IEC TS 17961 C Secure Coding Rules, accessing values of objects that are
+    /// neither lock-free atomic objects nor of type `volatile sig_atomic_t` in a signal handler
+    /// results in undefined behavior.
+    ///
+    /// `AtomicU8` is likely to be safe, because any accesses to it will be compiled into a
+    /// single ISA instruction. On top of that, by preventing reordering instructions across this
+    /// variable by issuing `compiler_fence`, we can have the same restrictions which
+    /// `volatile sig_atomic_t` has.
     static STATE: AtomicU8 = AtomicU8::new(0);
 }
 
