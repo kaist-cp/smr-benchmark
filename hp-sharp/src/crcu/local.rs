@@ -104,9 +104,9 @@ impl Local {
         self.epoch.store(Epoch::starting(), Ordering::Release);
     }
 
-    unsafe fn pin<F>(&mut self, body: F)
+    unsafe fn pin<F>(&mut self, mut body: F)
     where
-        F: Fn(&mut EpochGuard),
+        F: FnMut(&mut EpochGuard),
     {
         // A dummy loop to bypass a false stack overflow from AdressSanitizer.
         //
@@ -327,7 +327,7 @@ impl Handle {
     #[inline]
     pub unsafe fn pin<F>(&mut self, body: F)
     where
-        F: Fn(&mut EpochGuard),
+        F: FnMut(&mut EpochGuard),
     {
         unsafe { (*self.local).pin(body) }
     }

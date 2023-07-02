@@ -1,5 +1,4 @@
 use std::{
-    cell::Cell,
     marker::PhantomData,
     mem::{self, forget, swap, transmute, zeroed, MaybeUninit},
     ops::{Deref, DerefMut},
@@ -309,7 +308,7 @@ impl<T> Drop for Owned<T> {
 /// A pointer to an shared object, which is protected by a hazard pointer.
 pub struct Shield<T: 'static> {
     hazptr: HazardPointer,
-    inner: Cell<usize>,
+    inner: usize,
     _marker: PhantomData<T>,
 }
 
@@ -320,7 +319,7 @@ impl<T> Shield<T> {
     pub fn null(handle: &mut Handle) -> Self {
         Self {
             hazptr: HazardPointer::new(handle),
-            inner: Cell::new(0),
+            inner: 0,
             _marker: PhantomData,
         }
     }
@@ -330,7 +329,7 @@ impl<T> Shield<T> {
     /// Returns `None` if the pointer is null, or else a reference to the object wrapped in `Some`.
     #[inline]
     pub fn as_ref<'s>(&'s self) -> Option<&'s T> {
-        unsafe { decompose_data::<T>(self.inner.get()).0.as_ref() }
+        unsafe { decompose_data::<T>(self.inner).0.as_ref() }
     }
 
     /// Converts the pointer to a mutable reference.
@@ -338,45 +337,45 @@ impl<T> Shield<T> {
     /// Returns `None` if the pointer is null, or else a reference to the object wrapped in `Some`.
     #[inline]
     pub fn as_mut<'s>(&'s self) -> Option<&'s mut T> {
-        unsafe { decompose_data::<T>(self.inner.get()).0.as_mut() }
+        unsafe { decompose_data::<T>(self.inner).0.as_mut() }
     }
 
     /// Returns `true` if the protected pointer is null.
     #[inline]
     pub fn is_null(&self) -> bool {
-        decompose_data::<T>(self.inner.get()).0 as usize == 0
+        decompose_data::<T>(self.inner).0 as usize == 0
     }
 
     /// Returns the tag stored within the shield.
     #[inline]
     pub fn tag(&self) -> usize {
-        decompose_data::<T>(self.inner.get()).1
+        decompose_data::<T>(self.inner).1
     }
 
     /// Changes the tag bits to `tag`. `tag` is truncated to be fit into the
     /// unused bits of the pointer to `T`.
     #[inline]
-    pub fn set_tag(&self, tag: usize) {
-        self.inner.set(data_with_tag::<T>(self.inner.get(), tag));
+    pub fn set_tag(&mut self, tag: usize) {
+        self.inner = data_with_tag::<T>(self.inner, tag);
     }
 
     /// Releases the inner hazard pointer.
     #[inline]
-    pub fn release(&self) {
-        self.inner.set(0);
+    pub fn release(&mut self) {
+        self.inner = 0;
         self.hazptr.reset_protection();
     }
 
     /// Returns the machine representation of the pointer, including tag bits.
     #[inline]
     pub fn as_raw(&self) -> usize {
-        self.inner.get()
+        self.inner
     }
 
     /// Creates a `Shared` pointer whose lifetime is equal to `self`.
     #[inline]
     pub fn shared<'r>(&'r self) -> Shared<'r, T> {
-        Shared::new(self.inner.get())
+        Shared::new(self.inner)
     }
 }
 
@@ -435,14 +434,14 @@ pub trait Protector {
     /// truly protected, as the memory block may already be reclaimed. We must validate whether
     /// the memory block is reclaimed or not, by reloading the atomic pointer or checking the
     /// local CRCU epoch.
-    unsafe fn protect_unchecked(&self, read: &Self::Target<'_>);
+    unsafe fn protect_unchecked(&mut self, read: &Self::Target<'_>);
 
     /// Loads currently protected pointers and checks whether any of them are invalidated.
     /// If not, creates a new `Target` and returns it.
     unsafe fn as_read<'r>(&self, guard: &'r EpochGuard) -> Option<Self::Target<'r>>;
 
     /// Resets all hazard slots, allowing the previous memory block to be reclaimed.
-    fn release(&self);
+    fn release(&mut self);
 
     /// Starts a crashable critical section where we cannot perform operations with side-effects,
     /// such as system calls, non-atomic write on a global variable, etc.
@@ -545,23 +544,19 @@ pub trait Protector {
                     if finished || should_checkpoint {
                         if iter % ITER_BETWEEN_CHECKPOINTS == 0 {
                             // Select an available protector to protect a backup.
-                            let (curr_def, next_def, next_idx) = {
+                            let (curr_idx, next_idx) = {
                                 let backup_idx = backup_idx.load(Ordering::Relaxed);
-                                (
-                                    &defs[backup_idx % 2],
-                                    &defs[(backup_idx + 1) % 2],
-                                    (backup_idx + 1) % 2,
-                                )
+                                (backup_idx % 2, (backup_idx + 1) % 2)
                             };
 
                             // Store pointers in hazard slots and issue a light fence.
-                            unsafe { next_def.protect_unchecked(&result) };
+                            unsafe { defs[next_idx].protect_unchecked(&result) };
                             membarrier::light_membarrier();
 
                             // Success! We are not ejected so the protection is valid!
                             // Finalize backup process by storing a new backup index to `backup_idx`
                             backup_idx.store(next_idx, Ordering::Relaxed);
-                            curr_def.release();
+                            defs[curr_idx].release();
                         }
                     }
 
@@ -593,7 +588,7 @@ impl Protector for () {
     }
 
     #[inline]
-    unsafe fn protect_unchecked(&self, _: &Self::Target<'_>) {}
+    unsafe fn protect_unchecked(&mut self, _: &Self::Target<'_>) {}
 
     #[inline]
     unsafe fn as_read<'r>(&self, _: &'r EpochGuard) -> Option<Self::Target<'r>> {
@@ -601,7 +596,7 @@ impl Protector for () {
     }
 
     #[inline]
-    fn release(&self) {}
+    fn release(&mut self) {}
 }
 
 /// A unit [`Protector`] with a single [`Shield`].
@@ -614,15 +609,15 @@ impl<T: Invalidate> Protector for Shield<T> {
     }
 
     #[inline]
-    unsafe fn protect_unchecked(&self, read: &Self::Target<'_>) {
+    unsafe fn protect_unchecked(&mut self, read: &Self::Target<'_>) {
         let raw = read.untagged().as_raw();
         self.hazptr.protect_raw(raw as *const T as *mut T);
-        self.inner.set(raw);
+        self.inner = raw;
     }
 
     #[inline]
     unsafe fn as_read<'r>(&self, guard: &'r EpochGuard) -> Option<Self::Target<'r>> {
-        let read = Shared::new(self.inner.get());
+        let read = Shared::new(self.inner);
         if let Some(value) = self.as_ref() {
             if value.is_invalidated(guard) {
                 return None;
@@ -632,7 +627,7 @@ impl<T: Invalidate> Protector for Shield<T> {
     }
 
     #[inline]
-    fn release(&self) {
+    fn release(&mut self) {
         Shield::release(self)
     }
 }
@@ -654,8 +649,8 @@ macro_rules! impl_protector_for_array {(
             }
 
             #[inline]
-            unsafe fn protect_unchecked(&self, read: &Self::Target<'_>) {
-                for (shield, shared) in self.iter().zip(read) {
+            unsafe fn protect_unchecked(&mut self, read: &Self::Target<'_>) {
+                for (shield, shared) in self.iter_mut().zip(read) {
                     shield.protect_unchecked(shared);
                 }
             }
@@ -673,7 +668,7 @@ macro_rules! impl_protector_for_array {(
             }
 
             #[inline]
-            fn release(&self) {
+            fn release(&mut self) {
                 for shield in self {
                     shield.release();
                 }
@@ -781,7 +776,7 @@ mod test {
             }
         }
 
-        unsafe fn protect_unchecked(&self, read: &Self::Target<'_>) {
+        unsafe fn protect_unchecked(&mut self, read: &Self::Target<'_>) {
             self.prev.protect_unchecked(&read.prev);
             self.curr.protect_unchecked(&read.curr);
         }
@@ -793,7 +788,7 @@ mod test {
             })
         }
 
-        fn release(&self) {
+        fn release(&mut self) {
             self.prev.release();
             self.curr.release();
         }

@@ -54,7 +54,7 @@ impl EpochGuard {
         unsafe { &mut *self.inner }.mask(|guard| {
             let result = {
                 // Allocate fresh hazard slots to protect pointers.
-                let def = D::empty(unsafe { &mut *self.handle.cast_mut() });
+                let mut def = D::empty(unsafe { &mut *self.handle.cast_mut() });
                 // Store pointers in hazard slots and issue a light fence.
                 unsafe { def.protect_unchecked(&to_deref) };
                 membarrier::light_membarrier();
