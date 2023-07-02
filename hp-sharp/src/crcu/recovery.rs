@@ -1,3 +1,4 @@
+use bitflags::bitflags;
 /// A thread-local recovery manager with signal handling
 use nix::libc::{c_void, siginfo_t};
 use nix::sys::pthread::{pthread_kill, Pthread};
@@ -7,19 +8,27 @@ use std::cell::RefCell;
 use std::mem::MaybeUninit;
 use std::sync::atomic::{compiler_fence, AtomicU8, Ordering};
 
-pub const EJECTION_SIGNAL: Signal = Signal::SIGUSR1;
+/// A CRCU crash signal which is used to restart a slow thread.
+///
+/// We use `SIGUSR1` for a crash signal.
+pub const CRASH_SIGNAL: Signal = Signal::SIGUSR1;
 
-const RESTARTABLE: u8 = 1u8;
-const IN_ATOMIC: u8 = 1u8 << 1;
-const DEFERRING_RESTART: u8 = 1u8 << 2;
+bitflags! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    struct Status: u8 {
+        const InCs = 0b001;
+        const InCa = 0b010;
+        const InCaRb = 0b100;
+    }
+}
 
 thread_local! {
     static JMP_BUF: RefCell<MaybeUninit<sigjmp_buf>> = RefCell::new(MaybeUninit::uninit());
-    /// Represents a thread-local state.
+    /// Represents a thread-local status.
     ///
-    /// A thread entering a crashable section sets its `STATE` by calling `guard!` macro.
+    /// A thread entering a crashable section sets its `STATUS` by calling `guard!` macro.
     ///
-    /// Note that `STATE` must be a type which can be read and written in tear-free manner.
+    /// Note that `STATUS` must be a type which can be read and written in tear-free manner.
     /// For this reason, using non-atomic type such as `u8` is not safe, as any writes on this
     /// variable may be splitted into multiple instructions and the thread may read inconsistent
     /// value in its signal handler.
@@ -32,7 +41,7 @@ thread_local! {
     /// single ISA instruction. On top of that, by preventing reordering instructions across this
     /// variable by issuing `compiler_fence`, we can have the same restrictions which
     /// `volatile sig_atomic_t` has.
-    static STATE: AtomicU8 = AtomicU8::new(0);
+    static STATUS: AtomicU8 = AtomicU8::new(0);
 }
 
 /// Installs a signal handler.
@@ -44,7 +53,7 @@ thread_local! {
 #[inline]
 pub(crate) unsafe fn install() {
     sigaction(
-        EJECTION_SIGNAL,
+        CRASH_SIGNAL,
         &SigAction::new(
             SigHandler::SigAction(handle_signal),
             // Restart any interrupted sys calls instead of silently failing
@@ -59,7 +68,7 @@ pub(crate) unsafe fn install() {
 /// Sends a signal to a specific thread.
 #[inline]
 pub(crate) unsafe fn send_signal(pthread: Pthread) -> nix::Result<()> {
-    pthread_kill(pthread, EJECTION_SIGNAL)
+    pthread_kill(pthread, CRASH_SIGNAL)
 }
 
 /// Gets a mutable thread-local pointer to `sigjmp_buf`, which is used for `sigsetjmp` at the
@@ -78,10 +87,10 @@ impl RecoveryGuard {
     /// this `new` method directly.
     pub unsafe fn new() -> Self {
         debug_assert!(
-            !is_restartable(),
-            "restartable value should be false before starting a critical section"
+            !status().is_empty(),
+            "a status word must be empty before starting a critical section"
         );
-        set_restartable(true);
+        activate(Status::InCs);
 
         RecoveryGuard {}
     }
@@ -94,22 +103,25 @@ impl RecoveryGuard {
     where
         F: Fn(&Self) -> R,
     {
-        set_in_atomic(true);
+        activate(Status::InCa);
         let result = body(self);
-        set_in_atomic(false);
+        deactivate(Status::InCa);
 
-        if is_deferring_restart() {
-            clear_state();
+        if status().contains(Status::InCaRb) {
+            clear_status();
             unsafe { perform_longjmp() };
         }
         return result;
     }
 
     /// Returns to the checkpoint manually.
+    /// 
+    /// It takes immutable reference. It is able to be called in both a critical section and an
+    /// atomic section.
     #[inline]
     pub fn restart(&self) -> ! {
         compiler_fence(Ordering::SeqCst);
-        clear_state();
+        clear_status();
         unsafe { perform_longjmp() };
     }
 }
@@ -117,7 +129,7 @@ impl RecoveryGuard {
 impl Drop for RecoveryGuard {
     #[inline]
     fn drop(&mut self) {
-        set_restartable(false);
+        deactivate(Status::InCs);
     }
 }
 
@@ -133,7 +145,7 @@ macro_rules! guard {
 
             // Unblock the signal before restarting the section.
             let mut oldset = SigSet::empty();
-            oldset.add(recovery::EJECTION_SIGNAL);
+            oldset.add(recovery::CRASH_SIGNAL);
             pthread_sigmask(SigmaskHow::SIG_UNBLOCK, Some(&oldset), None)
                 .expect("Failed to unblock signal");
         }
@@ -146,70 +158,53 @@ macro_rules! guard {
 pub(crate) use guard;
 
 #[inline]
-fn is_restartable() -> bool {
+fn status() -> Status {
     compiler_fence(Ordering::SeqCst);
-    let rest = STATE.with(|state| state.load(Ordering::Relaxed)) & RESTARTABLE;
+    let status = Status::from_bits_truncate(STATUS.with(|status| status.load(Ordering::Relaxed)));
     compiler_fence(Ordering::SeqCst);
-    rest != 0
+    status
 }
 
 #[inline]
-fn is_deferring_restart() -> bool {
-    compiler_fence(Ordering::SeqCst);
-    let def = STATE.with(|state| state.load(Ordering::Relaxed)) & DEFERRING_RESTART;
-    compiler_fence(Ordering::SeqCst);
-    def != 0
-}
-
-#[inline]
-fn set_restartable(set_rest: bool) {
-    compiler_fence(Ordering::SeqCst);
-    STATE.with(|state| {
-        state.store(
-            (state.load(Ordering::Relaxed) & !RESTARTABLE) | if set_rest { RESTARTABLE } else { 0 },
-            Ordering::Relaxed,
-        )
-    });
+fn activate(flag: Status) {
+    let current = status();
+    debug_assert!(!current.intersects(flag));
+    STATUS.with(|status| status.store(current.union(flag).bits(), Ordering::Relaxed));
     compiler_fence(Ordering::SeqCst);
 }
 
 #[inline]
-fn set_in_atomic(set_in_atomic: bool) {
-    compiler_fence(Ordering::SeqCst);
-    STATE.with(|state| {
-        state.store(
-            (state.load(Ordering::Relaxed) & !IN_ATOMIC)
-                | if set_in_atomic { IN_ATOMIC } else { 0 },
-            Ordering::Relaxed,
-        )
-    });
+fn deactivate(flag: Status) {
+    let current = status();
+    debug_assert!(current.contains(flag));
+    STATUS.with(|status| status.store(current.difference(flag).bits(), Ordering::Relaxed));
     compiler_fence(Ordering::SeqCst);
 }
 
 #[inline]
-fn clear_state() {
+fn clear_status() {
     compiler_fence(Ordering::SeqCst);
-    STATE.with(|state| state.store(0, Ordering::Relaxed));
+    STATUS.with(|status| status.store(0, Ordering::Relaxed));
     compiler_fence(Ordering::SeqCst);
 }
 
 extern "C" fn handle_signal(_: i32, _: *mut siginfo_t, _: *mut c_void) {
     // Load a current state bits.
-    let current = STATE.with(|state| state.load(Ordering::Relaxed));
+    let current = status();
 
     // If we didn't make a checkpoint at all, just return.
-    if (current & RESTARTABLE) == 0 {
+    if !current.contains(Status::InCs) {
         return;
     }
 
     // If we are in crash-atomic section by `RecoveryGuard::atomic`, turn `DEFERRING_RESTART` on.
-    if (current & IN_ATOMIC) != 0 {
-        STATE.with(|state| state.store(current | DEFERRING_RESTART, Ordering::Relaxed));
+    if current.contains(Status::InCa) {
+        STATUS.with(|status| status.store(current.union(Status::InCaRb).bits(), Ordering::Relaxed));
         return;
     }
 
     // if we have made a checkpoint and are not in crash-atomic section, it is good to `longjmp`.
-    clear_state();
+    clear_status();
     unsafe { perform_longjmp() };
 }
 

@@ -366,6 +366,7 @@ version = "0.1.0"
 dependencies = [
  "arrayvec 0.7.3",
  "atomic",
+ "bitflags 2.3.3",
  "crossbeam-utils 0.8.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "membarrier 0.2.1 (git+https://github.com/jeehoonkang/membarrier-rs.git?branch=pebr)",
  "nix",
