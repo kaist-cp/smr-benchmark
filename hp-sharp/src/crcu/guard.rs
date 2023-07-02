@@ -39,7 +39,7 @@ impl EpochGuard {
         R: Copy,
     {
         let (result, guard) = self.inner.atomic(|guard| {
-            let mut guard = CrashGuard::new(unsafe { &*self.local }, guard);
+            let mut guard = CrashGuard::new(unsafe { &mut *self.local }, guard);
             let result = body(&mut guard);
             (result, guard)
         });
@@ -57,7 +57,7 @@ impl EpochGuard {
 /// Unlike a [`EpochGuard`], it may perform jobs with side-effects such as retiring, or physical
 /// deletion for a data structure.
 pub struct CrashGuard {
-    local: *const Local,
+    local: *mut Local,
     inner: *const RecoveryGuard,
     is_advanced: Cell<bool>,
 }
@@ -65,7 +65,7 @@ pub struct CrashGuard {
 /// A non-crashable section guard.
 impl CrashGuard {
     #[inline]
-    pub(crate) fn new(local: &Local, inner: &RecoveryGuard) -> Self {
+    pub(crate) fn new(local: &mut Local, inner: &RecoveryGuard) -> Self {
         Self {
             local,
             inner,
@@ -97,13 +97,13 @@ pub trait Deferrable {
     /// It returns a `Some(Vec<Deferred>)` if the global epoch is advanced and we have collected
     /// some expired deferred tasks.
     #[must_use]
-    fn defer(&self, def: Deferred) -> Option<Vec<Deferred>>;
+    fn defer(&mut self, def: Deferred) -> Option<Vec<Deferred>>;
 }
 
 impl Deferrable for CrashGuard {
     #[inline]
     #[must_use]
-    fn defer(&self, def: Deferred) -> Option<Vec<Deferred>> {
+    fn defer(&mut self, def: Deferred) -> Option<Vec<Deferred>> {
         let collected = unsafe { (*self.local).defer(def) };
         if collected.is_some() {
             self.is_advanced.set(true);

@@ -345,7 +345,7 @@ mod test {
             scope(|s| {
                 for _ in 0..THREADS {
                     s.spawn(|| {
-                        let handle = global.register();
+                        let mut handle = global.register();
                         for _ in 0..COUNT_PER_THREAD {
                             if let Some(collected) =
                                 handle.defer(Deferred::new(sum as *const _ as *mut _, increment))

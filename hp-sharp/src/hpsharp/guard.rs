@@ -119,7 +119,7 @@ impl Retire for Handle {
         // Invalidate immediately to prevent a slow thread to resume its traversal after a crash.
         ptr.deref_unchecked().invalidate();
 
-        let collected = self.crcu_handle.borrow().defer(Deferred::new(
+        let collected = self.crcu_handle.borrow_mut().defer(Deferred::new(
             ptr.untagged().as_raw() as *const u8 as *mut u8,
             free::<T>,
         ));

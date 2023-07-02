@@ -170,7 +170,7 @@ impl Local {
     /// It returns a `Some(Vec<Deferred>)` if the global epoch is advanced and we have collected
     /// some expired deferred tasks.
     #[inline]
-    pub(crate) fn defer(&self, mut def: Deferred) -> Option<Vec<Deferred>> {
+    pub(crate) fn defer(&mut self, mut def: Deferred) -> Option<Vec<Deferred>> {
         let bag = unsafe { &mut *self.bag.get() };
 
         while let Err(d) = bag.try_push(def) {
@@ -336,7 +336,7 @@ impl Handle {
 impl Deferrable for Handle {
     #[inline]
     #[must_use]
-    fn defer(&self, def: Deferred) -> Option<Vec<Deferred>> {
+    fn defer(&mut self, def: Deferred) -> Option<Vec<Deferred>> {
         unsafe { (*self.local).defer(def) }
     }
 }
