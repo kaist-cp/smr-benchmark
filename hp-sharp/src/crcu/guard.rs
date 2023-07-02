@@ -47,6 +47,7 @@ impl EpochGuard {
         if guard.is_advanced.get() {
             self.inner.restart();
         }
+        compiler_fence(Ordering::SeqCst);
         result
     }
 }

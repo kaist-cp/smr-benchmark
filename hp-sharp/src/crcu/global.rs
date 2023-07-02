@@ -137,7 +137,7 @@ impl Global {
         let global_epoch = self.epoch.load(Ordering::Relaxed);
         fence(Ordering::SeqCst);
 
-        for local in self.locals.iter() {
+        for local in self.locals.iter_using() {
             let local_epoch = local.epoch.load(Ordering::Relaxed);
 
             // If the participant was pinned in a different epoch, we cannot advance the
@@ -186,7 +186,7 @@ impl Global {
         let global_epoch = self.epoch.load(Ordering::Relaxed);
         fence(Ordering::SeqCst);
 
-        for local in self.locals.iter() {
+        for local in self.locals.iter_using() {
             let local_epoch = local.epoch.load(Ordering::Relaxed);
 
             // If the participant was pinned in a different epoch, we eject its epoch.
@@ -229,14 +229,32 @@ impl Global {
     }
 }
 
+impl Drop for Global {
+    fn drop(&mut self) {
+        self.locals
+            .iter()
+            .flat_map(|local| mem::take(unsafe { &mut *local.bag.get() }).into_iter())
+            .chain(self.bags.iter_mut().flat_map(|pile| {
+                pile.pop_all()
+                    .into_iter()
+                    .flat_map(|bag| bag.inner.into_iter())
+            }))
+            .for_each(|def| unsafe { def.execute() });
+    }
+}
+
 #[cfg(test)]
 mod test {
+    use crate::crcu::Deferrable;
+    use crate::sync::Deferred;
+
     use super::Global;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::hint::black_box;
+    use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
     use std::thread::scope;
 
     #[test]
-    fn test_try_advance() {
+    fn try_advance() {
         let global = &Global::new();
         let sync_clock = &AtomicUsize::new(0);
 
@@ -276,7 +294,7 @@ mod test {
     }
 
     #[test]
-    fn test_advance() {
+    fn advance() {
         let global = &Global::new();
         let sync_clock = &AtomicUsize::new(0);
 
@@ -310,5 +328,97 @@ mod test {
             // `advance` always succeeds, and it will restart any slow threads.
             global.advance();
         });
+    }
+
+    #[test]
+    fn defer_incrs() {
+        const THREADS: usize = 30;
+        const COUNT_PER_THREAD: usize = 4096;
+
+        let sum = &AtomicUsize::new(0);
+        {
+            unsafe fn increment(ptr: *mut u8) {
+                let ptr = ptr as *mut AtomicUsize;
+                (*ptr).fetch_add(1, Ordering::SeqCst);
+            }
+            let global = &Global::new();
+            scope(|s| {
+                for _ in 0..THREADS {
+                    s.spawn(|| {
+                        let handle = global.register();
+                        for _ in 0..COUNT_PER_THREAD {
+                            if let Some(collected) =
+                                handle.defer(Deferred::new(sum as *const _ as *mut _, increment))
+                            {
+                                for def in collected {
+                                    unsafe { def.execute() };
+                                }
+                            }
+                        }
+                    });
+                }
+            });
+        }
+        assert_eq!(sum.load(Ordering::SeqCst), THREADS * COUNT_PER_THREAD);
+    }
+
+    #[test]
+    fn single_node() {
+        const THREADS: usize = 30;
+        const COUNT_PER_THREAD: usize = 1 << 20;
+
+        let head = AtomicPtr::new(Box::into_raw(Box::new(0i32)));
+        unsafe {
+            unsafe fn free<T>(ptr: *mut u8) {
+                let ptr = ptr as *mut T;
+                drop(Box::from_raw(ptr));
+            }
+            let global = &Global::new();
+            scope(|s| {
+                let threads = (0..THREADS)
+                    .map(|_| {
+                        s.spawn(|| {
+                            let mut handle = global.register();
+                            for _ in 0..COUNT_PER_THREAD {
+                                handle.pin(|guard| {
+                                    let ptr = head.load(Ordering::Acquire);
+                                    guard.mask(|guard| {
+                                        let new = Box::into_raw(Box::new(0i32));
+                                        if head
+                                            .compare_exchange(
+                                                ptr,
+                                                new,
+                                                Ordering::AcqRel,
+                                                Ordering::Acquire,
+                                            )
+                                            .is_ok()
+                                        {
+                                            *ptr += 1;
+                                            if let Some(collected) = guard
+                                                .defer(Deferred::new(ptr as *mut _, free::<i32>))
+                                            {
+                                                for def in collected {
+                                                    def.execute();
+                                                }
+                                            }
+                                        } else {
+                                            drop(Box::from_raw(new));
+                                        }
+                                    });
+
+                                    // This read must be safe.
+                                    let read = black_box(*ptr + 1);
+                                    black_box(read);
+                                })
+                            }
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                for thread in threads {
+                    thread.join().unwrap();
+                }
+                drop(Box::from_raw(head.load(Ordering::Acquire)));
+            });
+        }
     }
 }

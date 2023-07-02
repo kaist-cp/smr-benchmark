@@ -43,7 +43,8 @@ check:
     - cargo clippy -p hp-sharp -- -D warnings
     - cargo audit
 
-    - cargo build --release
+    - cargo test -p hp-sharp -- --nocapture
+    - cargo test --release -p hp-sharp -- --nocapture
     - cargo test -- --nocapture
     - cargo test --release -- --nocapture
 

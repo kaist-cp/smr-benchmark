@@ -3,7 +3,7 @@ use std::{
     hint::black_box,
     marker::PhantomData,
     ptr::null_mut,
-    sync::atomic::{compiler_fence, AtomicBool, AtomicPtr, Ordering},
+    sync::atomic::{compiler_fence, fence, AtomicBool, AtomicPtr, Ordering},
 };
 
 use atomic::Atomic;
@@ -29,10 +29,10 @@ const_assert!(Atomic::<Pthread>::is_lock_free());
 pub(crate) struct Local {
     pub(crate) epoch: CachePadded<AtomicEpoch>,
     pub(crate) owner: Atomic<Pthread>,
+    pub(crate) bag: UnsafeCell<Bag>,
     next: AtomicPtr<Local>,
     using: AtomicBool,
     global: *const Global,
-    bag: UnsafeCell<Bag>,
     defer_count: Cell<usize>,
 }
 
@@ -45,10 +45,10 @@ impl Local {
         Self {
             epoch: CachePadded::new(AtomicEpoch::new(Epoch::starting())),
             owner: unsafe { core::mem::zeroed() },
+            bag: UnsafeCell::new(Bag::new()),
             next: AtomicPtr::new(null_mut()),
             using: AtomicBool::new(using),
             global,
-            bag: UnsafeCell::new(Bag::new()),
             defer_count: Cell::new(0),
         }
     }
@@ -56,24 +56,51 @@ impl Local {
     /// Unpins and then pins the [`Local`].
     #[inline]
     pub(crate) fn repin(&mut self) {
-        let epoch = self.epoch.load(Ordering::Relaxed);
-        let global_epoch = self.global().epoch.load(Ordering::Relaxed).pinned();
+        self.unpin_inner();
+        self.pin_inner();
+    }
 
-        // Update the local epoch only if the global epoch is greater than the local epoch.
-        if epoch != global_epoch {
-            // We store the new epoch with `Release` because we need to ensure any memory
-            // accesses from the previous epoch do not leak into the new one.
-            self.epoch.store(global_epoch, Ordering::Release);
+    /// Pins the [`Local`].
+    #[inline]
+    pub(crate) fn pin_inner(&mut self) {
+        let global_epoch = self.global().epoch.load(Ordering::Relaxed);
+        let new_epoch = global_epoch.pinned();
 
-            // However, we don't need a following `SeqCst` fence, because it is safe for memory
-            // accesses from the new epoch to be executed before updating the local epoch. At
-            // worse, other threads will see the new epoch late and delay GC slightly.
+        // Now we must store `new_epoch` into `self.epoch` and execute a `SeqCst` fence.
+        // The fence makes sure that any future loads from `Atomic`s will not happen before
+        // this store.
+        if cfg!(any(target_arch = "x86", target_arch = "x86_64")) {
+            // HACK(stjepang): On x86 architectures there are two different ways of executing
+            // a `SeqCst` fence.
+            //
+            // 1. `atomic::fence(SeqCst)`, which compiles into a `mfence` instruction.
+            // 2. `_.compare_exchange(_, _, SeqCst, SeqCst)`, which compiles into a `lock cmpxchg`
+            //    instruction.
+            //
+            // Both instructions have the effect of a full barrier, but benchmarks have shown
+            // that the second one makes pinning faster in this particular case.  It is not
+            // clear that this is permitted by the C++ memory model (SC fences work very
+            // differently from SC accesses), but experimental evidence suggests that this
+            // works fine.  Using inline assembly would be a viable (and correct) alternative,
+            // but alas, that is not possible on stable Rust.
+            let current = Epoch::starting();
+            let res =
+                self.epoch
+                    .compare_exchange(current, new_epoch, Ordering::SeqCst, Ordering::SeqCst);
+            debug_assert!(res.is_ok(), "participant was expected to be unpinned");
+            // We add a compiler fence to make it less likely for LLVM to do something wrong
+            // here.  Formally, this is not enough to get rid of data races; practically,
+            // it should go a long way.
+            compiler_fence(Ordering::SeqCst);
+        } else {
+            self.epoch.store(new_epoch, Ordering::Relaxed);
+            fence(Ordering::SeqCst);
         }
     }
 
     /// Unpins the [`Local`].
     #[inline]
-    pub(crate) fn unpin(&mut self) {
+    pub(crate) fn unpin_inner(&mut self) {
         self.epoch.store(Epoch::starting(), Ordering::Release);
     }
 
@@ -117,7 +144,7 @@ impl Local {
 
             // We are now out of the critical(crashable) section.
             // Unpin the local epoch to help reclaimers to freely collect bags.
-            self.unpin();
+            self.unpin_inner();
 
             // # HACK: A dummy loop and `blackbox`
             // (See comments on the loop for more information.)
@@ -155,9 +182,12 @@ impl Local {
         self.defer_count.set(defer_count);
 
         if defer_count >= Self::COUNTS_BETWEEN_FORCE_ADVANCE {
+            self.defer_count.set(0);
             Some(self.global().collect(self.global().advance()))
         } else if defer_count % Self::COUNTS_BETWEEN_TRY_ADVANCE == 0 {
-            Some(self.global().collect(self.global().try_advance().ok()?))
+            let epoch = self.global().try_advance().ok()?;
+            self.defer_count.set(0);
+            Some(self.global().collect(epoch))
         } else {
             None
         }
@@ -224,27 +254,55 @@ impl LocalList {
         Handle { local }
     }
 
-    /// Returns an iterator over all objects.
-    pub(crate) fn iter<'g>(&'g self) -> LocalIter<'g> {
+    /// Returns an iterator over all using `Local`s.
+    pub(crate) fn iter_using<'g>(&'g self) -> impl Iterator<Item = &'g Local> {
         LocalIter {
             curr: self.head.load(Ordering::Acquire),
+            predicate: |local| local.using.load(Ordering::Acquire),
+            _marker: PhantomData,
+        }
+    }
+
+    /// Returns an iterator over all `Local`s.
+    pub(crate) fn iter<'g>(&'g self) -> impl Iterator<Item = &'g Local> {
+        LocalIter {
+            curr: self.head.load(Ordering::Acquire),
+            predicate: |_| true,
             _marker: PhantomData,
         }
     }
 }
 
-pub(crate) struct LocalIter<'g> {
+impl Drop for LocalList {
+    fn drop(&mut self) {
+        let mut curr = self.head.load(Ordering::Acquire);
+        while let Some(curr_ref) = unsafe { curr.as_ref() } {
+            let next = curr_ref.next.load(Ordering::Acquire);
+            drop(unsafe { Box::from_raw(curr) });
+            curr = next;
+        }
+    }
+}
+
+pub(crate) struct LocalIter<'g, F>
+where
+    F: Fn(&Local) -> bool,
+{
     curr: *const Local,
+    predicate: F,
     _marker: PhantomData<&'g ()>,
 }
 
-impl<'g> Iterator for LocalIter<'g> {
+impl<'g, F> Iterator for LocalIter<'g, F>
+where
+    F: Fn(&Local) -> bool,
+{
     type Item = &'g Local;
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(curr_ref) = unsafe { self.curr.as_ref() } {
             self.curr = curr_ref.next.load(Ordering::Acquire);
-            if curr_ref.using.load(Ordering::Acquire) {
+            if (self.predicate)(curr_ref) {
                 return Some(curr_ref);
             }
         }
