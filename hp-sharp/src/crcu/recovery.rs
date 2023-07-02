@@ -87,7 +87,7 @@ impl RecoveryGuard {
     /// this `new` method directly.
     pub unsafe fn new() -> Self {
         debug_assert!(
-            !status().is_empty(),
+            status().is_empty(),
             "a status word must be empty before starting a critical section"
         );
         activate(Status::InCs);
@@ -115,7 +115,7 @@ impl RecoveryGuard {
     }
 
     /// Returns to the checkpoint manually.
-    /// 
+    ///
     /// It takes immutable reference. It is able to be called in both a critical section and an
     /// atomic section.
     #[inline]
@@ -197,7 +197,7 @@ extern "C" fn handle_signal(_: i32, _: *mut siginfo_t, _: *mut c_void) {
         return;
     }
 
-    // If we are in crash-atomic section by `RecoveryGuard::atomic`, turn `DEFERRING_RESTART` on.
+    // If we are in crash-atomic section by `RecoveryGuard::atomic`, turn `InCaRb` on.
     if current.contains(Status::InCa) {
         STATUS.with(|status| status.store(current.union(Status::InCaRb).bits(), Ordering::Relaxed));
         return;
@@ -208,7 +208,7 @@ extern "C" fn handle_signal(_: i32, _: *mut siginfo_t, _: *mut c_void) {
     unsafe { perform_longjmp() };
 }
 
-/// Perform `siglongjmp` without changing any phase-related variables like `RESTARTABLE`.
+/// Perform `siglongjmp` without changing any phase-related variables like `InCs`.
 ///
 /// It assume that the `jmp_buf` is properly initialized by calling `siglongjmp`.
 #[inline]
