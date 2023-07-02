@@ -2,8 +2,6 @@ use core::cell::RefCell;
 use core::sync::atomic::{AtomicPtr, Ordering};
 use core::{mem, ptr};
 
-use membarrier::heavy_membarrier;
-
 use super::global::Global;
 use super::hazard::ThreadRecord;
 use crate::crcu;
@@ -20,7 +18,7 @@ pub struct Handle {
 }
 
 impl Handle {
-    pub fn new(domain: &Global) -> Self {
+    pub(crate) fn new(domain: &Global) -> Self {
         let (thread, available_indices) = domain.threads.acquire();
         let crcu_handle = RefCell::new(domain.crcu.register());
         Self {
@@ -73,7 +71,7 @@ impl Handle {
             return;
         }
 
-        unsafe { heavy_membarrier() };
+        membarrier::heavy();
 
         let guarded_ptrs = unsafe { &*self.domain }.collect_guarded_ptrs(self);
         let not_freed: Vec<Deferred> = deferred

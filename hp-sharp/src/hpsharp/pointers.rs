@@ -1,23 +1,24 @@
 use std::{
     cell::Cell,
     marker::PhantomData,
-    mem::{self, swap, transmute, zeroed, MaybeUninit},
+    mem::{self, forget, swap, transmute, zeroed, MaybeUninit},
+    ops::{Deref, DerefMut},
     sync::atomic::{compiler_fence, AtomicUsize, Ordering},
 };
 
 use membarrier::light_membarrier;
 
 use crate::{
-    crcu::Deferrable,
     hpsharp::{guard::EpochGuard, guard::Invalidate, handle::Handle, hazard::HazardPointer},
+    Retire,
 };
 
 /// A result of unsuccessful `compare_exchange`.
-pub struct CompareExchangeError<'r, T: 'r> {
+pub struct CompareExchangeError<'g, T: 'g, P: Pointer> {
     /// The `new` pointer which was given as a parameter of `compare_exchange`.
-    pub new: Shared<'r, T>,
+    pub new: P,
     /// The actual pointer value inside the atomic pointer.
-    pub actual: Shared<'r, T>,
+    pub actual: Shared<'g, T>,
 }
 
 pub struct Atomic<T> {
@@ -50,14 +51,14 @@ impl<T> Atomic<T> {
 
     /// Stores a [`Shared`] pointer into the atomic pointer, returning the previous [`Shared`].
     #[inline]
-    pub fn swap<G: Deferrable>(&self, ptr: Shared<T>, order: Ordering, _: &G) -> Shared<T> {
+    pub fn swap<G: Retire>(&self, ptr: Shared<T>, order: Ordering, _: &G) -> Shared<T> {
         let prev = self.link.swap(ptr.inner, order);
         Shared::new(prev)
     }
 
     /// Stores a [`Shared`] pointer into the atomic pointer.
     #[inline]
-    pub fn store<G: Deferrable>(&self, ptr: Shared<T>, order: Ordering, _: &G) {
+    pub fn store<G: Retire>(&self, ptr: Shared<T>, order: Ordering, _: &G) {
         self.link.store(ptr.inner, order);
     }
 
@@ -77,24 +78,24 @@ impl<T> Atomic<T> {
     /// [`CompareExchangeError`] which contains an actual value from the atomic pointer and
     /// the ownership of `new` pointer which was given as a parameter is returned.
     #[inline]
-    pub fn compare_exchange<'p, 'r, G: Deferrable>(
+    pub fn compare_exchange<'g, P: Pointer, G: Retire>(
         &self,
-        current: Shared<'p, T>,
-        new: Shared<'r, T>,
+        current: Shared<'_, T>,
+        new: P,
         success: Ordering,
         failure: Ordering,
-        _: &'r G,
-    ) -> Result<Shared<T>, CompareExchangeError<'r, T>> {
+        _: &G,
+    ) -> Result<Shared<T>, CompareExchangeError<'g, T, P>> {
         let current = current.inner;
-        let new = new.inner;
+        let new = new.into_usize();
 
-        self.link
-            .compare_exchange(current, new, success, failure)
-            .map(|actual| Shared::new(actual))
-            .map_err(|actual| CompareExchangeError {
-                new: Shared::new(new),
+        match self.link.compare_exchange(current, new, success, failure) {
+            Ok(actual) => Ok(Shared::new(actual)),
+            Err(actual) => Err(CompareExchangeError {
+                new: unsafe { P::from_usize(new) },
                 actual: Shared::new(actual),
-            })
+            }),
+        }
     }
 
     /// Bitwise "or" with the current tag.
@@ -102,13 +103,23 @@ impl<T> Atomic<T> {
     /// Performs a bitwise "or" operation on the current tag and the argument `tag`, and sets the
     /// new tag to the result. Returns the previous pointer.
     #[inline]
-    pub fn fetch_or<'r, G: Deferrable>(
-        &self,
-        tag: usize,
-        order: Ordering,
-        _: &'r G,
-    ) -> Shared<'r, T> {
+    pub fn fetch_or<'r, G: Retire>(&self, tag: usize, order: Ordering, _: &'r G) -> Shared<'r, T> {
         Shared::new(self.link.fetch_or(decompose_data::<T>(tag).1, order))
+    }
+
+    /// Takes ownership of the pointee.
+    ///
+    /// This consumes the atomic and converts it into [`Owned`]. As [`Atomic`] doesn't have a
+    /// destructor and doesn't drop the pointee while [`Owned`] does, this is suitable for
+    /// destructors of data structures.
+    ///
+    /// # Safety
+    ///
+    /// This method may be called only if the pointer is valid and nobody else is holding a
+    /// reference to the same object.
+    #[inline]
+    pub unsafe fn into_owned(self) -> Owned<T> {
+        Owned::from_usize(self.link.into_inner())
     }
 }
 
@@ -206,6 +217,93 @@ impl<'r, T> Shared<'r, T> {
     pub fn with_tag(&self, tag: usize) -> Self {
         Shared::new(data_with_tag::<T>(self.inner, tag))
     }
+
+    /// Returns the machine representation of the pointer, including tag bits.
+    #[inline]
+    pub fn as_raw(&self) -> usize {
+        self.inner
+    }
+
+    /// Takes ownership of the pointee.
+    ///
+    /// # Safety
+    ///
+    /// This method may be called only if the pointer is valid and nobody else is holding a
+    /// reference to the same object.
+    #[inline]
+    pub unsafe fn into_owned(self) -> Owned<T> {
+        Owned::from_usize(self.inner)
+    }
+}
+
+/// An owned heap-allocated object.
+///
+/// This type is very similar to `Box<T>`.
+pub struct Owned<T: 'static> {
+    inner: usize,
+    _marker: PhantomData<*const T>,
+}
+
+unsafe impl<T> Sync for Owned<T> {}
+unsafe impl<T> Send for Owned<T> {}
+
+impl<T: 'static> Deref for Owned<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*decompose_data::<T>(self.inner).0 }
+    }
+}
+
+impl<T: 'static> DerefMut for Owned<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut *decompose_data::<T>(self.inner).0 }
+    }
+}
+
+impl<T: 'static> Owned<T> {
+    /// Allocates `init` on the heap and returns a new owned pointer pointing to it.
+    pub fn new(init: T) -> Self {
+        Self {
+            inner: Box::into_raw(Box::new(init)) as usize,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Returns the machine representation of the pointer, including tag bits.
+    pub fn as_raw(&self) -> usize {
+        self.inner
+    }
+
+    /// Returns the tag stored within the pointer.
+    #[inline]
+    pub fn tag(&self) -> usize {
+        decompose_data::<T>(self.inner).1
+    }
+
+    /// Returns the same pointer, but the tag bits are cleared.
+    #[inline]
+    pub fn untagged(self) -> Self {
+        self.with_tag(0)
+    }
+
+    /// Returns the same pointer, but tagged with `tag`. `tag` is truncated to be fit into the
+    /// unused bits of the pointer to `T`.
+    #[inline]
+    pub fn with_tag(self, tag: usize) -> Self {
+        let result = Self {
+            inner: data_with_tag::<T>(self.inner, tag),
+            _marker: PhantomData,
+        };
+        forget(self);
+        result
+    }
+}
+
+impl<T> Drop for Owned<T> {
+    fn drop(&mut self) {
+        drop(unsafe { Box::from_raw(self.inner as *const T as *mut T) });
+    }
 }
 
 /// A pointer to an shared object, which is protected by a hazard pointer.
@@ -268,24 +366,58 @@ impl<T> Shield<T> {
         self.inner.set(0);
         self.hazptr.reset_protection();
     }
-}
 
-pub trait Pointer<T> {
     /// Returns the machine representation of the pointer, including tag bits.
-    fn as_raw(&self) -> usize;
-}
-
-impl<'r, T> Pointer<T> for Shared<'r, T> {
     #[inline]
-    fn as_raw(&self) -> usize {
-        self.inner
+    pub fn as_raw(&self) -> usize {
+        self.inner.get()
+    }
+
+    /// Creates a `Shared` pointer whose lifetime is equal to `self`.
+    #[inline]
+    pub fn shared<'r>(&'r self) -> Shared<'r, T> {
+        Shared::new(self.inner.get())
     }
 }
 
-impl<T> Pointer<T> for Shield<T> {
+/// A trait for either `Owned` or `Shared` pointers.
+pub trait Pointer {
+    /// Returns the machine representation of the pointer.
+    fn into_usize(self) -> usize;
+
+    /// Returns a new pointer pointing to the tagged pointer `data`.
+    ///
+    /// # Safety
+    ///
+    /// The given `data` should have been created by `Pointer::into_usize()`, and one `data` should
+    /// not be converted back by `Pointer::from_usize()` multiple times.
+    unsafe fn from_usize(data: usize) -> Self;
+}
+
+impl<'r, T> Pointer for Shared<'r, T> {
     #[inline]
-    fn as_raw(&self) -> usize {
-        self.inner.get()
+    fn into_usize(self) -> usize {
+        self.as_raw()
+    }
+
+    #[inline]
+    unsafe fn from_usize(data: usize) -> Self {
+        Self::new(data)
+    }
+}
+
+impl<T> Pointer for Owned<T> {
+    fn into_usize(self) -> usize {
+        let inner = self.inner;
+        forget(self);
+        inner
+    }
+
+    unsafe fn from_usize(data: usize) -> Self {
+        Self {
+            inner: data,
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -307,7 +439,7 @@ pub trait Protector {
 
     /// Loads currently protected pointers and checks whether any of them are invalidated.
     /// If not, creates a new `Target` and returns it.
-    unsafe fn as_read<'r>(&self) -> Option<Self::Target<'r>>;
+    unsafe fn as_read<'r>(&self, guard: &'r EpochGuard) -> Option<Self::Target<'r>>;
 
     /// Resets all hazard slots, allowing the previous memory block to be reclaimed.
     fn release(&self);
@@ -388,7 +520,7 @@ pub trait Protector {
                 // `init_result`.
                 let mut result = defs
                     .get(backup_idx.load(Ordering::Relaxed))
-                    .and_then(|def| def.as_read())
+                    .and_then(|def| transmute(def.as_read(&guard)))
                     .unwrap_or_else(|| {
                         // As `F1` takes a mutable reference to `guard`, `init_result` returns
                         // `Read<'r>` and `guard`'s lifetime becomes an another arbitrary value.
@@ -464,7 +596,7 @@ impl Protector for () {
     unsafe fn protect_unchecked(&self, _: &Self::Target<'_>) {}
 
     #[inline]
-    unsafe fn as_read<'r>(&self) -> Option<Self::Target<'r>> {
+    unsafe fn as_read<'r>(&self, _: &'r EpochGuard) -> Option<Self::Target<'r>> {
         Some(())
     }
 
@@ -489,10 +621,10 @@ impl<T: Invalidate> Protector for Shield<T> {
     }
 
     #[inline]
-    unsafe fn as_read<'r>(&self) -> Option<Self::Target<'r>> {
+    unsafe fn as_read<'r>(&self, guard: &'r EpochGuard) -> Option<Self::Target<'r>> {
         let read = Shared::new(self.inner.get());
         if let Some(value) = self.as_ref() {
-            if value.is_invalidated() {
+            if value.is_invalidated(guard) {
                 return None;
             }
         }
@@ -529,10 +661,10 @@ macro_rules! impl_protector_for_array {(
             }
 
             #[inline]
-            unsafe fn as_read<'r>(&self) -> Option<Self::Target<'r>> {
+            unsafe fn as_read<'r>(&self, guard: &'r EpochGuard) -> Option<Self::Target<'r>> {
                 let mut result: [MaybeUninit<Shared<'r, T>>; $N] = zeroed();
                 for (shield, shared) in self.iter().zip(result.iter_mut()) {
-                    match shield.as_read() {
+                    match shield.as_read(guard) {
                         Some(read) => shared.write(read),
                         None => return None,
                     };
@@ -602,4 +734,152 @@ pub fn decompose_data<T>(data: usize) -> (*mut T, usize) {
     let raw = (data & !low_bits::<T>()) as *mut T;
     let tag = data & low_bits::<T>();
     (raw, tag)
+}
+
+#[cfg(test)]
+mod test {
+    use std::thread::scope;
+
+    use atomic::Ordering;
+
+    use crate::{
+        Atomic, CrashGuard, EpochGuard, Global, Invalidate, Owned, Protector, Retire, Shared,
+        Shield,
+    };
+
+    struct Node {
+        next: Atomic<Node>,
+    }
+
+    impl Invalidate for Node {
+        fn invalidate(&self) {
+            let guard = &unsafe { EpochGuard::unprotected() };
+            let ptr = self.next.load(Ordering::Relaxed, guard);
+            self.next
+                .store(ptr.with_tag(1), Ordering::Relaxed, &unsafe {
+                    CrashGuard::unprotected()
+                });
+        }
+
+        fn is_invalidated(&self, guard: &EpochGuard) -> bool {
+            (self.next.load(Ordering::Relaxed, guard).tag() & 1) != 0
+        }
+    }
+
+    struct Cursor {
+        prev: Shield<Node>,
+        curr: Shield<Node>,
+    }
+
+    impl Protector for Cursor {
+        type Target<'r> = SharedCursor<'r>;
+
+        fn empty(handle: &mut crate::Handle) -> Self {
+            Self {
+                prev: Shield::null(handle),
+                curr: Shield::null(handle),
+            }
+        }
+
+        unsafe fn protect_unchecked(&self, read: &Self::Target<'_>) {
+            self.prev.protect_unchecked(&read.prev);
+            self.curr.protect_unchecked(&read.curr);
+        }
+
+        unsafe fn as_read<'r>(&self, guard: &'r EpochGuard) -> Option<Self::Target<'r>> {
+            Some(SharedCursor {
+                prev: self.prev.as_read(guard)?,
+                curr: self.curr.as_read(guard)?,
+            })
+        }
+
+        fn release(&self) {
+            self.prev.release();
+            self.curr.release();
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    struct SharedCursor<'r> {
+        prev: Shared<'r, Node>,
+        curr: Shared<'r, Node>,
+    }
+
+    #[test]
+    fn double_node() {
+        const THREADS: usize = 30;
+        const COUNT_PER_THREAD: usize = 1 << 20;
+
+        let head = Atomic::new(Node {
+            next: Atomic::new(Node {
+                next: Atomic::null(),
+            }),
+        });
+
+        unsafe {
+            let global = &Global::new();
+            scope(|s| {
+                for _ in 0..THREADS {
+                    s.spawn(|| {
+                        let mut handle = global.register();
+                        let mut cursor = Cursor::empty(&mut handle);
+                        for _ in 0..COUNT_PER_THREAD {
+                            loop {
+                                cursor.pin(&mut handle, |guard| {
+                                    let mut cursor = SharedCursor {
+                                        prev: Shared::null(),
+                                        curr: Shared::null(),
+                                    };
+
+                                    cursor.prev = head.load(Ordering::Acquire, guard);
+                                    cursor.curr = cursor
+                                        .prev
+                                        .as_ref(guard)
+                                        .unwrap()
+                                        .next
+                                        .load(Ordering::Acquire, guard);
+
+                                    cursor
+                                });
+
+                                let new = Owned::new(Node {
+                                    next: Atomic::new(Node {
+                                        next: Atomic::null(),
+                                    }),
+                                });
+
+                                match head.compare_exchange(
+                                    cursor.prev.shared(),
+                                    new,
+                                    Ordering::AcqRel,
+                                    Ordering::Acquire,
+                                    &handle,
+                                ) {
+                                    Ok(_) => {
+                                        handle.retire(cursor.prev.shared());
+                                        handle.retire(cursor.curr.shared());
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        let new = e.new;
+                                        drop(
+                                            new.next
+                                                .load(Ordering::Relaxed, &EpochGuard::unprotected())
+                                                .into_owned(),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+            });
+            let head = head.into_owned();
+            drop(
+                head.next
+                    .load(Ordering::Relaxed, &EpochGuard::unprotected())
+                    .into_owned(),
+            );
+        }
+    }
 }

@@ -24,6 +24,10 @@ impl Global {
         }
     }
 
+    pub fn register(&self) -> Handle {
+        Handle::new(self)
+    }
+
     pub fn collect_guarded_ptrs(&self, reclaimer: &mut Handle) -> FxHashSet<*mut u8> {
         self.threads
             .iter()
@@ -38,9 +42,6 @@ impl Global {
 
 impl Drop for Global {
     fn drop(&mut self) {
-        for t in self.threads.iter() {
-            assert!(t.available.load(Ordering::Relaxed))
-        }
         let mut deferred = self.deferred.pop_all();
         for r in deferred.drain(..) {
             unsafe { r.execute() };

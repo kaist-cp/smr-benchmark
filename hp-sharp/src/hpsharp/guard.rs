@@ -1,11 +1,11 @@
 use std::{
-    ptr::NonNull,
+    ptr::{null, null_mut, NonNull},
     sync::atomic::{AtomicUsize, Ordering},
 };
 
 use crate::{
     crcu::{self, Deferrable},
-    hpsharp::{handle::free, Handle, Pointer, Protector, Shared, WriteResult},
+    hpsharp::{handle::free, Handle, Protector, Shared, WriteResult},
     sync::Deferred,
 };
 
@@ -77,6 +77,15 @@ impl EpochGuard {
             }
         });
     }
+
+    /// Creates an unprotected `EpochGuard`.
+    pub unsafe fn unprotected() -> Self {
+        Self {
+            inner: null_mut(),
+            handle: null(),
+            backup_idx: None,
+        }
+    }
 }
 
 /// A high-level non-crashable write section guard.
@@ -96,11 +105,19 @@ impl CrashGuard {
     pub(crate) fn new(inner: &mut crcu::CrashGuard, handle: *const Handle) -> Self {
         Self { inner, handle }
     }
+
+    /// Creates an unprotected `CrashGuard`.
+    pub unsafe fn unprotected() -> Self {
+        Self {
+            inner: null_mut(),
+            handle: null(),
+        }
+    }
 }
 
 pub trait Invalidate {
     fn invalidate(&self);
-    fn is_invalidated(&self) -> bool;
+    fn is_invalidated(&self, guard: &EpochGuard) -> bool;
 }
 
 pub trait Retire {

@@ -165,6 +165,19 @@ impl ThreadRecords {
     }
 }
 
+impl Drop for ThreadRecords {
+    fn drop(&mut self) {
+        let mut curr = self.head.load(Ordering::Relaxed);
+        while let Some(curr_ref) = unsafe { curr.as_ref() } {
+            debug_assert!(curr_ref.available.load(Ordering::Relaxed));
+            let next = curr_ref.next;
+            drop(unsafe { Box::from_raw(curr_ref.hazptrs.load(Ordering::Relaxed)) });
+            drop(unsafe { Box::from_raw(curr) });
+            curr = next;
+        }
+    }
+}
+
 pub(crate) struct ThreadRecordsIter<'g> {
     cur: *const ThreadRecord,
     _marker: PhantomData<&'g ()>,
