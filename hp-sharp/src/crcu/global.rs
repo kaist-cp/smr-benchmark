@@ -375,50 +375,45 @@ mod test {
             }
             let global = &Global::new();
             scope(|s| {
-                let threads = (0..THREADS)
-                    .map(|_| {
-                        s.spawn(|| {
-                            let mut handle = global.register();
-                            for _ in 0..COUNT_PER_THREAD {
-                                handle.pin(|guard| {
-                                    let ptr = head.load(Ordering::Acquire);
-                                    guard.mask(|guard| {
-                                        let new = Box::into_raw(Box::new(0i32));
-                                        if head
-                                            .compare_exchange(
-                                                ptr,
-                                                new,
-                                                Ordering::AcqRel,
-                                                Ordering::Acquire,
-                                            )
-                                            .is_ok()
+                for _ in 0..THREADS {
+                    s.spawn(|| {
+                        let mut handle = global.register();
+                        for _ in 0..COUNT_PER_THREAD {
+                            handle.pin(|guard| {
+                                let ptr = head.load(Ordering::Acquire);
+                                guard.mask(|guard| {
+                                    let new = Box::into_raw(Box::new(0i32));
+                                    if head
+                                        .compare_exchange(
+                                            ptr,
+                                            new,
+                                            Ordering::AcqRel,
+                                            Ordering::Acquire,
+                                        )
+                                        .is_ok()
+                                    {
+                                        *ptr += 1;
+                                        if let Some(collected) =
+                                            guard.defer(Deferred::new(ptr as *mut _, free::<i32>))
                                         {
-                                            *ptr += 1;
-                                            if let Some(collected) = guard
-                                                .defer(Deferred::new(ptr as *mut _, free::<i32>))
-                                            {
-                                                for def in collected {
-                                                    def.execute();
-                                                }
+                                            for def in collected {
+                                                def.execute();
                                             }
-                                        } else {
-                                            drop(Box::from_raw(new));
                                         }
-                                    });
+                                    } else {
+                                        drop(Box::from_raw(new));
+                                    }
+                                });
 
-                                    // This read must be safe.
-                                    let read = black_box(*ptr + 1);
-                                    black_box(read);
-                                })
-                            }
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                for thread in threads {
-                    thread.join().unwrap();
+                                // This read must be safe.
+                                let read = black_box(*ptr + 1);
+                                black_box(read);
+                            })
+                        }
+                    });
                 }
-                drop(Box::from_raw(head.load(Ordering::Acquire)));
             });
+            drop(Box::from_raw(head.load(Ordering::Acquire)));
         }
     }
 }
