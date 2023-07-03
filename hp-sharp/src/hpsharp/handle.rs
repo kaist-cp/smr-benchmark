@@ -14,6 +14,7 @@ pub struct Handle {
     pub(crate) hazards: *const ThreadRecord,
     /// Available slots of hazard array
     available_indices: Vec<usize>,
+    count: usize,
 }
 
 impl Handle {
@@ -25,6 +26,7 @@ impl Handle {
             crcu_handle,
             hazards: thread,
             available_indices,
+            count: 0,
         }
     }
 }
@@ -38,7 +40,10 @@ impl Handle {
     #[inline]
     pub(crate) unsafe fn retire_inner(&mut self, deferred: Vec<Deferred>) {
         self.domain().deferred.append(deferred.into_iter());
-        self.do_reclamation();
+        self.count = self.count + 1;
+        if self.count % 2 == 0 {
+            self.do_reclamation();
+        }
     }
 
     pub(crate) fn do_reclamation(&mut self) {
