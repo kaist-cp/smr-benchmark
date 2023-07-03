@@ -5,8 +5,8 @@ pub use hpsharp::*;
 
 use std::cell::RefCell;
 
-pub const DOMAIN: Global = Global::new();
+pub static GLOBAL: Global = Global::new();
 
 thread_local! {
-    pub static THREAD: RefCell<Box<Handle>> = RefCell::new(Box::new(Handle::new(&DOMAIN)));
+    pub static HANDLE: RefCell<Box<Handle>> = RefCell::new(Box::new(Handle::new(&GLOBAL)));
 }

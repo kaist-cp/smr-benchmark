@@ -246,7 +246,7 @@ pub struct Owned<T> {
 unsafe impl<T> Sync for Owned<T> {}
 unsafe impl<T> Send for Owned<T> {}
 
-impl<T: 'static> Deref for Owned<T> {
+impl<T> Deref for Owned<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -254,13 +254,13 @@ impl<T: 'static> Deref for Owned<T> {
     }
 }
 
-impl<T: 'static> DerefMut for Owned<T> {
+impl<T> DerefMut for Owned<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { &mut *decompose_data::<T>(self.inner).0 }
     }
 }
 
-impl<T: 'static> Owned<T> {
+impl<T> Owned<T> {
     /// Allocates `init` on the heap and returns a new owned pointer pointing to it.
     pub fn new(init: T) -> Self {
         Self {
@@ -296,6 +296,12 @@ impl<T: 'static> Owned<T> {
         };
         forget(self);
         result
+    }
+
+    /// Converts the owned pointer into a [`Shared`].
+    #[inline]
+    pub fn into_shared<'r>(self) -> Shared<'r, T> {
+        unsafe { Shared::from_usize(self.into_usize()) }
     }
 }
 
@@ -497,7 +503,7 @@ pub trait Protector {
         step_forward: F2,
     ) where
         F1: for<'r> Fn(&'r mut EpochGuard) -> Self::Target<'r>,
-        F2: for<'r> Fn(&mut Self::Target<'r>, &'r mut EpochGuard) -> ReadStatus,
+        F2: for<'r> Fn(&mut Self::Target<'r>, &'r mut EpochGuard) -> TraverseStatus,
         Self: Sized,
     {
         const ITER_BETWEEN_CHECKPOINTS: usize = 512;
@@ -536,28 +542,27 @@ pub trait Protector {
                     // synchronized again with the same value.
                     let step_result = step_forward(transmute(&mut result), &mut guard);
 
-                    let finished = step_result == ReadStatus::Finished;
+                    let finished = step_result == TraverseStatus::Finished;
                     // TODO(@jeonghyeon): Apply an adaptive checkpointing.
                     let should_checkpoint =
-                        step_result == ReadStatus::Continue && iter % ITER_BETWEEN_CHECKPOINTS == 0;
+                        step_result == TraverseStatus::Continue && iter % ITER_BETWEEN_CHECKPOINTS == 0;
 
                     if finished || should_checkpoint {
-                        if iter % ITER_BETWEEN_CHECKPOINTS == 0 {
-                            // Select an available protector to protect a backup.
-                            let (curr_idx, next_idx) = {
-                                let backup_idx = backup_idx.load(Ordering::Relaxed);
-                                (backup_idx % 2, (backup_idx + 1) % 2)
-                            };
+                        // Select an available protector to protect a backup.
+                        let (curr_idx, next_idx) = {
+                            let backup_idx = backup_idx.load(Ordering::Relaxed);
+                            (backup_idx % 2, (backup_idx + 1) % 2)
+                        };
 
-                            // Store pointers in hazard slots and issue a light fence.
-                            unsafe { defs[next_idx].protect_unchecked(&result) };
-                            membarrier::light_membarrier();
+                        // Store pointers in hazard slots and issue a light fence.
+                        unsafe { defs[next_idx].protect_unchecked(&result) };
+                        membarrier::light_membarrier();
 
-                            // Success! We are not ejected so the protection is valid!
-                            // Finalize backup process by storing a new backup index to `backup_idx`
-                            backup_idx.store(next_idx, Ordering::Relaxed);
-                            defs[curr_idx].release();
-                        }
+                        // Success! We are not ejected so the protection is valid!
+                        // Finalize backup process by storing a new backup index to `backup_idx`
+                        backup_idx.store(next_idx, Ordering::Relaxed);
+                        compiler_fence(Ordering::SeqCst);
+                        defs[curr_idx].release();
                     }
 
                     // The task is finished! Break the loop and return the result.
@@ -687,7 +692,7 @@ impl_protector_for_array! {
 
 /// A result of a single step of an iterative critical section.
 #[derive(PartialEq, Eq)]
-pub enum ReadStatus {
+pub enum TraverseStatus {
     /// The entire task is finished.
     Finished,
     /// We need to take one or more steps.
