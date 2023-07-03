@@ -13,7 +13,7 @@ use crate::{
 };
 
 /// A result of unsuccessful `compare_exchange`.
-pub struct CompareExchangeError<'g, T: 'g, P: Pointer> {
+pub struct CompareExchangeError<'g, T: ?Sized, P: Pointer> {
     /// The `new` pointer which was given as a parameter of `compare_exchange`.
     pub new: P,
     /// The actual pointer value inside the atomic pointer.
@@ -130,7 +130,7 @@ impl<T> Atomic<T> {
 /// Also it is worth noting that [`Shield`] can create a [`Shared`] which has a lifetime parameter
 /// of the original pointer.
 #[derive(Debug)]
-pub struct Shared<'r, T: 'r> {
+pub struct Shared<'r, T: ?Sized> {
     inner: usize,
     _marker: PhantomData<(&'r (), *const T)>,
 }
@@ -238,7 +238,7 @@ impl<'r, T> Shared<'r, T> {
 /// An owned heap-allocated object.
 ///
 /// This type is very similar to `Box<T>`.
-pub struct Owned<T: 'static> {
+pub struct Owned<T> {
     inner: usize,
     _marker: PhantomData<*const T>,
 }
@@ -306,7 +306,7 @@ impl<T> Drop for Owned<T> {
 }
 
 /// A pointer to an shared object, which is protected by a hazard pointer.
-pub struct Shield<T: 'static> {
+pub struct Shield<T> {
     hazptr: HazardPointer,
     inner: usize,
     _marker: PhantomData<T>,
@@ -454,7 +454,7 @@ pub trait Protector {
     /// In a section body, only *rollback-safe* operations are allowed. For example, non-atomic
     /// writes on a global variable and system-calls(File I/O and etc.) are dangerous, as they
     /// may cause an unexpected inconsistency on the whole system after a crash.
-    unsafe fn pin<F>(&mut self, handle: &mut Handle, body: F)
+    unsafe fn traverse<F>(&mut self, handle: &mut Handle, body: F)
     where
         F: for<'r> Fn(&'r mut EpochGuard) -> Self::Target<'r>,
     {
@@ -477,9 +477,9 @@ pub trait Protector {
     /// Starts a crashable critical section where we cannot perform operations with side-effects,
     /// such as system calls, non-atomic write on a global variable, etc.
     ///
-    /// This is similar to `pin`, as it manages CRCU critical section. However, this `pin_loop`
-    /// prevents a starvation in crash-intensive workload by saving intermediate results on a
-    /// backup [`Protector`].
+    /// This is similar to `traverse`, as it manages CRCU critical section. However, this
+    /// `traverse_loop` prevents a starvation in crash-intensive workload by saving intermediate
+    /// results on a backup [`Protector`].
     ///
     /// After finishing the section, it protects the final `Target` pointers, so that they can be
     /// dereferenced outside of the phase.
@@ -489,7 +489,7 @@ pub trait Protector {
     /// In a section body, only *rollback-safe* operations are allowed. For example, non-atomic
     /// writes on a global variable and system-calls(File I/O and etc.) are dangerous, as they
     /// may cause an unexpected inconsistency on the whole system after a crash.
-    unsafe fn pin_loop<F1, F2>(
+    unsafe fn traverse_loop<F1, F2>(
         &mut self,
         backup: &mut Self,
         handle: &mut Handle,
@@ -731,6 +731,12 @@ pub fn decompose_data<T>(data: usize) -> (*mut T, usize) {
     (raw, tag)
 }
 
+/// Returns a highest tag bit in a memory representation of `T`.
+#[inline]
+pub fn highest_tag<T>() -> usize {
+    1 << (usize::BITS - low_bits::<T>().leading_zeros() - 1)
+}
+
 #[cfg(test)]
 mod test {
     use std::thread::scope;
@@ -820,7 +826,7 @@ mod test {
                         let mut cursor = Cursor::empty(&mut handle);
                         for _ in 0..COUNT_PER_THREAD {
                             loop {
-                                cursor.pin(&mut handle, |guard| {
+                                cursor.traverse(&mut handle, |guard| {
                                     let mut cursor = SharedCursor {
                                         prev: Shared::null(),
                                         curr: Shared::null(),
