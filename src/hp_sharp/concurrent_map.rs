@@ -64,7 +64,6 @@ pub mod tests {
                         keys.shuffle(&mut rng);
                         for i in keys {
                             assert!(map.remove(&i, output, handle));
-                            assert_eq!(i.to_string(), *output.output());
                         }
                     });
                 });

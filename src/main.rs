@@ -553,9 +553,13 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             _ => panic!("Unsupported data structure for CDRC EBR"),
         },
         MM::HP_SHARP => match config.ds {
-            DS::HList => bench_map_hp_sharp::<hp_sharp_bench::traverse::HList<String, String>>(
+            DS::HList => bench_map_hp_sharp::<hp_sharp_bench::HList<String, String>>(
                 config,
                 PrefillStrategy::Decreasing,
+            ),
+            DS::NMTree => bench_map_hp_sharp::<hp_sharp_bench::NMTreeMap<String, String>>(
+                config,
+                PrefillStrategy::Random,
             ),
             _ => panic!("Unsupported data structure for HP#"),
         },

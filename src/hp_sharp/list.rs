@@ -18,15 +18,15 @@ struct Node<K, V> {
 impl<K, V> Invalidate for Node<K, V> {
     fn invalidate(&self) {
         let guard = unsafe { EpochGuard::unprotected() };
-        let ptr = self.next.load(Ordering::Relaxed, &guard);
+        let ptr = self.next.load(Ordering::Acquire, &guard);
         self.next
-            .store(ptr.with_tag(1 | 2), Ordering::Relaxed, &unsafe {
+            .store(ptr.with_tag(1 | 2), Ordering::Release, &unsafe {
                 CrashGuard::unprotected()
             });
     }
 
     fn is_invalidated(&self, guard: &EpochGuard) -> bool {
-        (self.next.load(Ordering::Relaxed, guard).tag() & 2) != 0
+        (self.next.load(Ordering::Acquire, guard).tag() & 2) != 0
     }
 }
 

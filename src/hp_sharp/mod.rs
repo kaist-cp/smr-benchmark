@@ -1,13 +1,9 @@
 pub mod concurrent_map;
 
 pub mod list;
+pub mod natarajan_mittal_tree;
 
 pub use self::concurrent_map::ConcurrentMap;
 
-pub mod traverse {
-    pub use super::list::traverse::*;
-}
-
-pub mod traverse_loop {
-    pub use super::list::traverse_loop::*;
-}
+pub use list::traverse_loop::HList;
+pub use natarajan_mittal_tree::NMTreeMap;
