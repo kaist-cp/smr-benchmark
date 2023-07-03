@@ -82,4 +82,8 @@ impl Bag {
     pub fn into_iter(self) -> IntoIter<Deferred, MAX_OBJECTS> {
         self.defs.into_iter()
     }
+
+    pub fn len(&self) -> usize {
+        self.defs.len()
+    }
 }

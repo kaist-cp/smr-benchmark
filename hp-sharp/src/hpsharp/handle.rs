@@ -4,8 +4,8 @@ use core::{mem, ptr};
 
 use super::global::Global;
 use super::hazard::ThreadRecord;
-use crate::crcu;
 use crate::sync::Deferred;
+use crate::{crcu, GLOBAL_GARBAGE_COUNT};
 
 pub struct Handle {
     pub(crate) domain: *const Global,
@@ -56,10 +56,6 @@ impl Handle {
 
     #[inline]
     fn flush_retireds(&mut self) {
-        self.domain()
-            .num_garbages
-            .fetch_add(self.deferred.len(), Ordering::AcqRel);
-
         let deferred = mem::take(&mut self.deferred).into_iter();
         self.domain().deferred.append(deferred);
     }
@@ -85,9 +81,7 @@ impl Handle {
                 }
             })
             .collect();
-        self.domain()
-            .num_garbages
-            .fetch_sub(deferred_len - not_freed.len(), Ordering::AcqRel);
+        GLOBAL_GARBAGE_COUNT.fetch_sub(deferred_len - not_freed.len(), Ordering::AcqRel);
         self.domain().deferred.append(not_freed.into_iter());
     }
 

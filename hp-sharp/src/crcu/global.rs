@@ -4,7 +4,10 @@ use atomic::fence;
 use crossbeam_utils::CachePadded;
 use nix::{errno::Errno, sys::pthread::pthread_self};
 
-use crate::sync::{Bag, Pile};
+use crate::{
+    sync::{Bag, Pile},
+    GLOBAL_GARBAGE_COUNT,
+};
 
 use super::{
     epoch::{AtomicEpoch, Epoch},
@@ -90,6 +93,7 @@ impl Global {
     }
 
     pub(crate) fn push_bag(&self, bag: &mut Bag) {
+        GLOBAL_GARBAGE_COUNT.fetch_add(bag.len(), Ordering::AcqRel);
         let bag = mem::take(bag);
 
         fence(Ordering::SeqCst);

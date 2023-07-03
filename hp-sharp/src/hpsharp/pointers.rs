@@ -544,8 +544,8 @@ pub trait Protector {
 
                     let finished = step_result == TraverseStatus::Finished;
                     // TODO(@jeonghyeon): Apply an adaptive checkpointing.
-                    let should_checkpoint =
-                        step_result == TraverseStatus::Continue && iter % ITER_BETWEEN_CHECKPOINTS == 0;
+                    let should_checkpoint = step_result == TraverseStatus::Continue
+                        && iter % ITER_BETWEEN_CHECKPOINTS == 0;
 
                     if finished || should_checkpoint {
                         // Select an available protector to protect a backup.
