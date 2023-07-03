@@ -9,7 +9,7 @@ use membarrier::light_membarrier;
 
 use crate::{
     hpsharp::{guard::EpochGuard, guard::Invalidate, handle::Handle, hazard::HazardPointer},
-    Retire,
+    Retire, Guard,
 };
 
 /// A result of unsuccessful `compare_exchange`.
@@ -61,9 +61,9 @@ impl<T> Atomic<T> {
         self.link.store(ptr.inner, order);
     }
 
-    /// Loads a [`Shared`] from the atomic pointer. This can be called only in a read phase.
+    /// Loads a [`Shared`] from the atomic pointer.
     #[inline]
-    pub fn load<'r>(&self, order: Ordering, _: &'r EpochGuard) -> Shared<'r, T> {
+    pub fn load<'r, G: Guard>(&self, order: Ordering, _: &G) -> Shared<'r, T> {
         let ptr = self.link.load(order);
         Shared::new(ptr)
     }
@@ -188,6 +188,17 @@ impl<'r, T> Shared<'r, T> {
         unsafe { decompose_data::<T>(self.inner).0.as_ref() }
     }
 
+    /// Converts the pointer to a mutable reference.
+    ///
+    /// Returns `None` if the pointer is null, or else a reference to the object wrapped in `Some`.
+    ///
+    /// It is possible to directly dereference a [`Shared`] if and only if the current context is
+    /// in a read phase which can be started by `read` and `read_loop` method.
+    #[inline]
+    pub fn as_mut(&mut self, _: &EpochGuard) -> Option<&'r mut T> {
+        unsafe { decompose_data::<T>(self.inner).0.as_mut() }
+    }
+
     /// Converts the pointer to a reference, without guaranteeing any safety.
     ///
     /// # Safety
@@ -196,6 +207,16 @@ impl<'r, T> Shared<'r, T> {
     #[inline]
     pub unsafe fn deref_unchecked(&self) -> &T {
         &*decompose_data::<T>(self.inner).0
+    }
+
+    /// Converts the pointer to a reference, without guaranteeing any safety.
+    ///
+    /// # Safety
+    ///
+    /// The `self` must be a valid memory location.
+    #[inline]
+    pub unsafe fn deref_mut_unchecked(&mut self) -> &mut T {
+        &mut *decompose_data::<T>(self.inner).0
     }
 
     /// Returns the tag stored within the pointer.
@@ -336,6 +357,16 @@ impl<T> Shield<T> {
     #[inline]
     pub fn as_ref<'s>(&'s self) -> Option<&'s T> {
         unsafe { decompose_data::<T>(self.inner).0.as_ref() }
+    }
+
+    #[inline]
+    pub unsafe fn deref_unchecked<'s>(&'s self) -> &'s T {
+        &*decompose_data::<T>(self.inner).0
+    }
+
+    #[inline]
+    pub unsafe fn deref_mut_unchecked<'s>(&'s mut self) -> &'s mut T {
+        &mut *decompose_data::<T>(self.inner).0
     }
 
     /// Converts the pointer to a mutable reference.

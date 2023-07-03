@@ -37,8 +37,8 @@ pub(crate) struct Local {
 }
 
 impl Local {
-    const COUNTS_BETWEEN_TRY_ADVANCE: usize = 64;
-    const COUNTS_BETWEEN_FORCE_ADVANCE: usize = 4 * 64;
+    const COUNTS_BETWEEN_TRY_ADVANCE: usize = 128;
+    const COUNTS_BETWEEN_FORCE_ADVANCE: usize = Self::COUNTS_BETWEEN_TRY_ADVANCE * 4;
 
     #[must_use]
     fn new(using: bool, global: &Global) -> Self {

@@ -142,9 +142,7 @@ impl Retire for Handle {
         ));
 
         if let Some(collected) = collected {
-            for def in collected.into_iter() {
-                self.retire_inner(def);
-            }
+            self.retire_inner(collected);
         }
     }
 }
@@ -161,9 +159,14 @@ impl Retire for CrashGuard {
         ));
 
         if let Some(collected) = collected {
-            for def in collected.into_iter() {
-                (*self.handle.cast_mut()).retire_inner(def);
-            }
+            (*self.handle.cast_mut()).retire_inner(collected);
         }
     }
 }
+
+/// A marker for all RAII guard types.
+pub trait Guard {}
+
+impl Guard for Handle {}
+impl Guard for EpochGuard {}
+impl Guard for CrashGuard {}

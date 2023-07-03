@@ -1,6 +1,7 @@
 use core::cell::RefCell;
 use core::sync::atomic::{AtomicPtr, Ordering};
-use core::{mem, ptr};
+use core::ptr;
+use std::iter::once;
 
 use super::global::Global;
 use super::hazard::ThreadRecord;
@@ -13,8 +14,6 @@ pub struct Handle {
     pub(crate) hazards: *const ThreadRecord,
     /// Available slots of hazard array
     available_indices: Vec<usize>,
-    deferred: Vec<Deferred>,
-    count: usize,
 }
 
 impl Handle {
@@ -26,38 +25,20 @@ impl Handle {
             crcu_handle,
             hazards: thread,
             available_indices,
-            deferred: Vec::new(),
-            count: 0,
         }
     }
 }
 
 impl Handle {
-    const COUNTS_BETWEEN_FLUSH: usize = 64;
-    const COUNTS_BETWEEN_COLLECT: usize = 128;
-
     #[inline]
     fn domain(&self) -> &Global {
         unsafe { &*self.domain }
     }
 
     #[inline]
-    pub(crate) unsafe fn retire_inner(&mut self, def: Deferred) {
-        self.deferred.push(def);
-        let count = self.count.wrapping_add(1);
-        self.count = count;
-        if count % Self::COUNTS_BETWEEN_FLUSH == 0 {
-            self.flush_retireds();
-        }
-        if count % Self::COUNTS_BETWEEN_COLLECT == 0 {
-            self.do_reclamation();
-        }
-    }
-
-    #[inline]
-    fn flush_retireds(&mut self) {
-        let deferred = mem::take(&mut self.deferred).into_iter();
-        self.domain().deferred.append(deferred);
+    pub(crate) unsafe fn retire_inner(&mut self, deferred: Vec<Deferred>) {
+        self.domain().deferred.append(deferred.into_iter());
+        self.do_reclamation();
     }
 
     pub(crate) fn do_reclamation(&mut self) {
@@ -109,7 +90,7 @@ impl Handle {
         unsafe { &*self.hazards }
             .hazptrs
             .store(Box::into_raw(new_array), Ordering::Release);
-        unsafe { self.retire_inner(Deferred::new(array_ptr as _, free::<Vec<AtomicPtr<u8>>>)) };
+        self.domain().deferred.append(once(Deferred::new(array_ptr as _, free::<Vec<AtomicPtr<u8>>>)));
         self.available_indices.extend(size..new_size)
     }
 

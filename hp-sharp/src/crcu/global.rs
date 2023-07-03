@@ -194,7 +194,7 @@ impl Global {
             let local_epoch = local.epoch.load(Ordering::Relaxed);
 
             // If the participant was pinned in a different epoch, we eject its epoch.
-            if local_epoch.is_pinned() && local_epoch.unpinned() != global_epoch {
+            if local_epoch.is_pinned() && local_epoch.unpinned().value() < global_epoch.value() {
                 match unsafe { recovery::send_signal(local.owner.load(Ordering::Relaxed)) } {
                     // `ESRCH` indicates that the given pthread is already exited.
                     Ok(_) | Err(Errno::ESRCH) => {}
