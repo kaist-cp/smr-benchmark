@@ -186,11 +186,6 @@ struct SeekRecord<K, V> {
     leaf: Shield<Node<K, V>>,
     /// The direction of leaf from parent.
     leaf_dir: Direction,
-    /// The temporary protector of the next node of `leaf`.
-    curr: Shield<Node<K, V>>,
-    /// The direction of curr from leaf.
-    curr_dir: Direction,
-    prev_tag: bool,
 }
 
 // TODO(@jeonghyeon): automate
@@ -207,11 +202,6 @@ struct SharedSeekRecord<'r, K, V> {
     leaf: Shared<'r, Node<K, V>>,
     /// The direction of leaf from parent.
     leaf_dir: Direction,
-    /// The temporary protector of the next node of `leaf`.
-    curr: Shared<'r, Node<K, V>>,
-    /// The direction of curr from leaf.
-    curr_dir: Direction,
-    prev_tag: bool,
 }
 
 // TODO(@jeonghyeon): automate
@@ -236,9 +226,6 @@ impl<K, V> Protector for SeekRecord<K, V> {
             parent: Shield::null(handle),
             leaf: Shield::null(handle),
             leaf_dir: Direction::L,
-            curr: Shield::null(handle),
-            curr_dir: Direction::L,
-            prev_tag: false,
         }
     }
 
@@ -250,9 +237,6 @@ impl<K, V> Protector for SeekRecord<K, V> {
         self.parent.protect_unchecked(&read.parent);
         self.leaf.protect_unchecked(&read.leaf);
         self.leaf_dir = read.leaf_dir;
-        self.curr.protect_unchecked(&read.curr);
-        self.curr_dir = read.curr_dir;
-        self.prev_tag = read.prev_tag;
     }
 
     #[inline]
@@ -264,9 +248,6 @@ impl<K, V> Protector for SeekRecord<K, V> {
             parent: self.parent.as_read(guard)?,
             leaf: self.leaf.as_read(guard)?,
             leaf_dir: self.leaf_dir,
-            curr: self.curr.as_read(guard)?,
-            curr_dir: self.curr_dir,
-            prev_tag: self.prev_tag,
         })
     }
 
@@ -276,7 +257,6 @@ impl<K, V> Protector for SeekRecord<K, V> {
         self.successor.release();
         self.parent.release();
         self.leaf.release();
-        self.curr.release();
     }
 }
 
@@ -372,49 +352,53 @@ where
             result.traverse(handle, |guard| {
                 let s = self.r.left.load(Ordering::Relaxed, guard);
                 let s_node = s.deref_unchecked();
-                let leaf = s_node
+                let mut leaf = s_node
                     .left
                     .load(Ordering::Relaxed, guard)
                     .with_tag(Marks::empty().bits());
                 let leaf_node = leaf.deref_unchecked();
 
-                let mut record = SharedSeekRecord {
-                    ancestor: Shared::from_usize(&self.r as *const _ as usize),
-                    successor: s,
-                    successor_dir: Direction::L,
-                    parent: s,
-                    leaf,
-                    leaf_dir: Direction::L,
-                    curr: leaf_node.left.load(Ordering::Relaxed, guard),
-                    curr_dir: Direction::L,
-                    prev_tag: Marks::from_bits_truncate(leaf.tag()).tag(),
-                };
+                let mut ancestor = Shared::from_usize(&self.r as *const _ as usize);
+                let mut successor = s;
+                let mut successor_dir = Direction::L;
+                let mut parent = s;
+                let mut leaf_dir = Direction::L;
+                let mut curr = leaf_node.left.load(Ordering::Relaxed, guard);
+                let mut curr_dir = Direction::L;
+                let mut prev_tag = Marks::from_bits_truncate(leaf.tag()).tag();
 
-                while let Some(curr_node) = record.curr.as_ref(guard) {
-                    if !record.prev_tag {
+                while let Some(curr_node) = curr.as_ref(guard) {
+                    if !prev_tag {
                         // untagged edge: advance ancestor and successor pointers
-                        record.ancestor = record.parent;
-                        record.successor = record.leaf;
-                        record.successor_dir = record.leaf_dir;
+                        ancestor = parent;
+                        successor = leaf;
+                        successor_dir = leaf_dir;
                     }
 
                     // advance parent and leaf pointers
-                    record.parent = record.leaf;
-                    record.leaf = record.curr.with_tag(Marks::empty().bits());
-                    record.leaf_dir = record.curr_dir;
+                    parent = leaf;
+                    leaf = curr.with_tag(Marks::empty().bits());
+                    leaf_dir = curr_dir;
 
                     // update other variables
-                    record.prev_tag = Marks::from_bits_truncate(record.curr.tag()).tag();
+                    prev_tag = Marks::from_bits_truncate(curr.tag()).tag();
                     if curr_node.key.cmp(key) == cmp::Ordering::Greater {
-                        record.curr_dir = Direction::L;
-                        record.curr = curr_node.left.load(Ordering::Acquire, guard);
+                        curr_dir = Direction::L;
+                        curr = curr_node.left.load(Ordering::Acquire, guard);
                     } else {
-                        record.curr_dir = Direction::R;
-                        record.curr = curr_node.right.load(Ordering::Acquire, guard);
+                        curr_dir = Direction::R;
+                        curr = curr_node.right.load(Ordering::Acquire, guard);
                     }
                 }
 
-                record
+                SharedSeekRecord {
+                    ancestor,
+                    successor,
+                    successor_dir,
+                    parent,
+                    leaf,
+                    leaf_dir,
+                }
             });
         }
     }
@@ -426,32 +410,28 @@ where
             result.traverse(handle, |guard| {
                 let s = self.r.left.load(Ordering::Relaxed, guard);
                 let s_node = s.deref_unchecked();
-                let leaf = s_node.left.load(Ordering::Acquire, guard).with_tag(0);
+                let mut leaf = s_node.left.load(Ordering::Acquire, guard).with_tag(0);
                 let leaf_node = leaf.deref_unchecked();
+                let mut curr = leaf_node.left.load(Ordering::Acquire, guard).with_tag(0);
 
-                let mut record = SharedSeekRecord {
+                while let Some(curr_node) = curr.as_ref(guard) {
+                    leaf = curr;
+                    if curr_node.key.cmp(key) == cmp::Ordering::Greater {
+                        curr = curr_node.left.load(Ordering::Acquire, guard);
+                    } else {
+                        curr = curr_node.right.load(Ordering::Acquire, guard);
+                    }
+                    curr = curr.with_tag(0);
+                }
+
+                SharedSeekRecord {
                     ancestor: Shared::null(),
                     successor: Shared::null(),
                     successor_dir: Direction::L,
-                    parent: s,
+                    parent: Shared::null(),
                     leaf,
                     leaf_dir: Direction::L,
-                    curr: leaf_node.left.load(Ordering::Acquire, guard).with_tag(0),
-                    curr_dir: Direction::L,
-                    prev_tag: false,
-                };
-
-                while let Some(curr_node) = record.curr.as_ref(guard) {
-                    record.leaf = record.curr;
-                    if curr_node.key.cmp(key) == cmp::Ordering::Greater {
-                        record.curr = curr_node.left.load(Ordering::Acquire, guard);
-                    } else {
-                        record.curr = curr_node.right.load(Ordering::Acquire, guard);
-                    }
-                    record.curr = record.curr.with_tag(0);
                 }
-
-                record
             });
         }
     }
