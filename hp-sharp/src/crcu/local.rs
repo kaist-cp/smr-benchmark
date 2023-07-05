@@ -103,13 +103,24 @@ impl Local {
         self.epoch.store(Epoch::starting(), Ordering::Release);
     }
 
+    /// `#[inline(never)]` is used to reduce the chances for misoptimizations.
+    /// 
+    /// In Rust, there is no concept of functions that return multiple times, like `setjmp`, so
+    /// it's easy to imagine that Rust might generate incorrect code around such a function.
+    /// 
+    /// Rust uses LLVM during compilation, which needs to be made aware of functions that return
+    /// multiple times by using the `returns_twice` attribute; but Rust has no way to propagate
+    /// that attribute to LLVM.
+    /// 
+    /// Reference:
+    /// * https://github.com/rust-lang/rfcs/issues/2625#issuecomment-460849462
+    /// * https://github.com/jeff-davis/setjmp.rs#problems
     #[cfg(not(sanitize = "address"))]
-    #[inline(always)]
+    #[inline(never)]
     unsafe fn pin<F>(&mut self, mut body: F)
     where
         F: FnMut(&mut EpochGuard),
     {
-        compiler_fence(Ordering::SeqCst);
         {
             // Makes a checkpoint and create a `RecoveryGuard`.
             let guard = recovery::guard!();
@@ -133,16 +144,14 @@ impl Local {
         // We are now out of the critical(crashable) section.
         // Unpin the local epoch to help reclaimers to freely collect bags.
         self.unpin_inner();
-        compiler_fence(Ordering::SeqCst);
     }
 
     #[cfg(sanitize = "address")]
-    #[inline(always)]
+    #[inline(never)]
     unsafe fn pin<F>(&mut self, mut body: F)
     where
         F: FnMut(&mut EpochGuard),
     {
-        compiler_fence(Ordering::SeqCst);
         // A dummy loop to bypass a false stack overflow from AdressSanitizer.
         //
         // # HACK: A dummy loop and `blackbox`
@@ -187,7 +196,6 @@ impl Local {
                 break;
             }
         }
-        compiler_fence(Ordering::SeqCst);
     }
 
     #[inline]
