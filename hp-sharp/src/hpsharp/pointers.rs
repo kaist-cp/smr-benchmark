@@ -182,7 +182,7 @@ impl<'r, T> Shared<'r, T> {
     /// Returns `None` if the pointer is null, or else a reference to the object wrapped in `Some`.
     ///
     /// It is possible to directly dereference a [`Shared`] if and only if the current context is
-    /// in a read phase which can be started by `read` and `read_loop` method.
+    /// in a critical section which can be started by `traverse` and `traverse_loop` method.
     #[inline]
     pub fn as_ref(&self, _: &EpochGuard) -> Option<&'r T> {
         unsafe { decompose_data::<T>(self.inner).0.as_ref() }
@@ -193,7 +193,7 @@ impl<'r, T> Shared<'r, T> {
     /// Returns `None` if the pointer is null, or else a reference to the object wrapped in `Some`.
     ///
     /// It is possible to directly dereference a [`Shared`] if and only if the current context is
-    /// in a read phase which can be started by `read` and `read_loop` method.
+    /// in a critical section which can be started by `traverse` and `traverse_loop` method.
     #[inline]
     pub fn as_mut(&mut self, _: &EpochGuard) -> Option<&'r mut T> {
         unsafe { decompose_data::<T>(self.inner).0.as_mut() }
