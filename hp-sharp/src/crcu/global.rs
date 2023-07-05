@@ -144,9 +144,14 @@ impl Global {
         for local in self.locals.iter_using() {
             let local_epoch = local.epoch.load(Ordering::Relaxed);
 
+            // Someone has advanced the global epoch already.
+            if local_epoch.value() > global_epoch.value() {
+                return Ok(global_epoch.successor());
+            }
+
             // If the participant was pinned in a different epoch, we cannot advance the
             // global epoch just yet.
-            if local_epoch.is_pinned() && local_epoch.unpinned() != global_epoch {
+            if local_epoch.is_pinned() && local_epoch.unpinned().value() < global_epoch.value() {
                 return Err(global_epoch);
             }
         }
@@ -192,6 +197,11 @@ impl Global {
 
         for local in self.locals.iter_using() {
             let local_epoch = local.epoch.load(Ordering::Relaxed);
+
+            // Someone has advanced the global epoch already.
+            if local_epoch.value() > global_epoch.value() {
+                return global_epoch.successor();
+            }
 
             // If the participant was pinned in a different epoch, we eject its epoch.
             if local_epoch.is_pinned() && local_epoch.unpinned().value() < global_epoch.value() {
