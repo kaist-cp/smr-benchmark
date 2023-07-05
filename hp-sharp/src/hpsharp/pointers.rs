@@ -491,6 +491,7 @@ pub trait Protector {
     /// In a section body, only *rollback-safe* operations are allowed. For example, non-atomic
     /// writes on a global variable and system-calls(File I/O and etc.) are dangerous, as they
     /// may cause an unexpected inconsistency on the whole system after a crash.
+    #[inline(always)]
     unsafe fn traverse<F>(&mut self, handle: &mut Handle, body: F)
     where
         F: for<'r> Fn(&'r mut EpochGuard) -> Self::Target<'r>,
@@ -526,6 +527,7 @@ pub trait Protector {
     /// In a section body, only *rollback-safe* operations are allowed. For example, non-atomic
     /// writes on a global variable and system-calls(File I/O and etc.) are dangerous, as they
     /// may cause an unexpected inconsistency on the whole system after a crash.
+    #[inline(always)]
     unsafe fn traverse_loop<F1, F2>(
         &mut self,
         backup: &mut Self,

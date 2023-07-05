@@ -1,6 +1,5 @@
 use std::{
     cell::{Cell, UnsafeCell},
-    hint::black_box,
     marker::PhantomData,
     ptr::null_mut,
     sync::atomic::{compiler_fence, fence, AtomicBool, AtomicPtr, Ordering},
@@ -104,10 +103,46 @@ impl Local {
         self.epoch.store(Epoch::starting(), Ordering::Release);
     }
 
+    #[cfg(not(sanitize = "address"))]
+    #[inline(always)]
     unsafe fn pin<F>(&mut self, mut body: F)
     where
         F: FnMut(&mut EpochGuard),
     {
+        compiler_fence(Ordering::SeqCst);
+        {
+            // Makes a checkpoint and create a `RecoveryGuard`.
+            let guard = recovery::guard!();
+
+            // Repin the current epoch.
+            // Acquiring an epoch must be proceeded after starting the crashable section,
+            // not before. This is because if we acquire it before allowing a crash,
+            // it is possible to be ejected before allowing. Although an ejection is occured,
+            // the critical section would continues, as we would not `longjmp` from
+            // the signal handler.
+            self.repin();
+            compiler_fence(Ordering::SeqCst);
+
+            // Execute the body of this section.
+            let mut guard = EpochGuard::new(self, guard);
+            body(&mut guard);
+
+            // Finaly, close this critical section by dropping `guard`.
+        }
+
+        // We are now out of the critical(crashable) section.
+        // Unpin the local epoch to help reclaimers to freely collect bags.
+        self.unpin_inner();
+        compiler_fence(Ordering::SeqCst);
+    }
+
+    #[cfg(sanitize = "address")]
+    #[inline(always)]
+    unsafe fn pin<F>(&mut self, mut body: F)
+    where
+        F: FnMut(&mut EpochGuard),
+    {
+        compiler_fence(Ordering::SeqCst);
         // A dummy loop to bypass a false stack overflow from AdressSanitizer.
         //
         // # HACK: A dummy loop and `blackbox`
@@ -148,10 +183,11 @@ impl Local {
 
             // # HACK: A dummy loop and `blackbox`
             // (See comments on the loop for more information.)
-            if black_box(true) {
+            if core::hint::black_box(true) {
                 break;
             }
         }
+        compiler_fence(Ordering::SeqCst);
     }
 
     #[inline]

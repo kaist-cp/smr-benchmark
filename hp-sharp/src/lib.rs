@@ -1,3 +1,5 @@
+// To use  `#[cfg(sanitize = "address")]`
+#![feature(cfg_sanitize)]
 pub mod crcu;
 pub mod hpsharp;
 mod sync;

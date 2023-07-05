@@ -33,11 +33,13 @@ impl EpochGuard {
     /// [`String`] or [`Box`] is dangerous to return as it will be leaked on a crash! On the other
     /// hand, [`Copy`] types is likely to be safe as they are totally defined by their bit-wise
     /// representations, and have no possibilities to be leaked after an unexpected crash.
+    #[inline(always)]
     pub fn mask<F, R>(&mut self, body: F) -> R
     where
         F: Fn(&mut CrashGuard) -> R,
         R: Copy,
     {
+        compiler_fence(Ordering::SeqCst);
         let (result, guard) = self.inner.atomic(|guard| {
             let mut guard = CrashGuard::new(unsafe { &mut *self.local }, guard);
             let result = body(&mut guard);

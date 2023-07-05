@@ -3,9 +3,9 @@ use std::mem::forget;
 use arrayvec::{ArrayVec, IntoIter};
 
 /// Maximum number of objects a bag can contain.
-#[cfg(not(feature = "sanitize"))]
+#[cfg(not(sanitize = "address"))]
 const MAX_OBJECTS: usize = 64;
-#[cfg(feature = "sanitize")]
+#[cfg(sanitize = "address")]
 const MAX_OBJECTS: usize = 4;
 
 /// A deferred task consisted of data and a callable function.
