@@ -36,7 +36,11 @@ pub(crate) struct Local {
 }
 
 impl Local {
+    #[cfg(not(sanitize = "address"))]
     const COUNTS_BETWEEN_TRY_ADVANCE: usize = 64;
+    #[cfg(sanitize = "address")]
+    const COUNTS_BETWEEN_TRY_ADVANCE: usize = 4;
+
     const COUNTS_BETWEEN_FORCE_ADVANCE: usize = Self::COUNTS_BETWEEN_TRY_ADVANCE * 4;
 
     #[must_use]
