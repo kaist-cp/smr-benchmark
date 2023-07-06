@@ -137,7 +137,7 @@ impl ThreadRecords {
     }
 
     fn acquire_new(&self) -> (&ThreadRecord, Vec<usize>) {
-        const HAZARD_ARRAY_INIT_SIZE: usize = 64;
+        const HAZARD_ARRAY_INIT_SIZE: usize = 16;
         let array = Vec::from(unsafe { zeroed::<[AtomicPtr<u8>; HAZARD_ARRAY_INIT_SIZE]>() });
         let new = Box::leak(Box::new(ThreadRecord {
             hazptrs: AtomicPtr::new(Box::into_raw(Box::new(array))),
