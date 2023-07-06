@@ -1,6 +1,6 @@
 use std::{
     ptr::{null, null_mut, NonNull},
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{fence, AtomicUsize, Ordering},
 };
 
 use crate::{
@@ -57,7 +57,7 @@ impl EpochGuard {
                 let mut def = D::empty(unsafe { &mut *self.handle.cast_mut() });
                 // Store pointers in hazard slots and issue a light fence.
                 unsafe { def.protect_unchecked(&to_deref) };
-                membarrier::light_membarrier();
+                fence(Ordering::SeqCst);
 
                 // Restart if the thread is crashed while protecting.
                 if guard.is_ejected() {

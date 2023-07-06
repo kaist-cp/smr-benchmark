@@ -2,7 +2,7 @@ use std::{
     marker::PhantomData,
     mem::zeroed,
     ptr::null_mut,
-    sync::atomic::{AtomicBool, AtomicPtr, Ordering},
+    sync::atomic::{fence, AtomicBool, AtomicPtr, Ordering},
 };
 
 use super::Handle;
@@ -34,11 +34,13 @@ impl HazardPointer {
     }
 
     /// Protect the given address.
-    pub fn protect_raw<T>(&self, ptr: *mut T) {
-        self.slot().store(ptr as *mut u8, Ordering::Release);
+    #[inline]
+    pub fn protect_raw<T>(&self, ptr: *mut T, order: Ordering) {
+        self.slot().store(ptr as *mut u8, order);
     }
 
     /// Release the protection awarded by this hazard pointer, if any.
+    #[inline]
     pub fn reset_protection(&self) {
         self.slot().store(null_mut(), Ordering::Release);
     }
@@ -47,8 +49,9 @@ impl HazardPointer {
     ///
     /// For a pointer `p`, if "`src` still pointing to `pointer`" implies that `p` is not retired,
     /// then `Ok(())` means that shields set to `p` are validated.
+    #[inline]
     pub fn validate<T>(pointer: *mut T, src: &AtomicPtr<T>) -> Result<(), *mut T> {
-        membarrier::light_membarrier();
+        fence(Ordering::SeqCst);
         let new = src.load(Ordering::Acquire);
         if pointer == new {
             Ok(())
@@ -61,14 +64,16 @@ impl HazardPointer {
     ///
     /// If "`src` still pointing to `pointer`" implies that `pointer` is not retired, then `Ok(())`
     /// means that this shield is validated.
+    #[inline]
     pub fn try_protect<T>(&self, pointer: *mut T, src: &AtomicPtr<T>) -> Result<(), *mut T> {
-        self.protect_raw(pointer);
+        self.protect_raw(pointer, Ordering::Release);
         Self::validate(pointer, src)
     }
 
     /// Get a protected pointer from `src`.
     ///
     /// See `try_protect()`.
+    #[inline]
     pub fn protect<T>(&self, src: &AtomicPtr<T>) -> *mut T {
         let mut pointer = src.load(Ordering::Relaxed);
         while let Err(new) = self.try_protect(pointer, src) {

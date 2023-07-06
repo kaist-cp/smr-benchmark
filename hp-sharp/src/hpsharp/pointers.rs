@@ -2,14 +2,12 @@ use std::{
     marker::PhantomData,
     mem::{self, forget, swap, transmute, zeroed, MaybeUninit},
     ops::{Deref, DerefMut},
-    sync::atomic::{compiler_fence, AtomicUsize, Ordering},
+    sync::atomic::{compiler_fence, fence, AtomicUsize, Ordering},
 };
-
-use membarrier::light_membarrier;
 
 use crate::{
     hpsharp::{guard::EpochGuard, guard::Invalidate, handle::Handle, hazard::HazardPointer},
-    Retire, Guard,
+    Guard, Retire,
 };
 
 /// A result of unsuccessful `compare_exchange`.
@@ -504,7 +502,7 @@ pub trait Protector {
 
             // Store pointers in hazard slots and issue a light fence.
             self.protect_unchecked(&result);
-            light_membarrier();
+            fence(Ordering::SeqCst);
 
             // If we successfully protected pointers without an intermediate crash,
             // it has the same meaning with a well-known HP validation:
@@ -589,7 +587,7 @@ pub trait Protector {
 
                         // Store pointers in hazard slots and issue a light fence.
                         unsafe { defs[next_idx].protect_unchecked(&result) };
-                        membarrier::light_membarrier();
+                        fence(Ordering::SeqCst);
 
                         // Success! We are not ejected so the protection is valid!
                         // Finalize backup process by storing a new backup index to `backup_idx`
@@ -649,7 +647,8 @@ impl<T: Invalidate> Protector for Shield<T> {
     #[inline]
     unsafe fn protect_unchecked(&mut self, read: &Self::Target<'_>) {
         let raw = read.untagged().as_raw();
-        self.hazptr.protect_raw(raw as *const T as *mut T);
+        self.hazptr
+            .protect_raw(raw as *const T as *mut T, Ordering::Relaxed);
         self.inner = raw;
     }
 

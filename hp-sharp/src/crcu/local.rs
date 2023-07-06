@@ -104,14 +104,14 @@ impl Local {
     }
 
     /// `#[inline(never)]` is used to reduce the chances for misoptimizations.
-    /// 
+    ///
     /// In Rust, there is no concept of functions that return multiple times, like `setjmp`, so
     /// it's easy to imagine that Rust might generate incorrect code around such a function.
-    /// 
+    ///
     /// Rust uses LLVM during compilation, which needs to be made aware of functions that return
     /// multiple times by using the `returns_twice` attribute; but Rust has no way to propagate
     /// that attribute to LLVM.
-    /// 
+    ///
     /// Reference:
     /// * https://github.com/rust-lang/rfcs/issues/2625#issuecomment-460849462
     /// * https://github.com/jeff-davis/setjmp.rs#problems

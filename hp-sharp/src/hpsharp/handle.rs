@@ -1,7 +1,7 @@
 use core::cell::RefCell;
-use core::sync::atomic::{AtomicPtr, Ordering};
 use core::ptr;
-use std::iter::once;
+use core::sync::atomic::{fence, AtomicPtr, Ordering};
+use std::mem::take;
 
 use super::global::Global;
 use super::hazard::ThreadRecord;
@@ -14,6 +14,7 @@ pub struct Handle {
     pub(crate) hazards: *const ThreadRecord,
     /// Available slots of hazard array
     available_indices: Vec<usize>,
+    local_deferred: Vec<Deferred>,
 }
 
 impl Handle {
@@ -25,6 +26,7 @@ impl Handle {
             crcu_handle,
             hazards: thread,
             available_indices,
+            local_deferred: Vec::with_capacity(128),
         }
     }
 }
@@ -37,18 +39,18 @@ impl Handle {
 
     #[inline]
     pub(crate) unsafe fn retire_inner(&mut self, mut deferred: Vec<Deferred>) {
-        let mut total = self.domain().deferred.pop_all();
-        total.append(&mut deferred);
-        self.do_reclamation(total);
+        deferred.append(&mut self.local_deferred);
+        let mut not_freed = self.do_reclamation(deferred);
+        self.local_deferred.append(&mut not_freed);
     }
 
-    pub(crate) fn do_reclamation(&mut self, deferred: Vec<Deferred>) {
+    pub(crate) fn do_reclamation(&mut self, deferred: Vec<Deferred>) -> Vec<Deferred> {
         let deferred_len = deferred.len();
         if deferred.is_empty() {
-            return;
+            return vec![];
         }
 
-        membarrier::heavy();
+        fence(Ordering::SeqCst);
 
         let guarded_ptrs = unsafe { &*self.domain }.collect_guarded_ptrs(self);
         let not_freed: Vec<Deferred> = deferred
@@ -63,7 +65,7 @@ impl Handle {
             })
             .collect();
         GLOBAL_GARBAGE_COUNT.fetch_sub(deferred_len - not_freed.len(), Ordering::AcqRel);
-        self.domain().deferred.append(not_freed.into_iter());
+        not_freed
     }
 
     pub(crate) fn acquire(&mut self) -> usize {
@@ -90,7 +92,8 @@ impl Handle {
         unsafe { &*self.hazards }
             .hazptrs
             .store(Box::into_raw(new_array), Ordering::Release);
-        self.domain().deferred.append(once(Deferred::new(array_ptr as _, free::<Vec<AtomicPtr<u8>>>)));
+        self.local_deferred
+            .push(Deferred::new(array_ptr as _, free::<Vec<AtomicPtr<u8>>>));
         self.available_indices.extend(size..new_size)
     }
 
@@ -102,6 +105,13 @@ impl Handle {
 
 impl Drop for Handle {
     fn drop(&mut self) {
+        let mut global_deferred = self.domain().deferred.pop_all();
+        if !self.local_deferred.is_empty() || !global_deferred.is_empty() {
+            let mut deferred = take(&mut self.local_deferred);
+            deferred.append(&mut global_deferred);
+            let not_freed = self.do_reclamation(deferred);
+            self.domain().deferred.append(not_freed.into_iter());
+        }
         self.available_indices.clear();
         unsafe { (*self.domain).threads.release(&*self.hazards) };
     }
