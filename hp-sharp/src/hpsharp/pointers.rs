@@ -500,7 +500,7 @@ pub trait Protector {
             let result = body(&mut guard);
             compiler_fence(Ordering::SeqCst);
 
-            // Store pointers in hazard slots and issue a light fence.
+            // Store pointers in hazard slots and issue a fence.
             self.protect_unchecked(&result);
             fence(Ordering::SeqCst);
 
@@ -585,7 +585,7 @@ pub trait Protector {
                             (backup_idx % 2, (backup_idx + 1) % 2)
                         };
 
-                        // Store pointers in hazard slots and issue a light fence.
+                        // Store pointers in hazard slots and issue a fence.
                         unsafe { defs[next_idx].protect_unchecked(&result) };
                         fence(Ordering::SeqCst);
 
