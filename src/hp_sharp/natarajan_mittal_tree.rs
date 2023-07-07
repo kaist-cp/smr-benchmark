@@ -104,6 +104,7 @@ struct Node<K, V> {
 
 // TODO(@jeonghyeon): automate
 impl<K, V> Invalidate for Node<K, V> {
+    #[inline]
     fn invalidate(&self) {
         let guard = unsafe { EpochGuard::unprotected() };
         let ptr = self.left.load(Ordering::Acquire, &guard);
@@ -120,6 +121,7 @@ impl<K, V> Invalidate for Node<K, V> {
         );
     }
 
+    #[inline]
     fn is_invalidated(&self, guard: &EpochGuard) -> bool {
         Marks::from_bits_truncate(self.left.load(Ordering::Acquire, guard).tag()).stop()
     }
@@ -130,6 +132,7 @@ where
     K: Clone,
     V: Clone,
 {
+    #[inline]
     fn new_leaf(key: Key<K>, value: Option<V>) -> Node<K, V> {
         Node {
             key,
@@ -141,6 +144,7 @@ where
 
     /// Make a new internal node, consuming the given left and right nodes,
     /// using the right node's key.
+    #[inline]
     fn new_internal(left: Node<K, V>, right: Node<K, V>) -> Node<K, V> {
         Node {
             key: right.key.clone(),
