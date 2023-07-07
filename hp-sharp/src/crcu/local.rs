@@ -32,16 +32,11 @@ pub(crate) struct Local {
     next: AtomicPtr<Local>,
     using: AtomicBool,
     global: *const Global,
-    defer_count: Cell<usize>,
+    push_count: Cell<usize>,
 }
 
 impl Local {
-    #[cfg(not(sanitize = "address"))]
-    const COUNTS_BETWEEN_TRY_ADVANCE: usize = 64;
-    #[cfg(sanitize = "address")]
-    const COUNTS_BETWEEN_TRY_ADVANCE: usize = 4;
-
-    const COUNTS_BETWEEN_FORCE_ADVANCE: usize = Self::COUNTS_BETWEEN_TRY_ADVANCE * 4;
+    const COUNTS_BETWEEN_FORCE_ADVANCE: usize = 4;
 
     #[must_use]
     fn new(using: bool, global: &Global) -> Self {
@@ -52,7 +47,7 @@ impl Local {
             next: AtomicPtr::new(null_mut()),
             using: AtomicBool::new(using),
             global,
-            defer_count: Cell::new(0),
+            push_count: Cell::new(0),
         }
     }
 
@@ -223,33 +218,29 @@ impl Local {
     /// It returns a `Some(Vec<Deferred>)` if the global epoch is advanced and we have collected
     /// some expired deferred tasks.
     #[inline]
-    pub(crate) fn defer(&mut self, mut def: Deferred) -> Option<Vec<Deferred>> {
+    pub(crate) fn defer(&mut self, def: Deferred) -> Option<Vec<Deferred>> {
         let bag = unsafe { &mut *self.bag.get() };
 
-        while let Err(d) = bag.try_push(def) {
+        if let Err(d) = bag.try_push(def) {
             self.global().push_bag(bag);
-            def = d;
-        }
+            bag.try_push(d).unwrap();
 
-        let defer_count = self.defer_count.get() + 1;
-        self.defer_count.set(defer_count);
+            let push_count = self.push_count.get() + 1;
+            self.push_count.set(push_count);
 
-        if defer_count >= Self::COUNTS_BETWEEN_FORCE_ADVANCE {
-            self.defer_count.set(0);
-            Some(self.global().collect(self.global().advance()))
-        } else if defer_count % Self::COUNTS_BETWEEN_TRY_ADVANCE == 0 {
-            let epoch = self.global().try_advance().ok()?;
-            self.defer_count.set(0);
-            Some(self.global().collect(epoch))
-        } else {
-            None
+            let collected = if push_count >= Self::COUNTS_BETWEEN_FORCE_ADVANCE {
+                self.push_count.set(0);
+                Some(self.global().collect(self.global().advance()))
+            } else {
+                let epoch = self.global().try_advance().ok()?;
+                self.push_count.set(0);
+                Some(self.global().collect(epoch))
+            };
+
+            return collected
+                .map(|bags| bags.into_iter().flat_map(|bag| bag.into_iter()).collect());
         }
-        .map(|collected| {
-            collected
-                .into_iter()
-                .flat_map(|bag| bag.into_iter())
-                .collect()
-        })
+        None
     }
 }
 

@@ -14,6 +14,7 @@ const MAX_OBJECTS: usize = 4;
 /// will trigger a panic!
 ///
 /// Also, [`Deferred`] is `Send` because it may be executed by an arbitrary thread.
+#[derive(Debug)]
 pub struct Deferred {
     data: *mut u8,
     task: unsafe fn(*mut u8),
@@ -73,16 +74,19 @@ impl Bag {
     ///
     /// Returns `Ok(())` if successful, and `Err(deferred)` for the given `deferred` if the bag is
     /// full.
+    #[inline]
     pub fn try_push(&mut self, def: Deferred) -> Result<(), Deferred> {
         self.defs.try_push(def).map_err(|e| e.element())
     }
 
     /// Creates an iterator of [`Deferred`] from a [`Bag`].
     #[must_use]
+    #[inline]
     pub fn into_iter(self) -> IntoIter<Deferred, MAX_OBJECTS> {
         self.defs.into_iter()
     }
 
+    #[inline]
     pub fn len(&self) -> usize {
         self.defs.len()
     }
