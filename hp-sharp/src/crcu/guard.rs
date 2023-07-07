@@ -1,7 +1,4 @@
-use std::{
-    cell::Cell,
-    sync::atomic::{compiler_fence, Ordering},
-};
+use std::sync::atomic::{compiler_fence, Ordering};
 
 use crate::sync::Deferred;
 
@@ -40,15 +37,11 @@ impl EpochGuard {
         R: Copy,
     {
         compiler_fence(Ordering::SeqCst);
-        let (result, guard) = self.inner.atomic(|guard| {
+        let result = self.inner.atomic(|guard| {
             let mut guard = CrashGuard::new(unsafe { &mut *self.local }, guard);
             let result = body(&mut guard);
-            (result, guard)
+            result
         });
-
-        if guard.is_advanced.get() {
-            self.inner.restart();
-        }
         compiler_fence(Ordering::SeqCst);
         result
     }
@@ -61,18 +54,13 @@ impl EpochGuard {
 pub struct CrashGuard {
     local: *mut Local,
     inner: *const RecoveryGuard,
-    is_advanced: Cell<bool>,
 }
 
 /// A non-crashable section guard.
 impl CrashGuard {
     #[inline]
     pub(crate) fn new(local: &mut Local, inner: &RecoveryGuard) -> Self {
-        Self {
-            local,
-            inner,
-            is_advanced: Cell::new(false),
-        }
+        Self { local, inner }
     }
 
     /// Repins its critical section if we are crashed(in other words, ejected).
@@ -106,10 +94,6 @@ impl Deferrable for CrashGuard {
     #[inline]
     #[must_use]
     fn defer(&mut self, def: Deferred) -> Option<Vec<Deferred>> {
-        let collected = unsafe { (*self.local).defer(def) };
-        if collected.is_some() {
-            self.is_advanced.set(true);
-        }
-        collected
+        unsafe { (*self.local).defer(def) }
     }
 }
