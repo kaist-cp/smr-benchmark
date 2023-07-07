@@ -59,7 +59,12 @@ impl Local {
     /// Unpins and then pins the [`Local`].
     #[inline]
     pub(crate) fn repin(&mut self) {
-        self.unpin_inner();
+        if cfg!(any(target_arch = "x86", target_arch = "x86_64")) {
+            // HACK: On x86 architectures we optimize out `fence(SeqCst)` with `compare_exchange`.
+            // In this case, manually unpinning my epoch must be proceeded.
+            // Check out comments on `pin_inner` for more information.
+            self.unpin_inner();
+        }
         self.pin_inner();
     }
 
