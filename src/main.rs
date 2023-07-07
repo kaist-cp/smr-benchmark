@@ -370,14 +370,12 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             DS::HMList => {
                 bench_map_ebr::<ebr::HMList<usize, String>, N>(config, PrefillStrategy::Decreasing)
             }
-            DS::HHSList => bench_map_ebr::<ebr::HHSList<usize, String>, N>(
-                config,
-                PrefillStrategy::Decreasing,
-            ),
-            DS::HashMap => bench_map_ebr::<ebr::HashMap<usize, String>, N>(
-                config,
-                PrefillStrategy::Decreasing,
-            ),
+            DS::HHSList => {
+                bench_map_ebr::<ebr::HHSList<usize, String>, N>(config, PrefillStrategy::Decreasing)
+            }
+            DS::HashMap => {
+                bench_map_ebr::<ebr::HashMap<usize, String>, N>(config, PrefillStrategy::Decreasing)
+            }
             DS::NMTree => {
                 bench_map_ebr::<ebr::NMTreeMap<usize, String>, N>(config, PrefillStrategy::Random)
             }
@@ -393,10 +391,9 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             }
         },
         MM::PEBR => match config.ds {
-            DS::HList => bench_map_pebr::<pebr::HList<usize, String>, N>(
-                config,
-                PrefillStrategy::Decreasing,
-            ),
+            DS::HList => {
+                bench_map_pebr::<pebr::HList<usize, String>, N>(config, PrefillStrategy::Decreasing)
+            }
             DS::HMList => bench_map_pebr::<pebr::HMList<usize, String>, N>(
                 config,
                 PrefillStrategy::Decreasing,
@@ -409,10 +406,9 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 config,
                 PrefillStrategy::Decreasing,
             ),
-            DS::NMTree => bench_map_pebr::<pebr::NMTreeMap<usize, String>, N>(
-                config,
-                PrefillStrategy::Random,
-            ),
+            DS::NMTree => {
+                bench_map_pebr::<pebr::NMTreeMap<usize, String>, N>(config, PrefillStrategy::Random)
+            }
             DS::BonsaiTree => bench_map_pebr::<pebr::BonsaiTreeMap<usize, String>, N>(
                 config,
                 PrefillStrategy::Random,
@@ -440,20 +436,18 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             DS::SkipList => {
                 bench_map_hp::<hp::SkipList<usize, String>, N>(config, PrefillStrategy::Random)
             }
-            DS::BonsaiTree => bench_map_hp::<hp::BonsaiTreeMap<usize, String>, N>(
-                config,
-                PrefillStrategy::Random,
-            ),
+            DS::BonsaiTree => {
+                bench_map_hp::<hp::BonsaiTreeMap<usize, String>, N>(config, PrefillStrategy::Random)
+            }
             _ => panic!("Unsupported data structure for HP"),
         },
         MM::HP_PP => match config.ds {
             DS::HList => {
                 bench_map_hp::<hp_pp::HList<usize, String>, N>(config, PrefillStrategy::Decreasing)
             }
-            DS::HMList => bench_map_hp::<hp_pp::HMList<usize, String>, N>(
-                config,
-                PrefillStrategy::Decreasing,
-            ),
+            DS::HMList => {
+                bench_map_hp::<hp_pp::HMList<usize, String>, N>(config, PrefillStrategy::Decreasing)
+            }
             DS::HHSList => bench_map_hp::<hp_pp::HHSList<usize, String>, N>(
                 config,
                 PrefillStrategy::Decreasing,
