@@ -2,8 +2,8 @@ import subprocess
 import os
 import sys
 
-dss = ['HList', 'HMList', 'HHSList', 'HashMap', 'NMTree', 'EFRBTree', 'SkipList', 'BonsaiTree']
-mms = ['EBR', 'NR', 'HP', 'HP_PP', 'PEBR', 'CDRC_EBR']
+dss = ['h-list', 'hm-list', 'hhs-list', 'hash-map', 'nm-tree', 'bonsai-tree', 'efrb-tree', 'skip-list']
+mms = ['nr', 'ebr', 'pebr', 'hp', 'hp-pp', 'nbr', 'cdrc-ebr', 'hp-sharp']
 cs = [1]
 i = 10
 cpu_count = os.cpu_count()
@@ -28,7 +28,7 @@ subprocess.run(['cargo', 'build', '--release'])
 run_cmd = ['./target/release/smr-benchmark', '-i', str(i), '-s1']
 
 def key_range(ds, large):
-    if ds in ["HList", "HMList", "HHSList"]:
+    if ds in ["h-list", "hm-list", "hhs-list"]:
         if large:
             return "10000"
         else:
@@ -44,16 +44,16 @@ def opts(ds, mm, g, c, t, kr_str):
 
 def invalid(mm, ds, c, g):
     is_invalid = False
-    if mm == 'NR':
+    if mm == 'nr':
         is_invalid |= c != 1  # meaningless config
-    if ds == 'HHSList':
+    if ds == 'hhs-list':
         is_invalid |= g == 0  # HHSList is just HMList with faster get()
-    if mm == 'HP':
-        is_invalid |= ds in ["HList", "HHSList", "NMTree"]
-    if mm == 'NBR':
-        is_invalid |= ds in ["BonsaiTree"]
-    if mm == 'CDRC_EBR':
-        is_invalid |= ds in ["EFRBTree"] # TODO: add support of weak ptr to CDRC
+    if mm == 'hp':
+        is_invalid |= ds in ["h-list", "hhs-list", "nm-tree"]
+    if mm == 'nbr':
+        is_invalid |= ds in ["bonsai-tree"]
+    if mm == 'cdrc-ebr':
+        is_invalid |= ds in ["efrb-tree"] # TODO: add support of weak ptr to CDRC
     return is_invalid
 
 
