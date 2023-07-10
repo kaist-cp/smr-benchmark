@@ -13,5 +13,4 @@ static_assertions = "1.1.0"
 setjmp = { git = "https://github.com/powergee/setjmp.rs.git" }
 arrayvec = "0.7.3"
 rustc-hash = "1.1.0"
-membarrier = { git = "https://github.com/jeehoonkang/membarrier-rs.git", branch = "pebr" }
 bitflags = "2.3.3"
