@@ -120,7 +120,7 @@ impl<T> Atomic<T> {
     }
 }
 
-/// A pointer to an shared object.
+/// A pointer to a shared object.
 ///
 /// This pointer is valid for use only during the lifetime `'r`.
 ///
@@ -330,7 +330,7 @@ impl<T> Drop for Owned<T> {
     }
 }
 
-/// A pointer to an shared object, which is protected by a hazard pointer.
+/// A pointer to a shared object, which is protected by a hazard pointer.
 pub struct Shield<T> {
     hazptr: HazardPointer,
     inner: usize,
@@ -469,11 +469,11 @@ pub trait Protector {
     /// truly protected, as the memory block may already be reclaimed. We must validate whether
     /// the memory block is reclaimed or not, by reloading the atomic pointer or checking the
     /// local CRCU epoch.
-    unsafe fn protect_unchecked(&mut self, read: &Self::Target<'_>);
+    fn protect_unchecked(&mut self, read: &Self::Target<'_>);
 
     /// Loads currently protected pointers and checks whether any of them are invalidated.
     /// If not, creates a new `Target` and returns it.
-    unsafe fn as_read<'r>(&self, guard: &'r EpochGuard) -> Option<Self::Target<'r>>;
+    fn as_target<'r>(&self, guard: &'r EpochGuard) -> Option<Self::Target<'r>>;
 
     /// Resets all hazard slots, allowing the previous memory block to be reclaimed.
     fn release(&mut self);
@@ -556,7 +556,7 @@ pub trait Protector {
                 // `init_result`.
                 let mut result = defs
                     .get(backup_idx.load(Ordering::Relaxed))
-                    .and_then(|def| transmute(def.as_read(&guard)))
+                    .and_then(|def| transmute(def.as_target(&guard)))
                     .unwrap_or_else(|| {
                         // As `F1` takes a mutable reference to `guard`, `init_result` returns
                         // `Read<'r>` and `guard`'s lifetime becomes an another arbitrary value.
@@ -586,7 +586,7 @@ pub trait Protector {
                         };
 
                         // Store pointers in hazard slots and issue a fence.
-                        unsafe { defs[next_idx].protect_unchecked(&result) };
+                        defs[next_idx].protect_unchecked(&result);
                         fence(Ordering::SeqCst);
 
                         // Success! We are not ejected so the protection is valid!
@@ -624,10 +624,10 @@ impl Protector for () {
     }
 
     #[inline]
-    unsafe fn protect_unchecked(&mut self, _: &Self::Target<'_>) {}
+    fn protect_unchecked(&mut self, _: &Self::Target<'_>) {}
 
     #[inline]
-    unsafe fn as_read<'r>(&self, _: &'r EpochGuard) -> Option<Self::Target<'r>> {
+    fn as_target<'r>(&self, _: &'r EpochGuard) -> Option<Self::Target<'r>> {
         Some(())
     }
 
@@ -645,7 +645,7 @@ impl<T: Invalidate> Protector for Shield<T> {
     }
 
     #[inline]
-    unsafe fn protect_unchecked(&mut self, read: &Self::Target<'_>) {
+    fn protect_unchecked(&mut self, read: &Self::Target<'_>) {
         let raw = read.untagged().as_raw();
         self.hazptr
             .protect_raw(raw as *const T as *mut T, Ordering::Relaxed);
@@ -653,7 +653,7 @@ impl<T: Invalidate> Protector for Shield<T> {
     }
 
     #[inline]
-    unsafe fn as_read<'r>(&self, guard: &'r EpochGuard) -> Option<Self::Target<'r>> {
+    fn as_target<'r>(&self, guard: &'r EpochGuard) -> Option<Self::Target<'r>> {
         let read = Shared::new(self.inner);
         if let Some(value) = self.as_ref() {
             if value.is_invalidated(guard) {
@@ -686,22 +686,22 @@ macro_rules! impl_protector_for_array {(
             }
 
             #[inline]
-            unsafe fn protect_unchecked(&mut self, read: &Self::Target<'_>) {
+            fn protect_unchecked(&mut self, read: &Self::Target<'_>) {
                 for (shield, shared) in self.iter_mut().zip(read) {
                     shield.protect_unchecked(shared);
                 }
             }
 
             #[inline]
-            unsafe fn as_read<'r>(&self, guard: &'r EpochGuard) -> Option<Self::Target<'r>> {
-                let mut result: [MaybeUninit<Shared<'r, T>>; $N] = zeroed();
+            fn as_target<'r>(&self, guard: &'r EpochGuard) -> Option<Self::Target<'r>> {
+                let mut result: [MaybeUninit<Shared<'r, T>>; $N] = unsafe { zeroed() };
                 for (shield, shared) in self.iter().zip(result.iter_mut()) {
-                    match shield.as_read(guard) {
+                    match shield.as_target(guard) {
                         Some(read) => shared.write(read),
                         None => return None,
                     };
                 }
-                Some(transmute(result))
+                Some(unsafe { transmute(result) })
             }
 
             #[inline]
@@ -824,10 +824,10 @@ mod test {
             self.curr.protect_unchecked(&read.curr);
         }
 
-        unsafe fn as_read<'r>(&self, guard: &'r EpochGuard) -> Option<Self::Target<'r>> {
+        unsafe fn as_target<'r>(&self, guard: &'r EpochGuard) -> Option<Self::Target<'r>> {
             Some(SharedCursor {
-                prev: self.prev.as_read(guard)?,
-                curr: self.curr.as_read(guard)?,
+                prev: self.prev.as_target(guard)?,
+                curr: self.curr.as_target(guard)?,
             })
         }
 

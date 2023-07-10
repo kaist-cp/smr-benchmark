@@ -234,7 +234,7 @@ impl<K, V> Protector for SeekRecord<K, V> {
     }
 
     #[inline]
-    unsafe fn protect_unchecked(&mut self, read: &Self::Target<'_>) {
+    fn protect_unchecked(&mut self, read: &Self::Target<'_>) {
         self.ancestor.protect_unchecked(&read.ancestor);
         self.successor.protect_unchecked(&read.successor);
         self.successor_dir = read.successor_dir;
@@ -244,13 +244,13 @@ impl<K, V> Protector for SeekRecord<K, V> {
     }
 
     #[inline]
-    unsafe fn as_read<'r>(&self, guard: &'r EpochGuard) -> Option<Self::Target<'r>> {
+    fn as_target<'r>(&self, guard: &'r EpochGuard) -> Option<Self::Target<'r>> {
         Some(SharedSeekRecord {
-            ancestor: self.ancestor.as_read(guard)?,
-            successor: self.successor.as_read(guard)?,
+            ancestor: self.ancestor.as_target(guard)?,
+            successor: self.successor.as_target(guard)?,
             successor_dir: self.successor_dir,
-            parent: self.parent.as_read(guard)?,
-            leaf: self.leaf.as_read(guard)?,
+            parent: self.parent.as_target(guard)?,
+            leaf: self.leaf.as_target(guard)?,
             leaf_dir: self.leaf_dir,
         })
     }

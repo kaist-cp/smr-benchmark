@@ -103,18 +103,18 @@ impl<K, V> Protector for Cursor<K, V> {
         }
     }
 
-    unsafe fn protect_unchecked(&mut self, read: &Self::Target<'_>) {
+    fn protect_unchecked(&mut self, read: &Self::Target<'_>) {
         self.prev.protect_unchecked(&read.prev);
         self.prev_next = read.prev_next;
         self.curr.protect_unchecked(&read.curr);
         self.found = read.found;
     }
 
-    unsafe fn as_read<'r>(&self, guard: &'r EpochGuard) -> Option<Self::Target<'r>> {
+    fn as_target<'r>(&self, guard: &'r EpochGuard) -> Option<Self::Target<'r>> {
         Some(SharedCursor {
-            prev: self.prev.as_read(guard)?,
+            prev: self.prev.as_target(guard)?,
             prev_next: self.prev_next,
-            curr: self.curr.as_read(guard)?,
+            curr: self.curr.as_target(guard)?,
             found: self.found,
         })
     }

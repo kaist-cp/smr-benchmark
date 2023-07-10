@@ -56,7 +56,7 @@ impl EpochGuard {
                 // Allocate fresh hazard slots to protect pointers.
                 let mut def = D::empty(unsafe { &mut *self.handle.cast_mut() });
                 // Store pointers in hazard slots and issue a fence.
-                unsafe { def.protect_unchecked(&to_deref) };
+                def.protect_unchecked(&to_deref);
                 fence(Ordering::SeqCst);
 
                 // Restart if the thread is crashed while protecting.
