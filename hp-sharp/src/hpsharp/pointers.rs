@@ -819,12 +819,12 @@ mod test {
             }
         }
 
-        unsafe fn protect_unchecked(&mut self, read: &Self::Target<'_>) {
+        fn protect_unchecked(&mut self, read: &Self::Target<'_>) {
             self.prev.protect_unchecked(&read.prev);
             self.curr.protect_unchecked(&read.curr);
         }
 
-        unsafe fn as_target<'r>(&self, guard: &'r EpochGuard) -> Option<Self::Target<'r>> {
+        fn as_target<'r>(&self, guard: &'r EpochGuard) -> Option<Self::Target<'r>> {
             Some(SharedCursor {
                 prev: self.prev.as_target(guard)?,
                 curr: self.curr.as_target(guard)?,
