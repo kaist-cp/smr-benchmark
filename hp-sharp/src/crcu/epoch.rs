@@ -64,6 +64,7 @@ impl Epoch {
 
 /// An atomic value that holds an `Epoch`.
 #[derive(Default, Debug)]
+#[repr(transparent)]
 pub(crate) struct AtomicEpoch {
     /// Since `Epoch` is just a wrapper around `usize`, an `AtomicEpoch` is similarly represented
     /// using an `AtomicUsize`.

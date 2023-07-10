@@ -1,7 +1,6 @@
 use core::cell::RefCell;
 use core::ptr;
 use core::sync::atomic::{fence, AtomicPtr, Ordering};
-use std::mem::take;
 
 use super::global::Global;
 use super::hazard::ThreadRecord;
@@ -105,10 +104,10 @@ impl Handle {
 
 impl Drop for Handle {
     fn drop(&mut self) {
-        let mut global_deferred = self.domain().deferred.pop_all();
+        let global_deferred = self.domain().deferred.pop_all();
         if !self.local_deferred.is_empty() || !global_deferred.is_empty() {
-            let mut deferred = take(&mut self.local_deferred);
-            deferred.append(&mut global_deferred);
+            let mut deferred = global_deferred;
+            deferred.append(&mut self.local_deferred);
             let not_freed = self.do_reclamation(deferred);
             self.domain().deferred.append(not_freed.into_iter());
         }

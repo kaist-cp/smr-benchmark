@@ -6,6 +6,7 @@ use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
 
 /// A lock-free pile, which we can push an element or pop all elements.
 #[derive(Debug)]
+#[repr(transparent)]
 pub struct Pile<T> {
     head: AtomicPtr<Node<T>>,
 }

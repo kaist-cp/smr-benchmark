@@ -92,6 +92,7 @@ impl Drop for HazardPointer {
 
 /// Push-only list of recyclable thread records.
 #[derive(Debug)]
+#[repr(transparent)]
 pub(crate) struct ThreadRecords {
     head: AtomicPtr<ThreadRecord>,
 }
