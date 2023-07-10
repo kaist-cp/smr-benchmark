@@ -4,7 +4,7 @@ use arrayvec::{ArrayVec, IntoIter};
 
 /// Maximum number of objects a bag can contain.
 #[cfg(not(sanitize = "address"))]
-const MAX_OBJECTS: usize = 64;
+const MAX_OBJECTS: usize = 128;
 #[cfg(sanitize = "address")]
 const MAX_OBJECTS: usize = 4;
 

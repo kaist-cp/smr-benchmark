@@ -36,7 +36,7 @@ pub(crate) struct Local {
 }
 
 impl Local {
-    const COUNTS_BETWEEN_FORCE_ADVANCE: usize = 4;
+    const COUNTS_BETWEEN_FORCE_ADVANCE: usize = 2;
 
     #[must_use]
     fn new(using: bool, global: &Global) -> Self {
