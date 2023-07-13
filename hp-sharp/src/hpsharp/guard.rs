@@ -46,7 +46,7 @@ impl EpochGuard {
     /// a signal, or we advanced our epoch to reclaim a full local garbage bag.
     pub fn mask<'r, F, D>(&'r self, to_deref: D::Target<'r>, body: F)
     where
-        F: Fn(&D, &CrashGuard) -> WriteResult,
+        F: Fn(&D, &mut CrashGuard) -> WriteResult,
         D: Protector,
     {
         // Note that protecting must be conducted in a crash-free section.
@@ -65,7 +65,7 @@ impl EpochGuard {
                     guard.repin();
                 }
 
-                body(&def, &CrashGuard::new(guard, self.handle))
+                body(&def, &mut CrashGuard::new(guard, self.handle))
             };
 
             if result == WriteResult::RepinEpoch {
