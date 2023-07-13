@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
 git submodule update --init --recursive
 cargo clean
 cd crossbeam-ebr; cargo clean; cd ..

@@ -2,12 +2,12 @@
 
 set -e
 for i in {1..500}; do
-    RUST_BACKTRACE=1 RUSTFLAGS="-Z sanitizer=address" cargo run --bin smr-benchmark --target x86_64-unknown-linux-gnu --features sanitize -- -dhlist -i3 -t60 -r10 -g1 -mhp_pp
-    RUST_BACKTRACE=1 RUSTFLAGS="-Z sanitizer=address" cargo run --bin smr-benchmark --target x86_64-unknown-linux-gnu --features sanitize -- -dhmlist -i3 -t60 -r10 -g1 -mhp_pp
-    RUST_BACKTRACE=1 RUSTFLAGS="-Z sanitizer=address" cargo run --bin smr-benchmark --target x86_64-unknown-linux-gnu --features sanitize -- -dhhslist -i3 -t60 -r10 -g1 -mhp_pp
-    RUST_BACKTRACE=1 RUSTFLAGS="-Z sanitizer=address" cargo run --bin smr-benchmark --target x86_64-unknown-linux-gnu --features sanitize -- -dhashmap -i3 -t60 -r10 -g1 -mhp_pp
-    RUST_BACKTRACE=1 RUSTFLAGS="-Z sanitizer=address" cargo run --bin smr-benchmark --target x86_64-unknown-linux-gnu --features sanitize -- -dnmtree -i3 -t60 -r10 -g1 -mhp_pp
-    RUST_BACKTRACE=1 RUSTFLAGS="-Z sanitizer=address" cargo run --bin smr-benchmark --target x86_64-unknown-linux-gnu --features sanitize -- -defrbtree -i3 -t60 -r10 -g1 -mhp_pp
-    RUST_BACKTRACE=1 RUSTFLAGS="-Z sanitizer=address" cargo run --bin smr-benchmark --target x86_64-unknown-linux-gnu --features sanitize -- -dbonsaitree -i3 -t60 -r10 -g1 -mhp_pp
-    RUST_BACKTRACE=1 RUSTFLAGS="-Z sanitizer=address" cargo run --bin smr-benchmark --target x86_64-unknown-linux-gnu --features sanitize -- -dskiplist -i3 -t60 -r10 -g1 -mhp_pp
+    RUST_BACKTRACE=1 RUSTFLAGS="-Z sanitizer=address" cargo run --bin smr-benchmark --target x86_64-unknown-linux-gnu --features sanitize -- -dh-list -i3 -t60 -r10 -g1 -mhp-pp
+    RUST_BACKTRACE=1 RUSTFLAGS="-Z sanitizer=address" cargo run --bin smr-benchmark --target x86_64-unknown-linux-gnu --features sanitize -- -dhm-list -i3 -t60 -r10 -g1 -mhp-pp
+    RUST_BACKTRACE=1 RUSTFLAGS="-Z sanitizer=address" cargo run --bin smr-benchmark --target x86_64-unknown-linux-gnu --features sanitize -- -dhhs-list -i3 -t60 -r10 -g1 -mhp-pp
+    RUST_BACKTRACE=1 RUSTFLAGS="-Z sanitizer=address" cargo run --bin smr-benchmark --target x86_64-unknown-linux-gnu --features sanitize -- -dhash-map -i3 -t60 -r10 -g1 -mhp-pp
+    RUST_BACKTRACE=1 RUSTFLAGS="-Z sanitizer=address" cargo run --bin smr-benchmark --target x86_64-unknown-linux-gnu --features sanitize -- -dnm-tree -i3 -t60 -r10 -g1 -mhp-pp
+    RUST_BACKTRACE=1 RUSTFLAGS="-Z sanitizer=address" cargo run --bin smr-benchmark --target x86_64-unknown-linux-gnu --features sanitize -- -defrb-tree -i3 -t60 -r10 -g1 -mhp-pp
+    RUST_BACKTRACE=1 RUSTFLAGS="-Z sanitizer=address" cargo run --bin smr-benchmark --target x86_64-unknown-linux-gnu --features sanitize -- -dbonsai-tree -i3 -t60 -r10 -g1 -mhp-pp
+    RUST_BACKTRACE=1 RUSTFLAGS="-Z sanitizer=address" cargo run --bin smr-benchmark --target x86_64-unknown-linux-gnu --features sanitize -- -dskip-list -i3 -t60 -r10 -g1 -mhp-pp
 done
