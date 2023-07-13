@@ -42,7 +42,13 @@ where
         self.get_bucket(i).get(k, output, handle)
     }
 
-    pub fn insert(&self, k: K, v: V, output: &mut Output<K, V>, handle: &mut hp_sharp::Handle) -> bool {
+    pub fn insert(
+        &self,
+        k: K,
+        v: V,
+        output: &mut Output<K, V>,
+        handle: &mut hp_sharp::Handle,
+    ) -> bool {
         let i = Self::hash(&k);
         self.get_bucket(i).insert(k, v, output, handle)
     }
@@ -69,7 +75,13 @@ where
         self.get(key, output, handle)
     }
     #[inline]
-    fn insert(&self, key: K, value: V, output: &mut Output<K, V>, handle: &mut hp_sharp::Handle) -> bool {
+    fn insert(
+        &self,
+        key: K,
+        value: V,
+        output: &mut Output<K, V>,
+        handle: &mut hp_sharp::Handle,
+    ) -> bool {
         self.insert(key, value, output, handle)
     }
     #[inline]
