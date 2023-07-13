@@ -313,6 +313,7 @@ where
                             }
                         });
                         cursor.curr = next;
+                        continue;
                     }
 
                     match curr_node.key.cmp(key) {
@@ -357,7 +358,6 @@ where
                 cursor
             });
         }
-        // Always success to traverse.
         true
     }
 

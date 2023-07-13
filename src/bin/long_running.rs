@@ -1174,7 +1174,7 @@ fn bench_map_hp_sharp(
 ) -> (u64, usize, usize, usize, usize) {
     use hp_sharp_bench::concurrent_map::OutputHolder;
     use hp_sharp_bench::ConcurrentMap;
-    let map = &hp_sharp_bench::HHSList::new();
+    let map = &hp_sharp_bench::traverse_loop::HHSList::new();
     strategy.prefill_hp_sharp(config, map);
 
     let barrier = &Arc::new(Barrier::new(
@@ -1296,10 +1296,7 @@ fn bench_map_nbr(
     let map = &nbr::HHSList::new();
     strategy.prefill_nbr(config, map);
 
-    let collector = &nbr_rs::Collector::new(
-        config.writers + config.readers,
-        max_hazptr_per_thread,
-    );
+    let collector = &nbr_rs::Collector::new(config.writers + config.readers, max_hazptr_per_thread);
 
     let barrier = &Arc::new(Barrier::new(
         config.writers + config.readers + config.aux_thread,

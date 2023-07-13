@@ -551,6 +551,14 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 config,
                 PrefillStrategy::Decreasing,
             ),
+            DS::HMList => bench_map_hp_sharp::<hp_sharp_bench::HMList<usize, String>>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::HHSList => bench_map_hp_sharp::<hp_sharp_bench::HHSList<usize, String>>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
             DS::NMTree => bench_map_hp_sharp::<hp_sharp_bench::NMTreeMap<usize, String>>(
                 config,
                 PrefillStrategy::Random,

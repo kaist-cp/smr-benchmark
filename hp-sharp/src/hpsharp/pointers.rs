@@ -326,7 +326,7 @@ impl<T> Owned<T> {
 
 impl<T> Drop for Owned<T> {
     fn drop(&mut self) {
-        drop(unsafe { Box::from_raw(self.inner as *const T as *mut T) });
+        drop(unsafe { Box::from_raw(decompose_data::<T>(self.inner).0) });
     }
 }
 
