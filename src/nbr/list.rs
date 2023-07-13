@@ -292,6 +292,40 @@ where
         }
     }
 
+    fn pop<'g>(&self, guard: &'g Guard) -> Option<(&'g K, &'g V)> {
+        loop {
+            let mut cursor = Cursor {
+                prev: ptr::null_mut(),
+                curr: ptr::null_mut(),
+                found: false,
+            };
+            read_phase!(guard; [cursor.prev, cursor.curr] => {
+                cursor.prev = &self.head as *const _ as *mut Node<K, V>;
+                cursor.curr = self.head.load(Ordering::Acquire);
+            });
+
+            let curr_node = match unsafe { cursor.curr.as_ref() } {
+                Some(node) => node,
+                None => return None,
+            };
+
+            let next = curr_node.next.fetch_or(1, Ordering::AcqRel);
+
+            if (tag(next) & 1) != 0 {
+                continue;
+            }
+
+            if unsafe { &*cursor.prev }
+                .next
+                .compare_exchange(cursor.curr, next, Ordering::Release, Ordering::Relaxed)
+                .is_ok()
+            {
+                unsafe { guard.retire(cursor.curr) };
+            }
+            return Some((&curr_node.key, &curr_node.value));
+        }
+    }
+
     /// Omitted
     pub fn harris_get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         self.get(key, Self::find_harris, guard)
@@ -395,6 +429,15 @@ pub struct HHSList<K, V> {
     inner: List<K, V>,
 }
 
+impl<K, V> HHSList<K, V>
+where
+    K: Ord,
+{
+    pub fn pop<'g>(&self, guard: &'g Guard) -> Option<(&'g K, &'g V)> {
+        self.inner.pop(guard)
+    }
+}
+
 impl<K, V> ConcurrentMap<K, V> for HHSList<K, V>
 where
     K: Ord,
@@ -435,5 +478,26 @@ mod tests {
     #[test]
     fn smoke_hhs_list() {
         concurrent_map::tests::smoke::<HHSList<i32, String>>(2);
+    }
+
+    #[test]
+    fn litmus_hhs_pop() {
+        use concurrent_map::ConcurrentMap;
+        let map = HHSList::new();
+
+        let guard = unsafe { nbr_rs::unprotected() };
+        map.insert(1, "1", guard);
+        map.insert(2, "2", guard);
+        map.insert(3, "3", guard);
+
+        fn assert_eq(a: (&i32, &&str), b: (i32, &str)) {
+            assert_eq!(*a.0, b.0);
+            assert_eq!(*a.1, b.1);
+        }
+
+        assert_eq(map.pop(guard).unwrap(), (1, "1"));
+        assert_eq(map.pop(guard).unwrap(), (2, "2"));
+        assert_eq(map.pop(guard).unwrap(), (3, "3"));
+        assert_eq!(map.pop(guard), None);
     }
 }

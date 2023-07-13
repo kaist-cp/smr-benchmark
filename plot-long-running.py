@@ -2,9 +2,7 @@
 import pandas as pd
 from plotnine import *
 import warnings
-import os
 import matplotlib
-import math
 
 RESULTS_PATH = "results"
 
@@ -26,15 +24,16 @@ PEAK_GARB = "peak_garb"
 SMR_ONLY = "SMR\n"
 SMR_I = "SMR, interf.\n"
 
-EBR = "EBR"
-PEBR = "PEBR"
-NR = "NR"
-HP = "HP"
-HP_PP = "HP_PP"
-NBR = "NBR"
-CDRC_EBR = "CDRC_EBR"
+EBR = "ebr"
+PEBR = "pebr"
+NR = "nr"
+HP = "hp"
+HP_PP = "hp-pp"
+NBR = "nbr"
+CDRC_EBR = "cdrc-ebr"
+HP_SHARP = "hp-sharp"
 
-SMR_ONLYs = [NR, EBR, HP, HP_PP, PEBR, CDRC_EBR]
+SMR_ONLYs = [NR, EBR, HP, HP_PP, PEBR, CDRC_EBR, NBR, HP_SHARP]
 
 # https://matplotlib.org/stable/api/markers_api.html
 line_shapes = {
@@ -43,8 +42,9 @@ line_shapes = {
     HP: 'v',
     HP_PP: 'D',
     PEBR: "x",
-    NBR: "s",
     CDRC_EBR: "1",
+    NBR: "p",
+    HP_SHARP: "s",
 }
 
 line_colors = {
@@ -53,8 +53,9 @@ line_colors = {
     HP: 'hotpink',
     HP_PP: 'purple',
     PEBR: "y",
-    NBR: "C0",
     CDRC_EBR: "green",
+    NBR: "blue",
+    HP_SHARP: "r",
 }
 
 line_types = {
@@ -63,8 +64,9 @@ line_types = {
     HP: 'dashed',
     HP_PP: 'dashdot',
     PEBR: (5, (10, 3)),
-    NBR: (0, (3, 1, 1, 1)),
     CDRC_EBR: (0, (3, 1, 1, 1, 1, 1)),
+    NBR: (5, (10, 3)),
+    HP_SHARP: (0, (3, 1, 1, 1)),
 }
 
 krs = [(2 ** e) for e in range(18, 27, 1)]

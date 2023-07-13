@@ -1,7 +1,7 @@
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use hp_sharp::{
     Atomic, CrashGuard, EpochGuard, Handle, Invalidate, Owned, Pointer, Protector, Retire, Shared,
-    Shield, TraverseStatus,
+    Shield, TraverseStatus, WriteResult,
 };
 
 use std::cmp::Ordering::{Equal, Greater, Less};
@@ -274,6 +274,134 @@ where
         return true;
     }
 
+    #[inline]
+    fn harris_michael_traverse(
+        &self,
+        key: &K,
+        output: &mut Output<K, V>,
+        handle: &mut Handle,
+    ) -> bool {
+        let cursor = &mut output.0;
+        unsafe {
+            cursor.traverse(handle, |guard| {
+                let mut cursor = SharedCursor::new(&self.head, guard);
+                cursor.found = loop {
+                    let curr_node = some_or!(cursor.curr.as_ref(guard), break false);
+                    let mut next = curr_node.next.load(Ordering::Acquire, guard);
+
+                    // NOTE: original version aborts here if self.prev is tagged
+
+                    if next.tag() != 0 {
+                        next = next.with_tag(0);
+                        guard.mask::<_, Shield<_>>(cursor.prev, |prev, guard| {
+                            if prev
+                                .deref_unchecked()
+                                .next
+                                .compare_exchange(
+                                    cursor.curr,
+                                    next,
+                                    Ordering::Release,
+                                    Ordering::Relaxed,
+                                    guard,
+                                )
+                                .is_err()
+                            {
+                                WriteResult::RepinEpoch
+                            } else {
+                                guard.retire(cursor.curr);
+                                WriteResult::Finished
+                            }
+                        });
+                        cursor.curr = next;
+                    }
+
+                    match curr_node.key.cmp(key) {
+                        Less => {
+                            cursor.prev = cursor.curr;
+                            cursor.curr = next;
+                        }
+                        Equal => break true,
+                        Greater => break false,
+                    }
+                };
+                cursor
+            });
+        }
+        // Always success to traverse.
+        true
+    }
+
+    #[inline]
+    fn harris_herlihy_shavit_traverse(
+        &self,
+        key: &K,
+        output: &mut Output<K, V>,
+        handle: &mut Handle,
+    ) -> bool {
+        let cursor = &mut output.0;
+        unsafe {
+            cursor.traverse(handle, |guard| {
+                let mut cursor = SharedCursor::new(&self.head, guard);
+                cursor.found = loop {
+                    let curr_node = some_or!(cursor.curr.as_ref(guard), break false);
+                    match curr_node.key.cmp(key) {
+                        Less => {
+                            cursor.prev = cursor.curr;
+                            cursor.curr = curr_node.next.load(Ordering::Acquire, guard);
+                            continue;
+                        }
+                        Equal => break curr_node.next.load(Ordering::Relaxed, guard).tag() == 0,
+                        Greater => break false,
+                    }
+                };
+                cursor
+            });
+        }
+        // Always success to traverse.
+        true
+    }
+
+    #[inline]
+    fn harris_herlihy_shavit_traverse_loop(
+        &self,
+        key: &K,
+        output: &mut Output<K, V>,
+        handle: &mut Handle,
+    ) -> bool {
+        let cursor = &mut output.0;
+        let backup = &mut output.1;
+        unsafe {
+            cursor.traverse_loop(
+                backup,
+                handle,
+                |guard| SharedCursor::new(&self.head, guard),
+                |cursor, guard| {
+                    let curr_node = match cursor.curr.as_ref(guard) {
+                        Some(node) => node,
+                        None => {
+                            cursor.found = false;
+                            return TraverseStatus::Finished;
+                        }
+                    };
+                    match curr_node.key.cmp(key) {
+                        Less => {
+                            cursor.prev = cursor.curr;
+                            cursor.curr = curr_node.next.load(Ordering::Acquire, guard);
+                            return TraverseStatus::Continue;
+                        }
+                        Equal => {
+                            cursor.found = curr_node.next.load(Ordering::Relaxed, guard).tag() == 0
+                        }
+                        Greater => cursor.found = false,
+                    }
+                    TraverseStatus::Finished
+                },
+            );
+        }
+        // Always success to traverse.
+        true
+    }
+
     /// Clean up a chain of logically removed nodes in each traversal.
     #[inline]
     fn harris_traverse_loop(
@@ -283,8 +411,8 @@ where
         handle: &mut Handle,
     ) -> bool {
         let cursor = &mut output.0;
+        let backup = &mut output.1;
         unsafe {
-            let backup = &mut output.1;
             cursor.traverse_loop(
                 backup,
                 handle,
@@ -455,6 +583,42 @@ where
             return true;
         }
     }
+
+    pub fn pop(&self, output: &mut Output<K, V>, handle: &mut Handle) -> bool {
+        let cursor = &mut output.0;
+        unsafe {
+            loop {
+                cursor.traverse(handle, |guard| SharedCursor::new(&self.head, guard));
+                let curr_node = match cursor.curr.as_ref() {
+                    Some(node) => node,
+                    None => return false,
+                };
+
+                let next = curr_node.next.fetch_or(1, Ordering::AcqRel, handle);
+
+                if (next.tag() & 1) != 0 {
+                    continue;
+                }
+
+                if cursor
+                    .prev
+                    .deref_unchecked()
+                    .next
+                    .compare_exchange(
+                        cursor.curr.shared(),
+                        next,
+                        Ordering::Release,
+                        Ordering::Relaxed,
+                        handle,
+                    )
+                    .is_ok()
+                {
+                    handle.retire(cursor.curr.shared());
+                }
+                return true;
+            }
+        }
+    }
 }
 
 pub mod traverse {
@@ -501,9 +665,103 @@ pub mod traverse {
         }
     }
 
+    pub struct HMList<K, V> {
+        inner: List<K, V>,
+    }
+
+    impl<K, V> ConcurrentMap<K, V> for HMList<K, V>
+    where
+        K: Ord + Default,
+        V: Default,
+    {
+        type Output = Output<K, V>;
+
+        fn new() -> Self {
+            Self { inner: List::new() }
+        }
+
+        fn get(&self, key: &K, output: &mut Self::Output, handle: &mut hp_sharp::Handle) -> bool {
+            self.inner
+                .get(List::harris_michael_traverse, key, output, handle)
+        }
+
+        fn insert(
+            &self,
+            key: K,
+            value: V,
+            output: &mut Self::Output,
+            handle: &mut hp_sharp::Handle,
+        ) -> bool {
+            self.inner
+                .insert(List::harris_michael_traverse, key, value, output, handle)
+        }
+
+        fn remove<'domain, 'hp>(
+            &self,
+            key: &K,
+            output: &mut Self::Output,
+            handle: &mut hp_sharp::Handle,
+        ) -> bool {
+            self.inner
+                .remove(List::harris_michael_traverse, key, output, handle)
+        }
+    }
+
+    pub struct HHSList<K, V> {
+        inner: List<K, V>,
+    }
+
+    impl<K, V> ConcurrentMap<K, V> for HHSList<K, V>
+    where
+        K: Ord + Default,
+        V: Default,
+    {
+        type Output = Output<K, V>;
+
+        fn new() -> Self {
+            Self { inner: List::new() }
+        }
+
+        fn get(&self, key: &K, output: &mut Self::Output, handle: &mut hp_sharp::Handle) -> bool {
+            self.inner
+                .get(List::harris_herlihy_shavit_traverse, key, output, handle)
+        }
+
+        fn insert(
+            &self,
+            key: K,
+            value: V,
+            output: &mut Self::Output,
+            handle: &mut hp_sharp::Handle,
+        ) -> bool {
+            self.inner
+                .insert(List::harris_traverse, key, value, output, handle)
+        }
+
+        fn remove<'domain, 'hp>(
+            &self,
+            key: &K,
+            output: &mut Self::Output,
+            handle: &mut hp_sharp::Handle,
+        ) -> bool {
+            self.inner
+                .remove(List::harris_traverse, key, output, handle)
+        }
+    }
+
     #[test]
     fn smoke_h_list() {
         crate::hp_sharp::concurrent_map::tests::smoke::<HList<i32, String>>();
+    }
+
+    #[test]
+    fn smoke_hm_list() {
+        crate::hp_sharp::concurrent_map::tests::smoke::<HMList<i32, String>>();
+    }
+
+    #[test]
+    fn smoke_hhs_list() {
+        crate::hp_sharp::concurrent_map::tests::smoke::<HHSList<i32, String>>();
     }
 }
 
@@ -552,8 +810,95 @@ pub mod traverse_loop {
         }
     }
 
+    pub struct HHSList<K, V> {
+        inner: List<K, V>,
+    }
+
+    impl<K, V> HHSList<K, V>
+    where
+        K: Ord + Default,
+        V: Default,
+    {
+        pub fn pop(&self, output: &mut Output<K, V>, handle: &mut hp_sharp::Handle) -> bool {
+            self.inner.pop(output, handle)
+        }
+    }
+
+    impl<K, V> ConcurrentMap<K, V> for HHSList<K, V>
+    where
+        K: Ord + Default,
+        V: Default,
+    {
+        type Output = Output<K, V>;
+
+        fn new() -> Self {
+            Self { inner: List::new() }
+        }
+
+        fn get(&self, key: &K, output: &mut Self::Output, handle: &mut hp_sharp::Handle) -> bool {
+            self.inner.get(
+                List::harris_herlihy_shavit_traverse_loop,
+                key,
+                output,
+                handle,
+            )
+        }
+
+        fn insert(
+            &self,
+            key: K,
+            value: V,
+            output: &mut Self::Output,
+            handle: &mut hp_sharp::Handle,
+        ) -> bool {
+            self.inner
+                .insert(List::harris_traverse_loop, key, value, output, handle)
+        }
+
+        fn remove<'domain, 'hp>(
+            &self,
+            key: &K,
+            output: &mut Self::Output,
+            handle: &mut hp_sharp::Handle,
+        ) -> bool {
+            self.inner
+                .remove(List::harris_traverse_loop, key, output, handle)
+        }
+    }
+
     #[test]
     fn smoke_h_list() {
         crate::hp_sharp::concurrent_map::tests::smoke::<HList<i32, String>>();
+    }
+
+    #[test]
+    fn smoke_hhs_list() {
+        crate::hp_sharp::concurrent_map::tests::smoke::<HHSList<i32, String>>();
+    }
+
+    #[test]
+    fn litmus_hhs_pop() {
+        use crate::hp_sharp::concurrent_map::OutputHolder;
+        hp_sharp::HANDLE.with(|handle| {
+            let handle = &mut **handle.borrow_mut();
+            let output = &mut HHSList::empty_output(handle);
+            let map = HHSList::new();
+
+            map.insert(1, "1", output, handle);
+            map.insert(2, "2", output, handle);
+            map.insert(3, "3", output, handle);
+
+            fn validate_output(output: &Output<i32, &str>, target: &str) {
+                assert!(output.output().eq(&target));
+            }
+
+            assert!(map.pop(output, handle));
+            validate_output(output, "1");
+            assert!(map.pop(output, handle));
+            validate_output(output, "2");
+            assert!(map.pop(output, handle));
+            validate_output(output, "3");
+            assert!(!map.pop(output, handle));
+        });
     }
 }

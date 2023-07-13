@@ -1,7 +1,7 @@
 import subprocess
 import os
 
-mms = ['EBR', 'NR', 'HP', 'HP_PP', 'PEBR', 'CDRC_EBR']
+mms = ['ebr', 'nr', 'hp', 'hp-pp', 'pebr', 'cdrc-ebr', 'hp-sharp', 'nbr']
 
 krs = [(2 ** e) for e in range(18, 27, 1)]
 cpu_count = os.cpu_count()
