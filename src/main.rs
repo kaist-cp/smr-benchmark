@@ -559,6 +559,10 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 config,
                 PrefillStrategy::Decreasing,
             ),
+            DS::HashMap => bench_map_hp_sharp::<hp_sharp_bench::HashMap<usize, String>>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
             DS::NMTree => bench_map_hp_sharp::<hp_sharp_bench::NMTreeMap<usize, String>>(
                 config,
                 PrefillStrategy::Random,

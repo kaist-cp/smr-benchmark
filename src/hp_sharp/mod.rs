@@ -7,6 +7,7 @@ mod natarajan_mittal_tree;
 pub use self::concurrent_map::ConcurrentMap;
 
 pub use list::traverse::{HHSList, HList, HMList};
+pub use michael_hash_map::HashMap;
 pub use natarajan_mittal_tree::NMTreeMap;
 
 pub mod traverse_loop {

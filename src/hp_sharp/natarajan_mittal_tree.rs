@@ -113,12 +113,6 @@ impl<K, V> Invalidate for Node<K, V> {
             Ordering::Release,
             &unsafe { CrashGuard::unprotected() },
         );
-        let ptr = self.left.load(Ordering::Acquire, &guard);
-        self.left.store(
-            ptr.with_tag(ptr.tag() | Marks::STOP.bits()),
-            Ordering::Release,
-            &unsafe { CrashGuard::unprotected() },
-        );
     }
 
     #[inline]
