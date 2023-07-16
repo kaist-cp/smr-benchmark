@@ -1,11 +1,10 @@
-use bitflags::bitflags;
 /// A thread-local recovery manager with signal handling
+use bitflags::bitflags;
 use nix::libc::{c_void, siginfo_t};
 use nix::sys::pthread::{pthread_kill, Pthread};
 use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 use setjmp::{sigjmp_buf, siglongjmp};
-use std::cell::RefCell;
-use std::mem::MaybeUninit;
+use std::mem::{transmute, MaybeUninit};
 use std::sync::atomic::{compiler_fence, AtomicU8, Ordering};
 
 /// A CRCU crash signal which is used to restart a slow thread.
@@ -23,7 +22,7 @@ bitflags! {
 }
 
 thread_local! {
-    static JMP_BUF: RefCell<MaybeUninit<sigjmp_buf>> = RefCell::new(MaybeUninit::uninit());
+    static JMP_BUF: Box<sigjmp_buf> = Box::new(unsafe { MaybeUninit::zeroed().assume_init() });
     /// Represents a thread-local status.
     ///
     /// A thread entering a crashable section sets its `STATUS` by calling `guard!` macro.
@@ -41,7 +40,23 @@ thread_local! {
     /// single ISA instruction. On top of that, by preventing reordering instructions across this
     /// variable by issuing `compiler_fence`, we can have the same restrictions which
     /// `volatile sig_atomic_t` has.
-    static STATUS: AtomicU8 = AtomicU8::new(0);
+    static STATUS: Box<AtomicU8> = Box::new(AtomicU8::new(0));
+}
+
+/// # Safety
+///
+/// Do not call this function in a crashable critical section. It may cause a corruption of
+/// a thread-local storage.
+pub(crate) unsafe fn jmp_buf() -> *mut sigjmp_buf {
+    JMP_BUF.with(|buf| (&**buf as *const sigjmp_buf).cast_mut())
+}
+
+/// # Safety
+///
+/// Do not call this function in a crashable critical section. It may cause a corruption of
+/// a thread-local storage.
+pub(crate) unsafe fn status() -> &'static AtomicU8 {
+    STATUS.with(|s| transmute(&**s))
 }
 
 /// Installs a signal handler.
@@ -71,28 +86,20 @@ pub(crate) unsafe fn send_signal(pthread: Pthread) -> nix::Result<()> {
     pthread_kill(pthread, CRASH_SIGNAL)
 }
 
-/// Gets a mutable thread-local pointer to `sigjmp_buf`, which is used for `sigsetjmp` at the
-/// entrance of read phase.
-#[inline]
-pub(crate) fn jmp_buf() -> *mut sigjmp_buf {
-    JMP_BUF.with(|buf| buf.borrow_mut().as_mut_ptr())
+pub(crate) struct RecoveryGuard {
+    status: &'static AtomicU8,
+    jmp_buf: *mut sigjmp_buf,
 }
-
-pub(crate) struct RecoveryGuard {}
 
 impl RecoveryGuard {
     /// Creates a new `RecoveryGuard`.
     ///
     /// A new `RecoveryGuard` must always be created by calling `checkpoint` macro, not calling
     /// this `new` method directly.
-    pub unsafe fn new() -> Self {
-        debug_assert!(
-            status().is_empty(),
-            "a status word must be empty before starting a critical section"
-        );
-        activate(Status::InCs);
-
-        RecoveryGuard {}
+    pub unsafe fn new(status: &'static AtomicU8, jmp_buf: *mut sigjmp_buf) -> Self {
+        status.store(Status::InCs.bits(), Ordering::Relaxed);
+        compiler_fence(Ordering::SeqCst);
+        RecoveryGuard { status, jmp_buf }
     }
 
     /// Performs a given closure crash-atomically.
@@ -103,39 +110,52 @@ impl RecoveryGuard {
     where
         F: Fn(&Self) -> R,
     {
-        activate(Status::InCa);
-        let result = body(self);
-        deactivate(Status::InCa);
+        self.status.store(Status::InCa.bits(), Ordering::Relaxed);
 
-        if status().contains(Status::InCaRb) {
-            clear_status();
-            unsafe { perform_longjmp() };
+        compiler_fence(Ordering::SeqCst);
+        let result = body(self);
+        compiler_fence(Ordering::SeqCst);
+
+        if self
+            .status
+            .compare_exchange(
+                Status::InCa.bits(),
+                Status::InCs.bits(),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            )
+            .is_err()
+        {
+            self.restart();
         }
         return result;
     }
 
     /// Returns to the checkpoint manually.
-    ///
-    /// It takes immutable reference. It is able to be called in both a critical section and an
-    /// atomic section.
     #[inline]
     pub fn restart(&self) -> ! {
         compiler_fence(Ordering::SeqCst);
-        clear_status();
-        unsafe { perform_longjmp() };
+        unsafe { siglongjmp(self.jmp_buf, 1) }
+    }
+
+    #[inline]
+    pub fn must_rollback(&self) -> bool {
+        compiler_fence(Ordering::SeqCst);
+        Status::from_bits_truncate(self.status.load(Ordering::SeqCst)).contains(Status::InCaRb)
     }
 }
 
 impl Drop for RecoveryGuard {
     #[inline]
     fn drop(&mut self) {
-        deactivate(Status::InCs);
+        self.status.store(0, Ordering::Relaxed);
     }
 }
 
 /// Makes a checkpoint and create a `RecoveryGuard`.
 macro_rules! guard {
     () => {{
+        let status = recovery::status();
         let buf = recovery::jmp_buf();
         compiler_fence(Ordering::SeqCst);
 
@@ -144,77 +164,39 @@ macro_rules! guard {
             compiler_fence(Ordering::SeqCst);
 
             // Unblock the signal before restarting the section.
-            let mut oldset = SigSet::empty();
-            oldset.add(recovery::CRASH_SIGNAL);
-            pthread_sigmask(SigmaskHow::SIG_UNBLOCK, Some(&oldset), None)
+            pthread_sigmask(SigmaskHow::SIG_UNBLOCK, Some(&SigSet::all()), None)
                 .expect("Failed to unblock signal");
         }
         compiler_fence(Ordering::SeqCst);
 
-        crate::crcu::RecoveryGuard::new()
+        crate::crcu::RecoveryGuard::new(status, buf)
     }};
 }
 
 pub(crate) use guard;
 
-#[inline]
-fn status() -> Status {
-    compiler_fence(Ordering::SeqCst);
-    let status = Status::from_bits_truncate(STATUS.with(|status| status.load(Ordering::Relaxed)));
-    compiler_fence(Ordering::SeqCst);
-    status
-}
-
-#[inline]
-fn activate(flag: Status) {
-    let current = status();
-    debug_assert!(!current.intersects(flag));
-    STATUS.with(|status| status.store(current.union(flag).bits(), Ordering::Relaxed));
-    compiler_fence(Ordering::SeqCst);
-}
-
-#[inline]
-fn deactivate(flag: Status) {
-    let current = status();
-    debug_assert!(current.contains(flag));
-    STATUS.with(|status| status.store(current.difference(flag).bits(), Ordering::Relaxed));
-    compiler_fence(Ordering::SeqCst);
-}
-
-#[inline]
-fn clear_status() {
-    compiler_fence(Ordering::SeqCst);
-    STATUS.with(|status| status.store(0, Ordering::Relaxed));
-    compiler_fence(Ordering::SeqCst);
-}
-
 extern "C" fn handle_signal(_: i32, _: *mut siginfo_t, _: *mut c_void) {
-    // Load a current state bits.
-    let current = status();
+    // In a signal handler, we are safe to access(and modify) Rust's Thread-local storage.
+    // This is because all signal is blocked in a handler, so we don't have to worry about
+    // unexpected restarts.
+    //
+    // `try_with` is used instead of `with` to prevent panics when a signal is handled while
+    // destructing the thread local storage.
+    let status: &AtomicU8 = match STATUS.try_with(|s| unsafe { transmute(&**s) }) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let current = Status::from_bits_truncate(status.load(Ordering::Relaxed));
 
-    // If we didn't make a checkpoint at all, just return.
-    if !current.contains(Status::InCs) {
-        return;
+    // if we have made a checkpoint and are not in crash-atomic section, it is good to `longjmp`.
+    if current == Status::InCs {
+        if let Ok(buf) = JMP_BUF.try_with(|buf| (&**buf as *const sigjmp_buf).cast_mut()) {
+            unsafe { siglongjmp(buf, 1) }
+        }
     }
 
     // If we are in crash-atomic section by `RecoveryGuard::atomic`, turn `InCaRb` on.
-    if current.contains(Status::InCa) {
-        STATUS.with(|status| status.store(current.union(Status::InCaRb).bits(), Ordering::Relaxed));
-        return;
+    if current == Status::InCa {
+        status.store((Status::InCa | Status::InCaRb).bits(), Ordering::Relaxed);
     }
-
-    // if we have made a checkpoint and are not in crash-atomic section, it is good to `longjmp`.
-    clear_status();
-    unsafe { perform_longjmp() };
-}
-
-/// Perform `siglongjmp` without changing any phase-related variables like `InCs`.
-///
-/// It assume that the `jmp_buf` is properly initialized by calling `siglongjmp`.
-#[inline]
-unsafe fn perform_longjmp() -> ! {
-    let buf = jmp_buf();
-    compiler_fence(Ordering::SeqCst);
-
-    siglongjmp(buf, 1)
 }

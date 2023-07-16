@@ -203,12 +203,6 @@ impl Local {
     }
 
     #[inline]
-    pub(crate) fn is_pinned(&self) -> bool {
-        // Use `Acquire` to synchronize with `Release` from `advance`
-        self.epoch.load(Ordering::Acquire).is_pinned()
-    }
-
-    #[inline]
     fn global(&self) -> &Global {
         unsafe { &*self.global }
     }

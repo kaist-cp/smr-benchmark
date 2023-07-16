@@ -1,6 +1,6 @@
 use std::{
     ptr::{null, null_mut, NonNull},
-    sync::atomic::{fence, AtomicUsize, Ordering},
+    sync::atomic::{compiler_fence, fence, AtomicUsize, Ordering},
 };
 
 use crate::{
@@ -60,7 +60,7 @@ impl EpochGuard {
                 fence(Ordering::SeqCst);
 
                 // Restart if the thread is crashed while protecting.
-                if guard.is_ejected() {
+                if guard.must_rollback() {
                     drop(def);
                     guard.repin();
                 }
@@ -68,6 +68,7 @@ impl EpochGuard {
                 body(&def, &mut CrashGuard::new(guard, self.handle))
             };
 
+            compiler_fence(Ordering::SeqCst);
             if result == WriteResult::RepinEpoch {
                 // Invalidate any saved checkpoints.
                 if let Some(backup_idx) = self.backup_idx {

@@ -648,7 +648,7 @@ impl<T: Invalidate> Protector for Shield<T> {
     fn protect_unchecked(&mut self, read: &Self::Target<'_>) {
         let raw = read.untagged().as_raw();
         self.hazptr
-            .protect_raw(raw as *const T as *mut T, Ordering::Relaxed);
+            .protect_raw(raw as *const T as *mut T, Ordering::Release);
         self.inner = raw;
     }
 

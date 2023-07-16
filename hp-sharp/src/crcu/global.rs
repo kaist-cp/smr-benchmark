@@ -1,8 +1,9 @@
 //! A *Crash-Optimized RCU*.
 
-use atomic::fence;
+use atomic::{fence, Ordering};
 use crossbeam_utils::CachePadded;
 use nix::{errno::Errno, sys::pthread::pthread_self};
+use std::mem;
 
 use crate::{
     sync::{Bag, Pile},
@@ -14,8 +15,6 @@ use super::{
     local::{Handle, LocalList},
     recovery,
 };
-use core::sync::atomic::Ordering;
-use std::{mem, sync::atomic::compiler_fence};
 
 /// The width of the number of bags.
 const BAGS_WIDTH: u32 = 3;
@@ -210,20 +209,6 @@ impl Global {
                     Ok(_) | Err(Errno::ESRCH) => {}
                     Err(err) => panic!("Failed to restart the thread: {}", err),
                 }
-                compiler_fence(Ordering::SeqCst);
-
-                // As the slow thread will be interrupted by a signal, it is safe to eject its
-                // epoch and reset it into a starting value. After being interrupted by the kernel
-                // and performing `longjmp`, the slow thread will repin its epoch with the latest
-                // global epoch. If repining happened before `compare_exchange` here, the operation
-                // would fail because the global epoch which the restarted thread read cannot be
-                // equal to `local_epoch` which the reclaimer read.
-                let _ = local.epoch.compare_exchange(
-                    local_epoch,
-                    Epoch::starting(),
-                    Ordering::Release,
-                    Ordering::Relaxed,
-                );
             }
         }
         fence(Ordering::Acquire);

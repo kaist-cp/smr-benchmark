@@ -72,9 +72,8 @@ impl CrashGuard {
     }
 
     #[inline]
-    pub fn is_ejected(&self) -> bool {
-        compiler_fence(Ordering::SeqCst);
-        unsafe { !(*self.local).is_pinned() }
+    pub fn must_rollback(&self) -> bool {
+        unsafe { &*self.inner }.must_rollback()
     }
 }
 
