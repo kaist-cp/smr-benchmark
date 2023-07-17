@@ -210,7 +210,6 @@ where
         }
     }
 
-    #[inline(never)]
     fn find_optimistic_inner<'r>(&self, key: &K, guard: &'r EpochGuard) -> SharedCursor<'r, K, V> {
         let mut cursor = SharedCursor::new(&self.head, guard);
 
@@ -255,7 +254,6 @@ where
         }
     }
 
-    #[inline(never)]
     fn find_inner<'r>(&self, key: &K, guard: &'r EpochGuard) -> Option<SharedCursor<'r, K, V>> {
         let mut cursor = SharedCursor::new(&self.head, guard);
 
