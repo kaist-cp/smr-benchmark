@@ -567,6 +567,10 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 config,
                 PrefillStrategy::Random,
             ),
+            DS::SkipList => bench_map_hp_sharp::<hp_sharp_bench::SkipList<usize, String>>(
+                config,
+                PrefillStrategy::Random,
+            ),
             _ => panic!("Unsupported data structure for HP#"),
         },
     };
