@@ -120,6 +120,12 @@ impl<T> Atomic<T> {
     }
 }
 
+impl<T> Default for Atomic<T> {
+    fn default() -> Self {
+        Self::null()
+    }
+}
+
 /// A pointer to a shared object.
 ///
 /// This pointer is valid for use only during the lifetime `'r`.
@@ -131,6 +137,15 @@ impl<T> Atomic<T> {
 pub struct Shared<'r, T: ?Sized> {
     inner: usize,
     _marker: PhantomData<(&'r (), *const T)>,
+}
+
+impl<'r, T> Default for Shared<'r, T> {
+    fn default() -> Self {
+        Self {
+            inner: 0,
+            _marker: PhantomData,
+        }
+    }
 }
 
 impl<'r, T> Clone for Shared<'r, T> {
@@ -648,7 +663,7 @@ impl<T: Invalidate> Protector for Shield<T> {
     fn protect_unchecked(&mut self, read: &Self::Target<'_>) {
         let raw = read.untagged().as_raw();
         self.hazptr
-            .protect_raw(raw as *const T as *mut T, Ordering::Release);
+            .protect_raw(raw as *const T as *mut T, Ordering::Relaxed);
         self.inner = raw;
     }
 

@@ -91,6 +91,7 @@ impl Handle {
         unsafe { &*self.hazards }
             .hazptrs
             .store(Box::into_raw(new_array), Ordering::Release);
+        GLOBAL_GARBAGE_COUNT.fetch_add(1, Ordering::AcqRel);
         self.local_deferred
             .push(Deferred::new(array_ptr as _, free::<Vec<AtomicPtr<u8>>>));
         self.available_indices.extend(size..new_size)
