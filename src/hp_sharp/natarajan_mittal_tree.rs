@@ -1,8 +1,7 @@
 use std::{cmp, sync::atomic::Ordering};
 
 use hp_sharp::{
-    Atomic, CrashGuard, EpochGuard, Handle, Invalidate, Owned, Pointer, Protector, Retire, Shared,
-    Shield,
+    Atomic, EpochGuard, Handle, Invalidate, Owned, Pointer, Protector, Retire, Shared, Shield,
 };
 
 use super::{concurrent_map::OutputHolder, ConcurrentMap};
@@ -12,7 +11,6 @@ bitflags! {
     /// A remove operation is registered by marking the corresponding edges: the (parent, target)
     /// edge is _flagged_ and the (parent, sibling) edge is _tagged_.
     struct Marks: usize {
-        const STOP = 1usize.wrapping_shl(2);
         const FLAG = 1usize.wrapping_shl(1);
         const TAG  = 1usize.wrapping_shl(0);
     }
@@ -22,10 +20,6 @@ impl Marks {
     fn new(flag: bool, tag: bool) -> Self {
         (if flag { Marks::FLAG } else { Marks::empty() })
             | (if tag { Marks::TAG } else { Marks::empty() })
-    }
-
-    fn stop(self) -> bool {
-        !(self & Marks::STOP).is_empty()
     }
 
     fn flag(self) -> bool {
@@ -106,18 +100,13 @@ struct Node<K, V> {
 impl<K, V> Invalidate for Node<K, V> {
     #[inline]
     fn invalidate(&self) {
-        let guard = unsafe { EpochGuard::unprotected() };
-        let ptr = self.left.load(Ordering::Acquire, &guard);
-        self.left.store(
-            ptr.with_tag(ptr.tag() | Marks::STOP.bits()),
-            Ordering::Release,
-            &unsafe { CrashGuard::unprotected() },
-        );
+        // We do not use `traverse_loop` for this data structure.
     }
 
     #[inline]
-    fn is_invalidated(&self, guard: &EpochGuard) -> bool {
-        Marks::from_bits_truncate(self.left.load(Ordering::Acquire, guard).tag()).stop()
+    fn is_invalidated(&self, _: &EpochGuard) -> bool {
+        false
+        // We do not use `traverse_loop` for this data structure.
     }
 }
 
@@ -403,7 +392,7 @@ where
 
     /// Similar to `seek`, but traverse the tree with only two pointers
     fn seek_leaf(&self, key: &K, output: &mut Output<K, V>, handle: &mut Handle) {
-        let result = &mut output.0;
+        let result = &mut output.0.leaf;
         unsafe {
             result.traverse(handle, |guard| {
                 let s = self.r.left.load(Ordering::Relaxed, guard);
@@ -421,15 +410,7 @@ where
                     }
                     curr = curr.with_tag(0);
                 }
-
-                SharedSeekRecord {
-                    ancestor: Shared::null(),
-                    successor: Shared::null(),
-                    successor_dir: Direction::L,
-                    parent: Shared::null(),
-                    leaf,
-                    leaf_dir: Direction::L,
-                }
+                leaf
             });
         }
     }

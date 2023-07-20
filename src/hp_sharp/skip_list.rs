@@ -1,8 +1,8 @@
 use std::sync::atomic::{fence, AtomicUsize, Ordering};
 
 use hp_sharp::{
-    Atomic, CrashGuard, EpochGuard, Handle, Invalidate, Owned, Pointer, Protector, Retire, Shared,
-    Shield, WriteResult,
+    Atomic, EpochGuard, Handle, Invalidate, Owned, Pointer, Protector, Retire, Shared, Shield,
+    WriteResult,
 };
 
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
@@ -71,16 +71,15 @@ impl<K, V> Node<K, V> {
 }
 
 impl<K, V> Invalidate for Node<K, V> {
+    #[inline]
     fn invalidate(&self) {
-        let guard = unsafe { EpochGuard::unprotected() };
-        let ptr = self.next[0].load(Ordering::Acquire, &guard);
-        self.next[0].store(ptr.with_tag(1 | 2), Ordering::Release, &unsafe {
-            CrashGuard::unprotected()
-        });
+        // We do not use `traverse_loop` for this data structure.
     }
 
-    fn is_invalidated(&self, guard: &hp_sharp::EpochGuard) -> bool {
-        (self.next[0].load(Ordering::Acquire, guard).tag() & 2) != 0
+    #[inline]
+    fn is_invalidated(&self, _: &hp_sharp::EpochGuard) -> bool {
+        false
+        // We do not use `traverse_loop` for this data structure.
     }
 }
 
@@ -126,9 +125,19 @@ impl<K, V> Protector for Cursor<K, V> {
     }
 
     fn protect_unchecked(&mut self, read: &Self::Target<'_>) {
-        for i in 0..MAX_HEIGHT {
-            self.preds[i].protect_unchecked(&read.preds[i]);
-            self.succs[i].protect_unchecked(&read.succs[i]);
+        self.preds[MAX_HEIGHT - 1].protect_unchecked(&read.preds[MAX_HEIGHT - 1]);
+        self.succs[MAX_HEIGHT - 1].protect_unchecked(&read.succs[MAX_HEIGHT - 1]);
+        for i in (0..MAX_HEIGHT - 1).rev() {
+            if read.preds[i + 1] == read.preds[i] {
+                unsafe { self.preds[i].store(read.preds[i]) };
+            } else {
+                self.preds[i].protect_unchecked(&read.preds[i]);
+            }
+            if read.succs[i + 1] == read.succs[i] {
+                unsafe { self.succs[i].store(read.succs[i]) };
+            } else {
+                self.succs[i].protect_unchecked(&read.succs[i]);
+            }
         }
         self.found.protect_unchecked(&read.found);
     }
@@ -210,9 +219,7 @@ where
         }
     }
 
-    fn find_optimistic_inner<'r>(&self, key: &K, guard: &'r EpochGuard) -> SharedCursor<'r, K, V> {
-        let mut cursor = SharedCursor::new(&self.head, guard);
-
+    fn find_optimistic_inner<'r>(&self, key: &K, guard: &'r EpochGuard) -> Shared<'r, Node<K, V>> {
         let mut level = MAX_HEIGHT;
         while level >= 1
             && self.head[level - 1]
@@ -236,21 +243,23 @@ where
                     }
                     std::cmp::Ordering::Equal => {
                         if curr_node.next[level].load(Ordering::Acquire, guard).tag() == 0 {
-                            cursor.found = curr;
+                            return curr;
+                        } else {
+                            return Shared::null();
                         }
-                        return cursor;
                     }
                     std::cmp::Ordering::Greater => break,
                 }
             }
         }
-
-        cursor
+        Shared::null()
     }
 
     fn find_optimistic(&self, key: &K, cursor: &mut Cursor<K, V>, handle: &mut Handle) {
         unsafe {
-            cursor.traverse(handle, |guard| self.find_optimistic_inner(key, guard));
+            cursor
+                .found
+                .traverse(handle, |guard| self.find_optimistic_inner(key, guard));
         }
     }
 

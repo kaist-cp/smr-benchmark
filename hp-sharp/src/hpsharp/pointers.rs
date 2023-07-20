@@ -427,6 +427,12 @@ impl<T> Shield<T> {
     pub fn shared<'r>(&'r self) -> Shared<'r, T> {
         Shared::new(self.inner)
     }
+
+    /// Stores a pointer value only to an inner variable. It doesn't protect the pointer.
+    #[inline]
+    pub unsafe fn store(&mut self, ptr: Shared<T>) {
+        self.inner = ptr.into_usize();
+    }
 }
 
 /// A trait for either `Owned` or `Shared` pointers.
