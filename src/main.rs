@@ -25,7 +25,6 @@ use typenum::{Unsigned, U1, U4};
 
 use smr_benchmark::hp_pp;
 use smr_benchmark::nbr;
-use smr_benchmark::nr;
 use smr_benchmark::pebr;
 use smr_benchmark::{cdrc, ebr};
 use smr_benchmark::{hp, hp_sharp as hp_sharp_bench};
@@ -342,16 +341,16 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
     let (ops_per_sec, peak_mem, avg_mem, peak_garb, avg_garb) = match config.mm {
         MM::NR => match config.ds {
             DS::HList => {
-                bench_map_nr::<nr::HList<String, String>>(config, PrefillStrategy::Decreasing)
+                bench_map_nr::<ebr::HList<String, String>>(config, PrefillStrategy::Decreasing)
             }
             DS::HMList => {
-                bench_map_nr::<nr::HMList<String, String>>(config, PrefillStrategy::Decreasing)
+                bench_map_nr::<ebr::HMList<String, String>>(config, PrefillStrategy::Decreasing)
             }
             DS::HHSList => {
-                bench_map_nr::<nr::HHSList<String, String>>(config, PrefillStrategy::Decreasing)
+                bench_map_nr::<ebr::HHSList<String, String>>(config, PrefillStrategy::Decreasing)
             }
             DS::HashMap => {
-                bench_map_nr::<nr::HashMap<String, String>>(config, PrefillStrategy::Decreasing)
+                bench_map_nr::<ebr::HashMap<String, String>>(config, PrefillStrategy::Decreasing)
             }
             _ => todo!(),
         },
@@ -620,7 +619,7 @@ enum PrefillStrategy {
 }
 
 impl PrefillStrategy {
-    fn prefill_nr<M: nr::ConcurrentMap<String, String> + Send + Sync>(
+    fn prefill_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
         self,
         config: &Config,
         map: &M,
@@ -631,7 +630,7 @@ impl PrefillStrategy {
                 for _ in 0..config.prefill {
                     let key = generate_key(config, rng);
                     let value = key.to_string();
-                    map.insert(key, value);
+                    map.insert(key, value, unsafe { crossbeam_ebr::unprotected() });
                 }
             }
             PrefillStrategy::Decreasing => {
@@ -642,7 +641,7 @@ impl PrefillStrategy {
                 keys.sort_by(|a, b| b.cmp(a));
                 for key in keys.drain(..) {
                     let value = key.to_string();
-                    map.insert(key, value);
+                    map.insert(key, value, unsafe { crossbeam_ebr::unprotected() });
                 }
             }
         }
@@ -844,7 +843,7 @@ impl PrefillStrategy {
     }
 }
 
-fn bench_map_nr<M: nr::ConcurrentMap<String, String> + Send + Sync>(
+fn bench_map_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
@@ -898,14 +897,14 @@ fn bench_map_nr<M: nr::ConcurrentMap<String, String> + Send + Sync>(
                     let key = generate_key(config, rng);
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
                         Op::Get => {
-                            map.get(&key);
+                            map.get(&key, unsafe { crossbeam_ebr::leaking() });
                         }
                         Op::Insert => {
                             let value = key.to_string();
-                            map.insert(key, value);
+                            map.insert(key, value, unsafe { crossbeam_ebr::leaking() });
                         }
                         Op::Remove => {
-                            map.remove(&key);
+                            map.remove(&key, unsafe { crossbeam_ebr::leaking() });
                         }
                     }
                     ops += 1;

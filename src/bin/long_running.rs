@@ -1247,7 +1247,12 @@ fn bench_map_hp_sharp(
                     let mut acquired: Option<String> = None;
                     while start.elapsed() < config.duration {
                         if let Some(value) = acquired.take() {
-                            assert!(map.insert(value.parse().unwrap(), value, output, handle))
+                            assert!(map.insert(
+                                format!("{:0width$}", value, width = config.key_padding_width),
+                                value,
+                                output,
+                                handle
+                            ))
                         } else {
                             assert!(map.pop(output, handle));
                             acquired = Some(output.output().clone());
