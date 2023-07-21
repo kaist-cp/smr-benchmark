@@ -4,7 +4,7 @@ from plotnine import *
 import warnings
 import matplotlib
 
-RESULTS_PATH = "results"
+RESULTS_PATH = "bench-scripts/hp-sharp/results"
 
 warnings.filterwarnings("ignore")
 pd.set_option('display.max_rows', None)
@@ -114,7 +114,7 @@ def draw_throughput(data):
     y_label = 'Throughput ratio to NR'
     legend = False
     y_max = data.throughput.max() * 1.05
-    draw("", f'{RESULTS_PATH}/throughput.pdf',
+    draw("", f'{RESULTS_PATH}/long-running.pdf',
          data, SMR_ONLY, THROUGHPUT, y_label, y_max, legend)
 
 

@@ -1,13 +1,15 @@
 import subprocess
 import os
 
-mms = ['cdrc-ebr']
+RESULTS_PATH = "bench-scripts/hp-sharp/results"
+
+mms = ['nr', 'ebr', 'pebr', 'hp', 'hp-pp', 'nbr', 'cdrc-ebr', 'hp-sharp']
 
 krs = [(2 ** e) for e in range(18, 27, 1)]
 cpu_count = os.cpu_count()
 writers = cpu_count // 2
 readers = cpu_count // 2
-runs = 2
+runs = 10
 i = 10
 
 if os.path.exists('.git'):
@@ -20,18 +22,19 @@ cmds = []
 
 for mm in mms:
     for kr in krs:
-        cmd = run_cmd + [f'-m{mm}', f'-r{kr}']
+        cmd = run_cmd + [f'-m{mm}', f'-r{kr}', f'-o{RESULTS_PATH}/long-running.csv']
         cmds.append(cmd)
 
 print('number of configurations: ', len(cmds))
-print('estimated time: ', (len(cmds) * i * 1.3) // 60, ' min *', runs, 'times')
+print('estimated time: ', (len(cmds) * i * 1.1) // 60, ' min *', runs, 'times')
 
 failed = []
 for run in range(runs):
     for i, cmd in enumerate(cmds):
         print("run {}/{}, bench {}/{}: '{}'".format(run + 1, runs, i + 1, len(cmds), ' '.join(cmd)))
         try:
-            subprocess.run(cmd, timeout=30)
+            # NOTE(`timeout=60`): prefilling may take a while...
+            subprocess.run(cmd, timeout=60)
         except subprocess.TimeoutExpired:
             print("timeout")
             failed.append(' '.join(cmd))
