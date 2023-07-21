@@ -208,14 +208,13 @@ where
 
             cursor.found = loop {
                 let curr_node = some_or!(unsafe { untagged(cursor.curr).as_ref() }, break false);
-                let next = curr_node.next.load(Ordering::Acquire);
 
                 match curr_node.key.cmp(key) {
                     Less => {
                         cursor.prev = cursor.curr;
-                        cursor.curr = next;
+                        cursor.curr = curr_node.next.load(Ordering::Acquire);
                     }
-                    Equal => break tag(next) == 0,
+                    Equal => break tag(curr_node.next.load(Ordering::Relaxed)) == 0,
                     Greater => break false,
                 }
             };
