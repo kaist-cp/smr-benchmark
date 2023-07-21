@@ -23,6 +23,7 @@ use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
 use typenum::{Unsigned, U1, U4};
 
+use smr_benchmark::nr;
 use smr_benchmark::hp_pp;
 use smr_benchmark::nbr;
 use smr_benchmark::pebr;
@@ -339,29 +340,18 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
     let (ops_per_sec, peak_mem, avg_mem, peak_garb, avg_garb) = match config.mm {
         MM::NR => match config.ds {
             DS::HList => {
-                bench_map_nr::<ebr::HList<usize, String>>(config, PrefillStrategy::Decreasing)
+                bench_map_nr::<nr::HList<usize, String>>(config, PrefillStrategy::Decreasing)
             }
             DS::HMList => {
-                bench_map_nr::<ebr::HMList<usize, String>>(config, PrefillStrategy::Decreasing)
+                bench_map_nr::<nr::HMList<usize, String>>(config, PrefillStrategy::Decreasing)
             }
             DS::HHSList => {
-                bench_map_nr::<ebr::HHSList<usize, String>>(config, PrefillStrategy::Decreasing)
+                bench_map_nr::<nr::HHSList<usize, String>>(config, PrefillStrategy::Decreasing)
             }
             DS::HashMap => {
-                bench_map_nr::<ebr::HashMap<usize, String>>(config, PrefillStrategy::Decreasing)
+                bench_map_nr::<nr::HashMap<usize, String>>(config, PrefillStrategy::Decreasing)
             }
-            DS::NMTree => {
-                bench_map_nr::<ebr::NMTreeMap<usize, String>>(config, PrefillStrategy::Random)
-            }
-            DS::BonsaiTree => {
-                bench_map_nr::<ebr::BonsaiTreeMap<usize, String>>(config, PrefillStrategy::Random)
-            }
-            DS::EFRBTree => {
-                bench_map_nr::<ebr::EFRBTree<usize, String>>(config, PrefillStrategy::Random)
-            }
-            DS::SkipList => {
-                bench_map_nr::<ebr::SkipList<usize, String>>(config, PrefillStrategy::Random)
-            }
+            _ => todo!(),
         },
         MM::EBR => match config.ds {
             DS::HList => {
@@ -616,6 +606,37 @@ enum PrefillStrategy {
 }
 
 impl PrefillStrategy {
+    fn prefill_nr<M: nr::ConcurrentMap<usize, String> + Send + Sync>(
+        self,
+        config: &Config,
+        map: &M,
+    ) {
+        let mut rng = rand::thread_rng();
+        match self {
+            PrefillStrategy::Random => {
+                for _ in 0..config.prefill {
+                    let key = config.key_dist.sample(&mut rng);
+                    let value = key.to_string();
+                    map.insert(key, value);
+                }
+            }
+            PrefillStrategy::Decreasing => {
+                let mut keys = Vec::with_capacity(config.prefill);
+                for _ in 0..config.prefill {
+                    keys.push(config.key_dist.sample(&mut rng));
+                }
+                keys.sort_by(|a, b| b.cmp(a));
+                for k in keys.drain(..) {
+                    let key = k;
+                    let value = key.to_string();
+                    map.insert(key, value);
+                }
+            }
+        }
+        print!("prefilled... ");
+        stdout().flush().unwrap();
+    }
+
     fn prefill_ebr<M: ebr::ConcurrentMap<usize, String> + Send + Sync>(
         self,
         config: &Config,
@@ -816,12 +837,12 @@ impl PrefillStrategy {
     }
 }
 
-fn bench_map_nr<M: ebr::ConcurrentMap<usize, String> + Send + Sync>(
+fn bench_map_nr<M: nr::ConcurrentMap<usize, String> + Send + Sync>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
     let map = &M::new();
-    strategy.prefill_ebr(config, map);
+    strategy.prefill_nr(config, map);
 
     let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
     let (ops_sender, ops_receiver) = mpsc::channel();
@@ -835,8 +856,6 @@ fn bench_map_nr<M: ebr::ConcurrentMap<usize, String> + Send + Sync>(
                 let mut samples = 0usize;
                 let mut acc = 0usize;
                 let mut peak = 0usize;
-                let mut garb_acc = 0usize;
-                let mut garb_peak = 0usize;
                 barrier.clone().wait();
 
                 let start = Instant::now();
@@ -850,16 +869,12 @@ fn bench_map_nr<M: ebr::ConcurrentMap<usize, String> + Send + Sync>(
                         acc += allocated;
                         peak = max(peak, allocated);
 
-                        let garbages = crossbeam_ebr::GLOBAL_GARBAGE_COUNT.load(Ordering::Acquire);
-                        garb_acc += garbages;
-                        garb_peak = max(garb_peak, garbages);
-
                         next_sampling = now + config.sampling_period;
                     }
                     std::thread::sleep(config.aux_thread_period);
                 }
                 mem_sender
-                    .send((peak, acc / samples, garb_peak, garb_acc / samples))
+                    .send((peak, acc / samples, 0, 0))
                     .unwrap();
             });
         } else {
@@ -878,14 +893,14 @@ fn bench_map_nr<M: ebr::ConcurrentMap<usize, String> + Send + Sync>(
                     let key = config.key_dist.sample(&mut rng);
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
                         Op::Get => {
-                            map.get(&key, unsafe { crossbeam_ebr::leaking() });
+                            map.get(&key);
                         }
                         Op::Insert => {
                             let value = key.to_string();
-                            map.insert(key, value, unsafe { crossbeam_ebr::leaking() });
+                            map.insert(key, value);
                         }
                         Op::Remove => {
-                            map.remove(&key, unsafe { crossbeam_ebr::leaking() });
+                            map.remove(&key);
                         }
                     }
                     ops += 1;
