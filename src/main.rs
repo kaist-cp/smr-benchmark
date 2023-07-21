@@ -95,7 +95,6 @@ struct Config {
     op_dist: WeightedIndex<i32>,
     key_dist: Uniform<usize>,
     prefill: usize,
-    key_padding_width: usize,
     interval: u64,
     duration: Duration,
     ops_per_cs: OpsPerCs,
@@ -313,7 +312,6 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
         },
         sampling,
         sampling_period: Duration::from_millis(sampling_period),
-        key_padding_width: range.to_string().len(),
 
         get_rate,
         op_dist,
@@ -341,230 +339,215 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
     let (ops_per_sec, peak_mem, avg_mem, peak_garb, avg_garb) = match config.mm {
         MM::NR => match config.ds {
             DS::HList => {
-                bench_map_nr::<ebr::HList<String, String>>(config, PrefillStrategy::Decreasing)
+                bench_map_nr::<ebr::HList<usize, usize>>(config, PrefillStrategy::Decreasing)
             }
             DS::HMList => {
-                bench_map_nr::<ebr::HMList<String, String>>(config, PrefillStrategy::Decreasing)
+                bench_map_nr::<ebr::HMList<usize, usize>>(config, PrefillStrategy::Decreasing)
             }
             DS::HHSList => {
-                bench_map_nr::<ebr::HHSList<String, String>>(config, PrefillStrategy::Decreasing)
+                bench_map_nr::<ebr::HHSList<usize, usize>>(config, PrefillStrategy::Decreasing)
             }
             DS::HashMap => {
-                bench_map_nr::<ebr::HashMap<String, String>>(config, PrefillStrategy::Decreasing)
+                bench_map_nr::<ebr::HashMap<usize, usize>>(config, PrefillStrategy::Decreasing)
             }
             _ => todo!(),
         },
         MM::EBR => match config.ds {
             DS::HList => {
-                bench_map_ebr::<ebr::HList<String, String>, N>(config, PrefillStrategy::Decreasing)
+                bench_map_ebr::<ebr::HList<usize, usize>, N>(config, PrefillStrategy::Decreasing)
             }
             DS::HMList => {
-                bench_map_ebr::<ebr::HMList<String, String>, N>(config, PrefillStrategy::Decreasing)
+                bench_map_ebr::<ebr::HMList<usize, usize>, N>(config, PrefillStrategy::Decreasing)
             }
-            DS::HHSList => bench_map_ebr::<ebr::HHSList<String, String>, N>(
+            DS::HHSList => {
+                bench_map_ebr::<ebr::HHSList<usize, usize>, N>(config, PrefillStrategy::Decreasing)
+            }
+            DS::HashMap => {
+                bench_map_ebr::<ebr::HashMap<usize, usize>, N>(config, PrefillStrategy::Decreasing)
+            }
+            DS::NMTree => {
+                bench_map_ebr::<ebr::NMTreeMap<usize, usize>, N>(config, PrefillStrategy::Random)
+            }
+            DS::BonsaiTree => bench_map_ebr::<ebr::BonsaiTreeMap<usize, usize>, N>(
+                config,
+                PrefillStrategy::Random,
+            ),
+            DS::EFRBTree => {
+                bench_map_ebr::<ebr::EFRBTree<usize, usize>, N>(config, PrefillStrategy::Random)
+            }
+            DS::SkipList => {
+                bench_map_ebr::<ebr::SkipList<usize, usize>, N>(config, PrefillStrategy::Random)
+            }
+        },
+        MM::PEBR => match config.ds {
+            DS::HList => {
+                bench_map_pebr::<pebr::HList<usize, usize>, N>(config, PrefillStrategy::Decreasing)
+            }
+            DS::HMList => {
+                bench_map_pebr::<pebr::HMList<usize, usize>, N>(config, PrefillStrategy::Decreasing)
+            }
+            DS::HHSList => bench_map_pebr::<pebr::HHSList<usize, usize>, N>(
                 config,
                 PrefillStrategy::Decreasing,
             ),
-            DS::HashMap => bench_map_ebr::<ebr::HashMap<String, String>, N>(
+            DS::HashMap => bench_map_pebr::<pebr::HashMap<usize, usize>, N>(
                 config,
                 PrefillStrategy::Decreasing,
             ),
             DS::NMTree => {
-                bench_map_ebr::<ebr::NMTreeMap<String, String>, N>(config, PrefillStrategy::Random)
+                bench_map_pebr::<pebr::NMTreeMap<usize, usize>, N>(config, PrefillStrategy::Random)
             }
-            DS::BonsaiTree => bench_map_ebr::<ebr::BonsaiTreeMap<String, String>, N>(
+            DS::BonsaiTree => bench_map_pebr::<pebr::BonsaiTreeMap<usize, usize>, N>(
                 config,
                 PrefillStrategy::Random,
             ),
             DS::EFRBTree => {
-                bench_map_ebr::<ebr::EFRBTree<String, String>, N>(config, PrefillStrategy::Random)
+                bench_map_pebr::<pebr::EFRBTree<usize, usize>, N>(config, PrefillStrategy::Random)
             }
             DS::SkipList => {
-                bench_map_ebr::<ebr::SkipList<String, String>, N>(config, PrefillStrategy::Random)
-            }
-        },
-        MM::PEBR => match config.ds {
-            DS::HList => bench_map_pebr::<pebr::HList<String, String>, N>(
-                config,
-                PrefillStrategy::Decreasing,
-            ),
-            DS::HMList => bench_map_pebr::<pebr::HMList<String, String>, N>(
-                config,
-                PrefillStrategy::Decreasing,
-            ),
-            DS::HHSList => bench_map_pebr::<pebr::HHSList<String, String>, N>(
-                config,
-                PrefillStrategy::Decreasing,
-            ),
-            DS::HashMap => bench_map_pebr::<pebr::HashMap<String, String>, N>(
-                config,
-                PrefillStrategy::Decreasing,
-            ),
-            DS::NMTree => bench_map_pebr::<pebr::NMTreeMap<String, String>, N>(
-                config,
-                PrefillStrategy::Random,
-            ),
-            DS::BonsaiTree => bench_map_pebr::<pebr::BonsaiTreeMap<String, String>, N>(
-                config,
-                PrefillStrategy::Random,
-            ),
-            DS::EFRBTree => {
-                bench_map_pebr::<pebr::EFRBTree<String, String>, N>(config, PrefillStrategy::Random)
-            }
-            DS::SkipList => {
-                bench_map_pebr::<pebr::SkipList<String, String>, N>(config, PrefillStrategy::Random)
+                bench_map_pebr::<pebr::SkipList<usize, usize>, N>(config, PrefillStrategy::Random)
             }
         },
         MM::HP => match config.ds {
             DS::HMList => {
-                bench_map_hp::<hp::HMList<String, String>, N>(config, PrefillStrategy::Decreasing)
+                bench_map_hp::<hp::HMList<usize, usize>, N>(config, PrefillStrategy::Decreasing)
             }
             DS::HashMap => {
-                bench_map_hp::<hp::HashMap<String, String>, N>(config, PrefillStrategy::Decreasing)
+                bench_map_hp::<hp::HashMap<usize, usize>, N>(config, PrefillStrategy::Decreasing)
             }
             DS::NMTree => {
-                bench_map_hp::<hp::NMTreeMap<String, String>, N>(config, PrefillStrategy::Random)
+                bench_map_hp::<hp::NMTreeMap<usize, usize>, N>(config, PrefillStrategy::Random)
             }
             DS::EFRBTree => {
-                bench_map_hp::<hp::EFRBTree<String, String>, N>(config, PrefillStrategy::Random)
+                bench_map_hp::<hp::EFRBTree<usize, usize>, N>(config, PrefillStrategy::Random)
             }
             DS::SkipList => {
-                bench_map_hp::<hp::SkipList<String, String>, N>(config, PrefillStrategy::Random)
+                bench_map_hp::<hp::SkipList<usize, usize>, N>(config, PrefillStrategy::Random)
             }
-            DS::BonsaiTree => bench_map_hp::<hp::BonsaiTreeMap<String, String>, N>(
-                config,
-                PrefillStrategy::Random,
-            ),
+            DS::BonsaiTree => {
+                bench_map_hp::<hp::BonsaiTreeMap<usize, usize>, N>(config, PrefillStrategy::Random)
+            }
             _ => panic!("Unsupported data structure for HP"),
         },
         MM::HP_PP => match config.ds {
             DS::HList => {
-                bench_map_hp::<hp_pp::HList<String, String>, N>(config, PrefillStrategy::Decreasing)
+                bench_map_hp::<hp_pp::HList<usize, usize>, N>(config, PrefillStrategy::Decreasing)
             }
-            DS::HMList => bench_map_hp::<hp_pp::HMList<String, String>, N>(
-                config,
-                PrefillStrategy::Decreasing,
-            ),
-            DS::HHSList => bench_map_hp::<hp_pp::HHSList<String, String>, N>(
-                config,
-                PrefillStrategy::Decreasing,
-            ),
-            DS::HashMap => bench_map_hp::<hp_pp::HashMap<String, String>, N>(
-                config,
-                PrefillStrategy::Decreasing,
-            ),
+            DS::HMList => {
+                bench_map_hp::<hp_pp::HMList<usize, usize>, N>(config, PrefillStrategy::Decreasing)
+            }
+            DS::HHSList => {
+                bench_map_hp::<hp_pp::HHSList<usize, usize>, N>(config, PrefillStrategy::Decreasing)
+            }
+            DS::HashMap => {
+                bench_map_hp::<hp_pp::HashMap<usize, usize>, N>(config, PrefillStrategy::Decreasing)
+            }
             DS::NMTree => {
-                bench_map_hp::<hp_pp::NMTreeMap<String, String>, N>(config, PrefillStrategy::Random)
+                bench_map_hp::<hp_pp::NMTreeMap<usize, usize>, N>(config, PrefillStrategy::Random)
             }
             DS::EFRBTree => {
-                bench_map_hp::<hp_pp::EFRBTree<String, String>, N>(config, PrefillStrategy::Random)
+                bench_map_hp::<hp_pp::EFRBTree<usize, usize>, N>(config, PrefillStrategy::Random)
             }
             DS::SkipList => {
-                bench_map_hp::<hp_pp::SkipList<String, String>, N>(config, PrefillStrategy::Random)
+                bench_map_hp::<hp_pp::SkipList<usize, usize>, N>(config, PrefillStrategy::Random)
             }
-            DS::BonsaiTree => bench_map_hp::<hp_pp::BonsaiTreeMap<String, String>, N>(
+            DS::BonsaiTree => bench_map_hp::<hp_pp::BonsaiTreeMap<usize, usize>, N>(
                 config,
                 PrefillStrategy::Random,
             ),
         },
         MM::NBR => match config.ds {
-            DS::HList => bench_map_nbr::<nbr::HList<String, String>, N>(
+            DS::HList => {
+                bench_map_nbr::<nbr::HList<usize, usize>, N>(config, PrefillStrategy::Decreasing, 2)
+            }
+            DS::HMList => bench_map_nbr::<nbr::HMList<usize, usize>, N>(
                 config,
                 PrefillStrategy::Decreasing,
                 2,
             ),
-            DS::HMList => bench_map_nbr::<nbr::HMList<String, String>, N>(
+            DS::HHSList => bench_map_nbr::<nbr::HHSList<usize, usize>, N>(
                 config,
                 PrefillStrategy::Decreasing,
                 2,
             ),
-            DS::HHSList => bench_map_nbr::<nbr::HHSList<String, String>, N>(
+            DS::HashMap => bench_map_nbr::<nbr::HashMap<usize, usize>, N>(
                 config,
                 PrefillStrategy::Decreasing,
                 2,
             ),
-            DS::HashMap => bench_map_nbr::<nbr::HashMap<String, String>, N>(
-                config,
-                PrefillStrategy::Decreasing,
-                2,
-            ),
-            DS::NMTree => bench_map_nbr::<nbr::NMTreeMap<String, String>, N>(
-                config,
-                PrefillStrategy::Random,
-                4,
-            ),
-            DS::SkipList => bench_map_nbr::<nbr::SkipList<String, String>, N>(
+            DS::NMTree => {
+                bench_map_nbr::<nbr::NMTreeMap<usize, usize>, N>(config, PrefillStrategy::Random, 4)
+            }
+            DS::SkipList => bench_map_nbr::<nbr::SkipList<usize, usize>, N>(
                 config,
                 PrefillStrategy::Random,
                 nbr::skip_list::MAX_HEIGHT * 2 + 1,
             ),
-            DS::EFRBTree => bench_map_nbr::<nbr::EFRBTree<String, String>, N>(
-                config,
-                PrefillStrategy::Random,
-                11,
-            ),
+            DS::EFRBTree => {
+                bench_map_nbr::<nbr::EFRBTree<usize, usize>, N>(config, PrefillStrategy::Random, 11)
+            }
             _ => panic!("Unsupported data structure for NBR"),
         },
         MM::CDRC_EBR => match config.ds {
             DS::HList => bench_map_cdrc::<
                 cdrc_rs::GuardEBR,
-                cdrc::HList<String, String, cdrc_rs::GuardEBR>,
+                cdrc::HList<usize, usize, cdrc_rs::GuardEBR>,
                 N,
             >(config, PrefillStrategy::Decreasing),
             DS::HMList => bench_map_cdrc::<
                 cdrc_rs::GuardEBR,
-                cdrc::HMList<String, String, cdrc_rs::GuardEBR>,
+                cdrc::HMList<usize, usize, cdrc_rs::GuardEBR>,
                 N,
             >(config, PrefillStrategy::Decreasing),
             DS::HHSList => bench_map_cdrc::<
                 cdrc_rs::GuardEBR,
-                cdrc::HHSList<String, String, cdrc_rs::GuardEBR>,
+                cdrc::HHSList<usize, usize, cdrc_rs::GuardEBR>,
                 N,
             >(config, PrefillStrategy::Decreasing),
             DS::HashMap => bench_map_cdrc::<
                 cdrc_rs::GuardEBR,
-                cdrc::HashMap<String, String, cdrc_rs::GuardEBR>,
+                cdrc::HashMap<usize, usize, cdrc_rs::GuardEBR>,
                 N,
             >(config, PrefillStrategy::Decreasing),
             DS::NMTree => bench_map_cdrc::<
                 cdrc_rs::GuardEBR,
-                cdrc::NMTreeMap<String, String, cdrc_rs::GuardEBR>,
+                cdrc::NMTreeMap<usize, usize, cdrc_rs::GuardEBR>,
                 N,
             >(config, PrefillStrategy::Random),
             DS::SkipList => bench_map_cdrc::<
                 cdrc_rs::GuardEBR,
-                cdrc::SkipList<String, String, cdrc_rs::GuardEBR>,
+                cdrc::SkipList<usize, usize, cdrc_rs::GuardEBR>,
                 N,
             >(config, PrefillStrategy::Random),
             DS::BonsaiTree => bench_map_cdrc::<
                 cdrc_rs::GuardEBR,
-                cdrc::BonsaiTreeMap<String, String, cdrc_rs::GuardEBR>,
+                cdrc::BonsaiTreeMap<usize, usize, cdrc_rs::GuardEBR>,
                 N,
             >(config, PrefillStrategy::Random),
             _ => panic!("Unsupported data structure for CDRC EBR"),
         },
         MM::HP_SHARP => match config.ds {
-            DS::HList => bench_map_hp_sharp::<hp_sharp_bench::HList<String, String>>(
+            DS::HList => bench_map_hp_sharp::<hp_sharp_bench::HList<usize, usize>>(
                 config,
                 PrefillStrategy::Decreasing,
             ),
-            DS::HMList => bench_map_hp_sharp::<hp_sharp_bench::HMList<String, String>>(
+            DS::HMList => bench_map_hp_sharp::<hp_sharp_bench::HMList<usize, usize>>(
                 config,
                 PrefillStrategy::Decreasing,
             ),
-            DS::HHSList => bench_map_hp_sharp::<hp_sharp_bench::HHSList<String, String>>(
+            DS::HHSList => bench_map_hp_sharp::<hp_sharp_bench::HHSList<usize, usize>>(
                 config,
                 PrefillStrategy::Decreasing,
             ),
-            DS::HashMap => bench_map_hp_sharp::<hp_sharp_bench::HashMap<String, String>>(
+            DS::HashMap => bench_map_hp_sharp::<hp_sharp_bench::HashMap<usize, usize>>(
                 config,
                 PrefillStrategy::Decreasing,
             ),
-            DS::NMTree => bench_map_hp_sharp::<hp_sharp_bench::NMTreeMap<String, String>>(
+            DS::NMTree => bench_map_hp_sharp::<hp_sharp_bench::NMTreeMap<usize, usize>>(
                 config,
                 PrefillStrategy::Random,
             ),
-            DS::SkipList => bench_map_hp_sharp::<hp_sharp_bench::SkipList<String, String>>(
+            DS::SkipList => bench_map_hp_sharp::<hp_sharp_bench::SkipList<usize, usize>>(
                 config,
                 PrefillStrategy::Random,
             ),
@@ -606,12 +589,6 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
     );
 }
 
-#[inline]
-fn generate_key(config: &Config, rng: &mut ThreadRng) -> String {
-    let key = config.key_dist.sample(rng);
-    format!("{:0width$}", key, width = config.key_padding_width)
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrefillStrategy {
     Random,
@@ -619,7 +596,7 @@ enum PrefillStrategy {
 }
 
 impl PrefillStrategy {
-    fn prefill_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
+    fn prefill_nr<M: ebr::ConcurrentMap<usize, usize> + Send + Sync>(
         self,
         config: &Config,
         map: &M,
@@ -628,19 +605,19 @@ impl PrefillStrategy {
         match self {
             PrefillStrategy::Random => {
                 for _ in 0..config.prefill {
-                    let key = generate_key(config, rng);
-                    let value = key.to_string();
+                    let key = config.key_dist.sample(rng);
+                    let value = key.clone();
                     map.insert(key, value, unsafe { crossbeam_ebr::unprotected() });
                 }
             }
             PrefillStrategy::Decreasing => {
                 let mut keys = Vec::with_capacity(config.prefill);
                 for _ in 0..config.prefill {
-                    keys.push(generate_key(config, rng));
+                    keys.push(config.key_dist.sample(rng));
                 }
                 keys.sort_by(|a, b| b.cmp(a));
                 for key in keys.drain(..) {
-                    let value = key.to_string();
+                    let value = key.clone();
                     map.insert(key, value, unsafe { crossbeam_ebr::unprotected() });
                 }
             }
@@ -649,7 +626,7 @@ impl PrefillStrategy {
         stdout().flush().unwrap();
     }
 
-    fn prefill_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
+    fn prefill_ebr<M: ebr::ConcurrentMap<usize, usize> + Send + Sync>(
         self,
         config: &Config,
         map: &M,
@@ -659,19 +636,19 @@ impl PrefillStrategy {
         match self {
             PrefillStrategy::Random => {
                 for _ in 0..config.prefill {
-                    let key = generate_key(config, rng);
-                    let value = key.to_string();
+                    let key = config.key_dist.sample(rng);
+                    let value = key.clone();
                     map.insert(key, value, guard);
                 }
             }
             PrefillStrategy::Decreasing => {
                 let mut keys = Vec::with_capacity(config.prefill);
                 for _ in 0..config.prefill {
-                    keys.push(generate_key(config, rng));
+                    keys.push(config.key_dist.sample(rng));
                 }
                 keys.sort_by(|a, b| b.cmp(a));
                 for key in keys.drain(..) {
-                    let value = key.to_string();
+                    let value = key.clone();
                     map.insert(key, value, guard);
                 }
             }
@@ -680,7 +657,7 @@ impl PrefillStrategy {
         stdout().flush().unwrap();
     }
 
-    fn prefill_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(
+    fn prefill_pebr<M: pebr::ConcurrentMap<usize, usize> + Send + Sync>(
         self,
         config: &Config,
         map: &M,
@@ -691,19 +668,19 @@ impl PrefillStrategy {
         match self {
             PrefillStrategy::Random => {
                 for _ in 0..config.prefill {
-                    let key = generate_key(config, rng);
-                    let value = key.to_string();
+                    let key = config.key_dist.sample(rng);
+                    let value = key.clone();
                     map.insert(&mut handle, key, value, guard);
                 }
             }
             PrefillStrategy::Decreasing => {
                 let mut keys = Vec::with_capacity(config.prefill);
                 for _ in 0..config.prefill {
-                    keys.push(generate_key(config, rng));
+                    keys.push(config.key_dist.sample(rng));
                 }
                 keys.sort_by(|a, b| b.cmp(a));
                 for key in keys.drain(..) {
-                    let value = key.to_string();
+                    let value = key.clone();
                     map.insert(&mut handle, key, value, guard);
                 }
             }
@@ -712,7 +689,7 @@ impl PrefillStrategy {
         stdout().flush().unwrap();
     }
 
-    fn prefill_hp<M: hp::ConcurrentMap<String, String> + Send + Sync>(
+    fn prefill_hp<M: hp::ConcurrentMap<usize, usize> + Send + Sync>(
         self,
         config: &Config,
         map: &M,
@@ -722,19 +699,19 @@ impl PrefillStrategy {
         match self {
             PrefillStrategy::Random => {
                 for _ in 0..config.prefill {
-                    let key = generate_key(config, rng);
-                    let value = key.to_string();
+                    let key = config.key_dist.sample(rng);
+                    let value = key.clone();
                     map.insert(&mut handle, key, value);
                 }
             }
             PrefillStrategy::Decreasing => {
                 let mut keys = Vec::with_capacity(config.prefill);
                 for _ in 0..config.prefill {
-                    keys.push(generate_key(config, rng));
+                    keys.push(config.key_dist.sample(rng));
                 }
                 keys.sort_by(|a, b| b.cmp(a));
                 for key in keys.drain(..) {
-                    let value = key.to_string();
+                    let value = key.clone();
                     map.insert(&mut handle, key, value);
                 }
             }
@@ -743,7 +720,7 @@ impl PrefillStrategy {
         stdout().flush().unwrap();
     }
 
-    fn prefill_nbr<M: nbr::ConcurrentMap<String, String> + Send + Sync>(
+    fn prefill_nbr<M: nbr::ConcurrentMap<usize, usize> + Send + Sync>(
         self,
         config: &Config,
         map: &M,
@@ -753,19 +730,19 @@ impl PrefillStrategy {
         match self {
             PrefillStrategy::Random => {
                 for _ in 0..config.prefill {
-                    let key = generate_key(config, rng);
-                    let value = key.to_string();
+                    let key = config.key_dist.sample(rng);
+                    let value = key.clone();
                     map.insert(key, value, guard);
                 }
             }
             PrefillStrategy::Decreasing => {
                 let mut keys = Vec::with_capacity(config.prefill);
                 for _ in 0..config.prefill {
-                    keys.push(generate_key(config, rng));
+                    keys.push(config.key_dist.sample(rng));
                 }
                 keys.sort_by(|a, b| b.cmp(a));
                 for key in keys.drain(..) {
-                    let value = key.to_string();
+                    let value = key.clone();
                     map.insert(key, value, guard);
                 }
             }
@@ -776,7 +753,7 @@ impl PrefillStrategy {
 
     fn prefill_cdrc<
         Guard: cdrc_rs::AcquireRetire,
-        M: cdrc::ConcurrentMap<String, String, Guard> + Send + Sync,
+        M: cdrc::ConcurrentMap<usize, usize, Guard> + Send + Sync,
     >(
         self,
         config: &Config,
@@ -787,19 +764,19 @@ impl PrefillStrategy {
         match self {
             PrefillStrategy::Random => {
                 for _ in 0..config.prefill {
-                    let key = generate_key(config, rng);
-                    let value = key.to_string();
+                    let key = config.key_dist.sample(rng);
+                    let value = key.clone();
                     map.insert(key, value, guard);
                 }
             }
             PrefillStrategy::Decreasing => {
                 let mut keys = Vec::with_capacity(config.prefill);
                 for _ in 0..config.prefill {
-                    keys.push(generate_key(config, rng));
+                    keys.push(config.key_dist.sample(rng));
                 }
                 keys.sort_by(|a, b| b.cmp(a));
                 for key in keys.drain(..) {
-                    let value = key.to_string();
+                    let value = key.clone();
                     map.insert(key, value, guard);
                 }
             }
@@ -808,7 +785,7 @@ impl PrefillStrategy {
         stdout().flush().unwrap();
     }
 
-    fn prefill_hp_sharp<M: hp_sharp_bench::ConcurrentMap<String, String> + Send + Sync>(
+    fn prefill_hp_sharp<M: hp_sharp_bench::ConcurrentMap<usize, usize> + Send + Sync>(
         self,
         config: &Config,
         map: &M,
@@ -820,19 +797,19 @@ impl PrefillStrategy {
             match self {
                 PrefillStrategy::Random => {
                     for _ in 0..config.prefill {
-                        let key = generate_key(config, rng);
-                        let value = key.to_string();
+                        let key = config.key_dist.sample(rng);
+                        let value = key.clone();
                         map.insert(key, value, output, handle);
                     }
                 }
                 PrefillStrategy::Decreasing => {
                     let mut keys = Vec::with_capacity(config.prefill);
                     for _ in 0..config.prefill {
-                        keys.push(generate_key(config, rng));
+                        keys.push(config.key_dist.sample(rng));
                     }
                     keys.sort_by(|a, b| b.cmp(a));
                     for key in keys.drain(..) {
-                        let value = key.to_string();
+                        let value = key.clone();
                         map.insert(key, value, output, handle);
                     }
                 }
@@ -843,7 +820,7 @@ impl PrefillStrategy {
     }
 }
 
-fn bench_map_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
+fn bench_map_nr<M: ebr::ConcurrentMap<usize, usize> + Send + Sync>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
@@ -894,13 +871,13 @@ fn bench_map_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
                 let start = Instant::now();
 
                 while start.elapsed() < config.duration {
-                    let key = generate_key(config, rng);
+                    let key = config.key_dist.sample(rng);
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
                         Op::Get => {
                             map.get(&key, unsafe { crossbeam_ebr::leaking() });
                         }
                         Op::Insert => {
-                            let value = key.to_string();
+                            let value = key.clone();
                             map.insert(key, value, unsafe { crossbeam_ebr::leaking() });
                         }
                         Op::Remove => {
@@ -927,7 +904,7 @@ fn bench_map_nr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
     (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
 }
 
-fn bench_map_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>(
+fn bench_map_ebr<M: ebr::ConcurrentMap<usize, usize> + Send + Sync, N: Unsigned>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
@@ -1010,13 +987,13 @@ fn bench_map_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigne
 
                 let mut guard = handle.pin();
                 while start.elapsed() < config.duration {
-                    let key = generate_key(config, rng);
+                    let key = config.key_dist.sample(rng);
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
                         Op::Get => {
                             map.get(&key, &guard);
                         }
                         Op::Insert => {
-                            let value = key.to_string();
+                            let value = key.clone();
                             map.insert(key, value, &guard);
                         }
                         Op::Remove => {
@@ -1047,7 +1024,7 @@ fn bench_map_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigne
     (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
 }
 
-fn bench_map_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>(
+fn bench_map_pebr<M: pebr::ConcurrentMap<usize, usize> + Send + Sync, N: Unsigned>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
@@ -1131,13 +1108,13 @@ fn bench_map_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync, N: Unsig
 
                 let mut guard = handle.pin();
                 while start.elapsed() < config.duration {
-                    let key = generate_key(config, rng);
+                    let key = config.key_dist.sample(rng);
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
                         Op::Get => {
                             map.get(&mut map_handle, &key, &mut guard);
                         }
                         Op::Insert => {
-                            let value = key.to_string();
+                            let value = key.clone();
                             map.insert(&mut map_handle, key, value, &mut guard);
                         }
                         Op::Remove => {
@@ -1168,7 +1145,7 @@ fn bench_map_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync, N: Unsig
     (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
 }
 
-fn bench_map_hp<M: hp::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>(
+fn bench_map_hp<M: hp::ConcurrentMap<usize, usize> + Send + Sync, N: Unsigned>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
@@ -1233,13 +1210,13 @@ fn bench_map_hp<M: hp::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>
                 let start = Instant::now();
 
                 while start.elapsed() < config.duration {
-                    let key = generate_key(config, rng);
+                    let key = config.key_dist.sample(rng);
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
                         Op::Get => {
                             map.get(&mut map_handle, &key);
                         }
                         Op::Insert => {
-                            let value = key.to_string();
+                            let value = key.clone();
                             map.insert(&mut map_handle, key, value);
                         }
                         Op::Remove => {
@@ -1266,7 +1243,7 @@ fn bench_map_hp<M: hp::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>
     (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
 }
 
-fn bench_map_nbr<M: nbr::ConcurrentMap<String, String> + Send + Sync, N: Unsigned>(
+fn bench_map_nbr<M: nbr::ConcurrentMap<usize, usize> + Send + Sync, N: Unsigned>(
     config: &Config,
     strategy: PrefillStrategy,
     max_hazptr_per_thread: usize,
@@ -1334,13 +1311,13 @@ fn bench_map_nbr<M: nbr::ConcurrentMap<String, String> + Send + Sync, N: Unsigne
                 let start = Instant::now();
 
                 while start.elapsed() < config.duration {
-                    let key = generate_key(config, rng);
+                    let key = config.key_dist.sample(rng);
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
                         Op::Get => {
                             map.get(&key, &guard);
                         }
                         Op::Insert => {
-                            let value = key.to_string();
+                            let value = key.clone();
                             map.insert(key, value, &guard);
                         }
                         Op::Remove => {
@@ -1369,7 +1346,7 @@ fn bench_map_nbr<M: nbr::ConcurrentMap<String, String> + Send + Sync, N: Unsigne
 
 fn bench_map_cdrc<
     Guard: cdrc_rs::AcquireRetire,
-    M: cdrc::ConcurrentMap<String, String, Guard> + Send + Sync,
+    M: cdrc::ConcurrentMap<usize, usize, Guard> + Send + Sync,
     N: Unsigned,
 >(
     config: &Config,
@@ -1435,13 +1412,13 @@ fn bench_map_cdrc<
 
                 let mut guard = Guard::handle();
                 while start.elapsed() < config.duration {
-                    let key = generate_key(config, rng);
+                    let key = config.key_dist.sample(rng);
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
                         Op::Get => {
                             map.get(&key, &guard);
                         }
                         Op::Insert => {
-                            let value = key.to_string();
+                            let value = key.clone();
                             map.insert(key, value, &guard);
                         }
                         Op::Remove => {
@@ -1472,7 +1449,7 @@ fn bench_map_cdrc<
     (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
 }
 
-fn bench_map_hp_sharp<M: hp_sharp_bench::ConcurrentMap<String, String> + Send + Sync>(
+fn bench_map_hp_sharp<M: hp_sharp_bench::ConcurrentMap<usize, usize> + Send + Sync>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
@@ -1539,13 +1516,13 @@ fn bench_map_hp_sharp<M: hp_sharp_bench::ConcurrentMap<String, String> + Send + 
                     let start = Instant::now();
 
                     while start.elapsed() < config.duration {
-                        let key = generate_key(config, rng);
+                        let key = config.key_dist.sample(rng);
                         match Op::OPS[config.op_dist.sample(&mut rng)] {
                             Op::Get => {
                                 map.get(&key, output, handle);
                             }
                             Op::Insert => {
-                                let value = key.to_string();
+                                let value = key.clone();
                                 map.insert(key, value, output, handle);
                             }
                             Op::Remove => {
