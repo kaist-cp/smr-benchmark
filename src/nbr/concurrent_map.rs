@@ -16,13 +16,18 @@ pub mod tests {
     use rand::prelude::*;
     use std::sync::Arc;
 
-    const THREADS: i32 = 1;
+    const THREADS: i32 = 30;
     const ELEMENTS_PER_THREADS: i32 = 1000;
 
     /// `max_hazptr_per_thread` depends on the data structure.
     pub fn smoke<M: ConcurrentMap<i32, String> + Send + Sync>(max_hazptr_per_thread: usize) {
         let map = &M::new();
-        let collector = Arc::new(Collector::new(THREADS as usize, max_hazptr_per_thread));
+        let collector = Arc::new(Collector::new(
+            THREADS as usize,
+            max_hazptr_per_thread,
+            128,
+            32,
+        ));
 
         thread::scope(|s| {
             for t in 0..THREADS {

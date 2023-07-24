@@ -166,7 +166,7 @@ where
 
     /// Inserts a value.
     #[inline]
-    pub fn insert(&mut self, node: *mut Node<K, V>) -> Result<(), *mut Node<K, V>> {
+    pub fn insert(&mut self, node: *mut Node<K, V>) -> bool {
         unsafe { &*node }.next.store(self.curr, Ordering::Relaxed);
         match self
             .prev
@@ -174,9 +174,9 @@ where
         {
             Ok(node) => {
                 self.curr = node;
-                Ok(())
+                true
             }
-            Err(_) => Err(node),
+            Err(_) => false,
         }
     }
 
@@ -216,7 +216,7 @@ where
     }
 
     /// Finds a key using the given find strategy.
-    #[inline]
+    #[inline(always)]
     fn find<'g, F>(&'g self, key: &K, find: &F) -> (bool, Cursor<'g, K, V>)
     where
         F: Fn(&mut Cursor<'g, K, V>, &K) -> Result<bool, ()>,
@@ -247,7 +247,7 @@ where
     where
         F: Fn(&mut Cursor<'g, K, V>, &K) -> Result<bool, ()>,
     {
-        let mut node = Box::into_raw(Box::new(Node::new(key, value)));
+        let node = Box::into_raw(Box::new(Node::new(key, value)));
         loop {
             let (found, mut cursor) = self.find(unsafe { &((&*node).key) }, &find);
             if found {
@@ -255,9 +255,8 @@ where
                 return false;
             }
 
-            match cursor.insert(node) {
-                Err(n) => node = n,
-                Ok(()) => return true,
+            if cursor.insert(node) {
+                return true;
             }
         }
     }

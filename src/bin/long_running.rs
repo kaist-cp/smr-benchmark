@@ -26,6 +26,16 @@ use smr_benchmark::{cdrc, ebr};
 use smr_benchmark::{hp, hp_pp, hp_sharp as hp_sharp_bench};
 use smr_benchmark::{nbr, pebr};
 
+const NBR_CAP: NBRConfig = NBRConfig {
+    bag_cap_pow2: 256,
+    lowatermark: 32,
+};
+
+struct NBRConfig {
+    bag_cap_pow2: usize,
+    lowatermark: usize,
+}
+
 #[derive(PartialEq, Debug, ValueEnum, Clone)]
 #[allow(non_camel_case_types)]
 pub enum MM {
@@ -1308,7 +1318,12 @@ fn bench_map_nbr(
     let map = &nbr::HHSList::new();
     strategy.prefill_nbr(config, map);
 
-    let collector = &nbr_rs::Collector::new(config.writers + config.readers, max_hazptr_per_thread);
+    let collector = &nbr_rs::Collector::new(
+        config.writers + config.readers,
+        max_hazptr_per_thread,
+        NBR_CAP.bag_cap_pow2,
+        NBR_CAP.lowatermark,
+    );
 
     let barrier = &Arc::new(Barrier::new(
         config.writers + config.readers + config.aux_thread,

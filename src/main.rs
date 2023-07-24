@@ -30,6 +30,22 @@ use smr_benchmark::pebr;
 use smr_benchmark::{cdrc, ebr};
 use smr_benchmark::{hp, hp_sharp as hp_sharp_bench};
 
+const NBR_LARGE_CAP: NBRConfig = NBRConfig {
+    // We found that this configuration performs better for our benchmark than the original:
+    // https://gitlab.com/aajayssingh/nbr_setbench_plus/-/blob/eaadbd3c/common/recordmgr/reclaimer_nbrplus.h
+    bag_cap_pow2: 8192,
+    lowatermark: 1024,
+};
+const NBR_CAP: NBRConfig = NBRConfig {
+    bag_cap_pow2: 256,
+    lowatermark: 32,
+};
+
+struct NBRConfig {
+    bag_cap_pow2: usize,
+    lowatermark: usize,
+}
+
 #[derive(PartialEq, Debug, ValueEnum, Clone)]
 pub enum DS {
     HList,
@@ -50,6 +66,7 @@ pub enum MM {
     PEBR,
     HP,
     HP_PP,
+    NBR_LARGE,
     NBR,
     CDRC_EBR,
     HP_SHARP,
@@ -463,36 +480,94 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 PrefillStrategy::Random,
             ),
         },
-        MM::NBR => match config.ds {
-            DS::HList => {
-                bench_map_nbr::<nbr::HList<usize, usize>, N>(config, PrefillStrategy::Decreasing, 2)
-            }
-            DS::HMList => bench_map_nbr::<nbr::HMList<usize, usize>, N>(
+        MM::NBR_LARGE => match config.ds {
+            DS::HList => bench_map_nbr::<nbr::HList<usize, usize>>(
                 config,
                 PrefillStrategy::Decreasing,
                 2,
+                &NBR_LARGE_CAP,
             ),
-            DS::HHSList => bench_map_nbr::<nbr::HHSList<usize, usize>, N>(
+            DS::HMList => bench_map_nbr::<nbr::HMList<usize, usize>>(
                 config,
                 PrefillStrategy::Decreasing,
                 2,
+                &NBR_LARGE_CAP,
             ),
-            DS::HashMap => bench_map_nbr::<nbr::HashMap<usize, usize>, N>(
+            DS::HHSList => bench_map_nbr::<nbr::HHSList<usize, usize>>(
                 config,
                 PrefillStrategy::Decreasing,
                 2,
+                &NBR_LARGE_CAP,
             ),
-            DS::NMTree => {
-                bench_map_nbr::<nbr::NMTreeMap<usize, usize>, N>(config, PrefillStrategy::Random, 4)
-            }
-            DS::SkipList => bench_map_nbr::<nbr::SkipList<usize, usize>, N>(
+            DS::HashMap => bench_map_nbr::<nbr::HashMap<usize, usize>>(
+                config,
+                PrefillStrategy::Decreasing,
+                2,
+                &NBR_LARGE_CAP,
+            ),
+            DS::NMTree => bench_map_nbr::<nbr::NMTreeMap<usize, usize>>(
+                config,
+                PrefillStrategy::Random,
+                4,
+                &NBR_LARGE_CAP,
+            ),
+            DS::SkipList => bench_map_nbr::<nbr::SkipList<usize, usize>>(
                 config,
                 PrefillStrategy::Random,
                 nbr::skip_list::MAX_HEIGHT * 2 + 1,
+                &NBR_LARGE_CAP,
             ),
-            DS::EFRBTree => {
-                bench_map_nbr::<nbr::EFRBTree<usize, usize>, N>(config, PrefillStrategy::Random, 11)
-            }
+            DS::EFRBTree => bench_map_nbr::<nbr::EFRBTree<usize, usize>>(
+                config,
+                PrefillStrategy::Random,
+                11,
+                &NBR_LARGE_CAP,
+            ),
+            _ => panic!("Unsupported data structure for NBR"),
+        },
+        MM::NBR => match config.ds {
+            DS::HList => bench_map_nbr::<nbr::HList<usize, usize>>(
+                config,
+                PrefillStrategy::Decreasing,
+                2,
+                &NBR_CAP,
+            ),
+            DS::HMList => bench_map_nbr::<nbr::HMList<usize, usize>>(
+                config,
+                PrefillStrategy::Decreasing,
+                2,
+                &NBR_CAP,
+            ),
+            DS::HHSList => bench_map_nbr::<nbr::HHSList<usize, usize>>(
+                config,
+                PrefillStrategy::Decreasing,
+                2,
+                &NBR_CAP,
+            ),
+            DS::HashMap => bench_map_nbr::<nbr::HashMap<usize, usize>>(
+                config,
+                PrefillStrategy::Decreasing,
+                2,
+                &NBR_CAP,
+            ),
+            DS::NMTree => bench_map_nbr::<nbr::NMTreeMap<usize, usize>>(
+                config,
+                PrefillStrategy::Random,
+                4,
+                &NBR_CAP,
+            ),
+            DS::SkipList => bench_map_nbr::<nbr::SkipList<usize, usize>>(
+                config,
+                PrefillStrategy::Random,
+                nbr::skip_list::MAX_HEIGHT * 2 + 1,
+                &NBR_CAP,
+            ),
+            DS::EFRBTree => bench_map_nbr::<nbr::EFRBTree<usize, usize>>(
+                config,
+                PrefillStrategy::Random,
+                11,
+                &NBR_CAP,
+            ),
             _ => panic!("Unsupported data structure for NBR"),
         },
         MM::CDRC_EBR => match config.ds {
@@ -1250,15 +1325,21 @@ fn bench_map_hp<M: hp::ConcurrentMap<usize, usize> + Send + Sync, N: Unsigned>(
     (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
 }
 
-fn bench_map_nbr<M: nbr::ConcurrentMap<usize, usize> + Send + Sync, N: Unsigned>(
+fn bench_map_nbr<M: nbr::ConcurrentMap<usize, usize> + Send + Sync>(
     config: &Config,
     strategy: PrefillStrategy,
     max_hazptr_per_thread: usize,
+    nbr_config: &NBRConfig,
 ) -> (u64, usize, usize, usize, usize) {
     let map = &M::new();
     strategy.prefill_nbr(config, map);
 
-    let collector = &nbr_rs::Collector::new(config.threads, max_hazptr_per_thread);
+    let collector = &nbr_rs::Collector::new(
+        config.threads,
+        max_hazptr_per_thread,
+        nbr_config.bag_cap_pow2,
+        nbr_config.lowatermark,
+    );
 
     let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
     let (ops_sender, ops_receiver) = mpsc::channel();
