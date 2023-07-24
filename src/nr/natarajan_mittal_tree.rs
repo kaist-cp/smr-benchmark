@@ -266,7 +266,11 @@ where
             leaf_dir: Direction::L,
         };
 
-        let mut curr = untagged(unsafe { &*untagged(record.leaf) }.left.load(Ordering::Acquire));
+        let mut curr = untagged(
+            unsafe { &*untagged(record.leaf) }
+                .left
+                .load(Ordering::Acquire),
+        );
 
         while let Some(curr_node) = unsafe { curr.as_ref() } {
             record.leaf = curr;
