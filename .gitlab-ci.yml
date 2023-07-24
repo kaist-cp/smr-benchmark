@@ -47,8 +47,8 @@ check:
 
     - cargo test -p hp-sharp -- --nocapture
     - cargo test --release -p hp-sharp -- --nocapture
-    - cargo test -- --nocapture
-    - cargo test --release -- --nocapture
+    - cargo test -- --nocapture --test-threads 1
+    - cargo test --release -- --nocapture --test-threads 1
 
 pages:
   stage: deploy

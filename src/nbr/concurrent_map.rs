@@ -25,7 +25,7 @@ pub mod tests {
         let collector = Arc::new(Collector::new(
             THREADS as usize,
             max_hazptr_per_thread,
-            128,
+            256,
             32,
         ));
 
