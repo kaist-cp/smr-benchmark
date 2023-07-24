@@ -352,7 +352,7 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 bench_map_nr::<nr::HashMap<usize, usize>>(config, PrefillStrategy::Decreasing)
             }
             DS::NMTree => {
-                bench_map_nr::<nr::NMTreeMap<usize, usize>>(config, PrefillStrategy::Decreasing)
+                bench_map_nr::<nr::NMTreeMap<usize, usize>>(config, PrefillStrategy::Random)
             }
             DS::SkipList => {
                 bench_map_nr::<nr::SkipList<usize, usize>>(config, PrefillStrategy::Random)

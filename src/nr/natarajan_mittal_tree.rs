@@ -148,22 +148,22 @@ struct SeekRecord<K, V> {
 impl<K, V> SeekRecord<K, V> {
     fn successor_addr(&self) -> &AtomicPtr<Node<K, V>> {
         match self.successor_dir {
-            Direction::L => &unsafe { &*self.ancestor }.left,
-            Direction::R => &unsafe { &*self.ancestor }.right,
+            Direction::L => &unsafe { &*untagged(self.ancestor) }.left,
+            Direction::R => &unsafe { &*untagged(self.ancestor) }.right,
         }
     }
 
     fn leaf_addr(&self) -> &AtomicPtr<Node<K, V>> {
         match self.leaf_dir {
-            Direction::L => &unsafe { &*self.parent }.left,
-            Direction::R => &unsafe { &*self.parent }.right,
+            Direction::L => &unsafe { &*untagged(self.parent) }.left,
+            Direction::R => &unsafe { &*untagged(self.parent) }.right,
         }
     }
 
     fn leaf_sibling_addr(&self) -> &AtomicPtr<Node<K, V>> {
         match self.leaf_dir {
-            Direction::L => &unsafe { &*self.parent }.right,
-            Direction::R => &unsafe { &*self.parent }.left,
+            Direction::L => &unsafe { &*untagged(self.parent) }.right,
+            Direction::R => &unsafe { &*untagged(self.parent) }.left,
         }
     }
 }
@@ -207,9 +207,9 @@ where
     // All `Shared<_>` fields are unmarked.
     fn seek<'g>(&'g self, key: &K) -> SeekRecord<K, V> {
         let s = self.r.left.load(Ordering::Relaxed);
-        let s_node = unsafe { &*s };
+        let s_node = unsafe { &*untagged(s) };
         let leaf = untagged(s_node.left.load(Ordering::Relaxed));
-        let leaf_node = unsafe { &*leaf };
+        let leaf_node = unsafe { &*untagged(leaf) };
 
         let mut record = SeekRecord {
             ancestor: &self.r as *const _ as *mut Node<K, V>,
@@ -254,7 +254,7 @@ where
     /// Similar to `seek`, but traverse the tree with only two pointers
     fn seek_leaf<'g>(&'g self, key: &K) -> SeekRecord<K, V> {
         let s = self.r.left.load(Ordering::Relaxed);
-        let s_node = unsafe { &*s };
+        let s_node = unsafe { &*untagged(s) };
         let leaf = untagged(s_node.left.load(Ordering::Acquire));
 
         let mut record = SeekRecord {
@@ -266,7 +266,7 @@ where
             leaf_dir: Direction::L,
         };
 
-        let mut curr = untagged(unsafe { &*record.leaf }.left.load(Ordering::Acquire));
+        let mut curr = untagged(unsafe { &*untagged(record.leaf) }.left.load(Ordering::Acquire));
 
         while let Some(curr_node) = unsafe { curr.as_ref() } {
             record.leaf = curr;
@@ -318,7 +318,7 @@ where
 
     pub fn get<'g>(&'g self, key: &'g K) -> Option<&'g V> {
         let record = self.seek_leaf(key);
-        let leaf_node = unsafe { &*record.leaf };
+        let leaf_node = unsafe { &*untagged(record.leaf) };
 
         if leaf_node.key.cmp(key) != cmp::Ordering::Equal {
             return None;
