@@ -62,47 +62,52 @@ where
 
     /// Clean up a chain of logically removed nodes in each traversal.
     fn find_harris(&self, key: &K, guard: &Guard) -> Cursor<K, V> {
-        let mut cursor = Cursor {
-            prev: ptr::null_mut(),
-            curr: ptr::null_mut(),
-            found: false,
-        };
+        let mut cursor;
         let mut prev_next;
 
         loop {
             read_phase!(guard; [cursor.prev, cursor.curr] => {
-                // Finding phase
-                // - cursor.curr: first unmarked node w/ key >= search key (4)
-                // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
-                // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
-                cursor.prev = &self.head as *const _ as *mut Node<K, V>;
-                cursor.curr = self.head.load(Ordering::Acquire);
-                prev_next = cursor.curr;
+                (cursor, prev_next) = {
+                    // Declaring inner cursor is important to let the compiler to conduct register
+                    // optimization.
+                    let mut cursor = Cursor {
+                        prev: &self.head as *const _ as *mut Node<K, V>,
+                        curr: self.head.load(Ordering::Acquire),
+                        found: false,
+                    };
+                    let mut prev_next = cursor.curr;
 
-                cursor.found = loop {
-                    let curr_node = some_or!(unsafe { cursor.curr.as_ref() }, break false);
-                    let next = curr_node.next.load(Ordering::Acquire);
+                    // Finding phase
+                    // - cursor.curr: first unmarked node w/ key >= search key (4)
+                    // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
+                    // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
 
-                    // - finding stage is done if cursor.curr advancement stops
-                    // - advance cursor.curr if (.next is marked) || (cursor.curr < key)
-                    // - stop cursor.curr if (not marked) && (cursor.curr >= key)
-                    // - advance cursor.prev if not marked
+                    cursor.found = loop {
+                        let curr_node = some_or!(unsafe { cursor.curr.as_ref() }, break false);
+                        let next = curr_node.next.load(Ordering::Acquire);
 
-                    if tag(next) != 0 {
-                         // We add a 0 tag here so that `cursor.curr`s tag is always 0.
-                        cursor.curr = tagged(next, 0);
-                        continue;
-                    }
+                        // - finding stage is done if cursor.curr advancement stops
+                        // - advance cursor.curr if (.next is marked) || (cursor.curr < key)
+                        // - stop cursor.curr if (not marked) && (cursor.curr >= key)
+                        // - advance cursor.prev if not marked
 
-                    match curr_node.key.cmp(key) {
-                        Less => {
-                            cursor.prev = cursor.curr;
-                            cursor.curr = next;
-                            prev_next = next;
+                        if tag(next) != 0 {
+                            // We add a 0 tag here so that `cursor.curr`s tag is always 0.
+                            cursor.curr = tagged(next, 0);
+                            continue;
                         }
-                        Equal => break true,
-                        Greater => break false,
-                    }
+
+                        match curr_node.key.cmp(key) {
+                            Less => {
+                                cursor.prev = cursor.curr;
+                                cursor.curr = next;
+                                prev_next = next;
+                            }
+                            Equal => break true,
+                            Greater => break false,
+                        }
+                    };
+                    (cursor, prev_next)
                 };
             });
 
@@ -134,42 +139,46 @@ where
     }
 
     fn find_harris_michael(&self, key: &K, guard: &Guard) -> Cursor<K, V> {
-        let mut cursor = Cursor {
-            prev: ptr::null_mut(),
-            curr: ptr::null_mut(),
-            found: false,
-        };
+        let mut cursor;
         let mut removed_next;
 
         loop {
             read_phase!(guard; [cursor.prev, cursor.curr] => {
-                cursor.prev = &self.head as *const _ as *mut Node<K, V>;
-                cursor.curr = self.head.load(Ordering::Acquire);
-                removed_next = ptr::null_mut();
+                (cursor, removed_next) = {
+                    // Declaring inner cursor is important to let the compiler to conduct register
+                    // optimization.
+                    let mut cursor = Cursor {
+                        prev: &self.head as *const _ as *mut Node<K, V>,
+                        curr: self.head.load(Ordering::Acquire),
+                        found: false,
+                    };
+                    let mut removed_next = ptr::null_mut();
 
-                cursor.found = loop {
-                    let curr_node = some_or!(unsafe { cursor.curr.as_ref() }, break false);
-                    let next = curr_node.next.load(Ordering::Acquire);
+                    cursor.found = loop {
+                        let curr_node = some_or!(unsafe { cursor.curr.as_ref() }, break false);
+                        let next = curr_node.next.load(Ordering::Acquire);
 
-                    // NOTE: original version aborts here if self.prev is tagged
+                        // NOTE: original version aborts here if self.prev is tagged
 
-                    if tag(next) != 0 {
-                        // Found a logically removed node.
-                        // As it cannot be physically removed in read phase,
-                        // save it at a local variable and remove it
-                        // in write phase.
-                        removed_next = untagged(next);
-                        break false;
-                    }
-
-                    match curr_node.key.cmp(key) {
-                        Less => {
-                            cursor.prev = cursor.curr;
-                            cursor.curr = next;
+                        if tag(next) != 0 {
+                            // Found a logically removed node.
+                            // As it cannot be physically removed in read phase,
+                            // save it at a local variable and remove it
+                            // in write phase.
+                            removed_next = untagged(next);
+                            break false;
                         }
-                        Equal => break true,
-                        Greater => break false,
-                    }
+
+                        match curr_node.key.cmp(key) {
+                            Less => {
+                                cursor.prev = cursor.curr;
+                                cursor.curr = next;
+                            }
+                            Equal => break true,
+                            Greater => break false,
+                        }
+                    };
+                    (cursor, removed_next)
                 };
             });
 
@@ -196,30 +205,34 @@ where
 
     /// Gotta go fast. Doesn't fail.
     fn find_harris_herlihy_shavit(&self, key: &K, guard: &Guard) -> Cursor<K, V> {
-        let mut cursor = Cursor {
-            prev: ptr::null_mut(),
-            curr: ptr::null_mut(),
-            found: false,
-        };
+        let mut cursor;
 
         read_phase!(guard; [cursor.prev, cursor.curr] => {
-            cursor.prev = &self.head as *const _ as *mut Node<K, V>;
-            cursor.curr = self.head.load(Ordering::Acquire);
+            cursor = {
+                // Declaring inner cursor is important to let the compiler to conduct register
+                // optimization.
+                let mut cursor = Cursor {
+                    prev: &self.head as *const _ as *mut Node<K, V>,
+                    curr: self.head.load(Ordering::Acquire),
+                    found: false,
+                };
 
-            cursor.found = loop {
-                let curr_node = some_or!(unsafe { untagged(cursor.curr).as_ref() }, break false);
+                cursor.found = loop {
+                    let curr_node = some_or!(unsafe { untagged(cursor.curr).as_ref() }, break false);
 
-                match curr_node.key.cmp(key) {
-                    Less => {
-                        cursor.prev = cursor.curr;
-                        cursor.curr = curr_node.next.load(Ordering::Acquire);
+                    match curr_node.key.cmp(key) {
+                        Less => {
+                            cursor.prev = cursor.curr;
+                            cursor.curr = curr_node.next.load(Ordering::Acquire);
+                        }
+                        Equal => break tag(curr_node.next.load(Ordering::Relaxed)) == 0,
+                        Greater => break false,
                     }
-                    Equal => break tag(curr_node.next.load(Ordering::Relaxed)) == 0,
-                    Greater => break false,
-                }
+                };
+                cursor.curr = untagged(cursor.curr);
+                cursor.prev = untagged(cursor.prev);
+                cursor
             };
-            cursor.curr = untagged(cursor.curr);
-            cursor.prev = untagged(cursor.prev);
         });
 
         return cursor;

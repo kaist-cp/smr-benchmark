@@ -239,17 +239,14 @@ where
         read_phase!(guard; [record.ancestor, record.successor, record.parent, record.leaf] => {
             let s = self.r.left.load(Ordering::Relaxed);
             let s_node = unsafe { &*untagged(s) };
-            let leaf = tagged(s_node.left.load(Ordering::Relaxed), Marks::empty().bits());
+            let mut leaf = tagged(s_node.left.load(Ordering::Relaxed), Marks::empty().bits());
             let leaf_node = unsafe { &*untagged(leaf) };
 
-            record = SeekRecord {
-                ancestor: &self.r as *const _ as *mut _,
-                successor: s,
-                successor_dir: Direction::L,
-                parent: s,
-                leaf,
-                leaf_dir: Direction::L,
-            };
+            let mut ancestor = &self.r as *const _ as *mut _;
+            let mut successor = s;
+            let mut successor_dir = Direction::L;
+            let mut parent = s;
+            let mut leaf_dir = Direction::L;
 
             let mut prev_tag = Marks::from_bits_truncate(tag(leaf)).tag();
             let mut curr_dir = Direction::L;
@@ -258,15 +255,15 @@ where
             while let Some(curr_node) = unsafe { untagged(curr).as_ref() } {
                 if !prev_tag {
                     // untagged edge: advance ancestor and successor pointers
-                    record.ancestor = record.parent;
-                    record.successor = record.leaf;
-                    record.successor_dir = record.leaf_dir;
+                    ancestor = parent;
+                    successor = leaf;
+                    successor_dir = leaf_dir;
                 }
 
                 // advance parent and leaf pointers
-                record.parent = record.leaf;
-                record.leaf = tagged(curr, Marks::empty().bits());
-                record.leaf_dir = curr_dir;
+                parent = leaf;
+                leaf = tagged(curr, Marks::empty().bits());
+                leaf_dir = curr_dir;
 
                 // update other variables
                 prev_tag = Marks::from_bits_truncate(tag(curr)).tag();
@@ -277,6 +274,14 @@ where
                     curr_dir = Direction::R;
                     curr = curr_node.right.load(Ordering::Acquire);
                 }
+            }
+            record = SeekRecord {
+                ancestor,
+                successor,
+                successor_dir,
+                parent,
+                leaf,
+                leaf_dir,
             }
         });
         record
@@ -289,23 +294,14 @@ where
         read_phase!(guard; [record.parent, record.leaf] => {
             let s = self.r.left.load(Ordering::Relaxed);
             let s_node = unsafe { &*untagged(s) };
-            let leaf = untagged(s_node.left.load(Ordering::Relaxed));
+            let mut leaf = untagged(s_node.left.load(Ordering::Relaxed));
 
-            record = SeekRecord {
-                ancestor: ptr::null_mut(),
-                successor: ptr::null_mut(),
-                successor_dir: Direction::L,
-                parent: s,
-                leaf,
-                leaf_dir: Direction::L
-            };
-
-            let mut curr = untagged(unsafe { &*record.leaf }
+            let mut curr = untagged(unsafe { &*leaf }
                 .left
                 .load(Ordering::Acquire));
 
             while let Some(curr_node) = unsafe { curr.as_ref() } {
-                record.leaf = curr;
+                leaf = curr;
 
                 if curr_node.key.cmp(key) == cmp::Ordering::Greater {
                     curr = curr_node.left.load(Ordering::Acquire);
@@ -313,6 +309,14 @@ where
                     curr = curr_node.right.load(Ordering::Acquire);
                 }
                 curr = untagged(curr);
+            }
+            record = SeekRecord {
+                ancestor: ptr::null_mut(),
+                successor: ptr::null_mut(),
+                successor_dir: Direction::L,
+                parent: ptr::null_mut(),
+                leaf,
+                leaf_dir: Direction::L,
             }
         });
         record
