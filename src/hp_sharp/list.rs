@@ -171,11 +171,15 @@ where
     }
 }
 
-pub struct Output<K, V>(Cursor<K, V>, Cursor<K, V>);
+pub struct Output<K, V>(Cursor<K, V>, Cursor<K, V>, Shield<Node<K, V>>);
 
 impl<K, V> OutputHolder<V> for Output<K, V> {
     fn default(handle: &mut Handle) -> Self {
-        Self(Cursor::empty(handle), Cursor::empty(handle))
+        Self(
+            Cursor::empty(handle),
+            Cursor::empty(handle),
+            Shield::empty(handle),
+        )
     }
 
     fn output(&self) -> &V {
@@ -281,9 +285,10 @@ where
         output: &mut Output<K, V>,
         handle: &mut Handle,
     ) -> bool {
-        let cursor = &mut output.0;
+        let aux = &mut output.2;
+        let prot = &mut output.0;
         unsafe {
-            cursor.traverse(handle, |guard| {
+            prot.traverse(handle, |guard| {
                 let mut cursor = SharedCursor::new(&self.head, guard);
                 cursor.found = loop {
                     let curr_node = some_or!(cursor.curr.as_ref(guard), break false);
@@ -293,7 +298,7 @@ where
 
                     if next.tag() != 0 {
                         next = next.with_tag(0);
-                        guard.mask::<_, Shield<_>>(cursor.prev, |prev, guard| {
+                        aux.mask(guard, cursor.prev, |prev, guard| {
                             if prev
                                 .deref_unchecked()
                                 .next

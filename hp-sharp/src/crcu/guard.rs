@@ -33,7 +33,7 @@ impl EpochGuard {
     #[inline(always)]
     pub fn mask<F, R>(&mut self, body: F) -> R
     where
-        F: Fn(&mut CrashGuard) -> R,
+        F: FnOnce(&mut CrashGuard) -> R,
         R: Copy,
     {
         compiler_fence(Ordering::SeqCst);

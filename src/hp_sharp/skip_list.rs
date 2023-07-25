@@ -103,16 +103,6 @@ where
     }
 }
 
-impl<K, V> OutputHolder<V> for Cursor<K, V> {
-    fn default(handle: &mut Handle) -> Self {
-        Self::empty(handle)
-    }
-
-    fn output(&self) -> &V {
-        self.found.as_ref().map(|node| &node.value).unwrap()
-    }
-}
-
 impl<K, V> Protector for Cursor<K, V> {
     type Target<'r> = SharedCursor<'r, K, V>;
 
@@ -191,6 +181,18 @@ impl<'r, K, V> SharedCursor<'r, K, V> {
     }
 }
 
+pub struct Output<K, V>(Cursor<K, V>, Shield<Node<K, V>>);
+
+impl<K, V> OutputHolder<V> for Output<K, V> {
+    fn default(handle: &mut Handle) -> Self {
+        Self(Cursor::empty(handle), Shield::empty(handle))
+    }
+
+    fn output(&self) -> &V {
+        self.0.found.as_ref().map(|node| &node.value).unwrap()
+    }
+}
+
 pub struct SkipList<K, V> {
     head: Tower<K, V>,
 }
@@ -255,15 +257,21 @@ where
         Shared::null()
     }
 
-    fn find_optimistic(&self, key: &K, cursor: &mut Cursor<K, V>, handle: &mut Handle) {
+    fn find_optimistic(&self, key: &K, cursor: &mut Output<K, V>, handle: &mut Handle) {
         unsafe {
             cursor
+                .0
                 .found
                 .traverse(handle, |guard| self.find_optimistic_inner(key, guard));
         }
     }
 
-    fn find_inner<'r>(&self, key: &K, guard: &'r EpochGuard) -> Option<SharedCursor<'r, K, V>> {
+    fn find_inner<'r>(
+        &self,
+        key: &K,
+        aux: &mut Shield<Node<K, V>>,
+        guard: &'r EpochGuard,
+    ) -> Option<SharedCursor<'r, K, V>> {
         let mut cursor = SharedCursor::new(&self.head, guard);
 
         let mut level = MAX_HEIGHT;
@@ -291,26 +299,28 @@ where
                 let succ = curr_ref.next[level].load(Ordering::Acquire, guard);
 
                 if succ.tag() != 0 {
-                    guard.mask::<_, Shield<Node<K, V>>>(pred, |pred, guard| {
-                        match unsafe { pred.deref_unchecked() }.next[level].compare_exchange(
-                            curr.with_tag(0),
-                            succ.with_tag(0),
-                            Ordering::Release,
-                            Ordering::Relaxed,
-                            guard,
-                        ) {
-                            Ok(_) => {
-                                unsafe { curr.deref_unchecked() }.decrement(guard);
-                                return WriteResult::Finished;
+                    unsafe {
+                        aux.mask(guard, pred, |pred, guard| {
+                            match pred.deref_unchecked().next[level].compare_exchange(
+                                curr.with_tag(0),
+                                succ.with_tag(0),
+                                Ordering::Release,
+                                Ordering::Relaxed,
+                                guard,
+                            ) {
+                                Ok(_) => {
+                                    curr.deref_unchecked().decrement(guard);
+                                    return WriteResult::Finished;
+                                }
+                                Err(_) => {
+                                    // On failure, we cannot do anything reasonable to
+                                    // continue searching from the current position.
+                                    // Restart the search.
+                                    return WriteResult::RepinEpoch;
+                                }
                             }
-                            Err(_) => {
-                                // On failure, we cannot do anything reasonable to
-                                // continue searching from the current position.
-                                // Restart the search.
-                                return WriteResult::RepinEpoch;
-                            }
-                        }
-                    });
+                        });
+                    }
                     curr = succ.with_tag(0);
                     continue;
                 }
@@ -337,19 +347,21 @@ where
         Some(cursor)
     }
 
-    fn find(&self, key: &K, cursor: &mut Cursor<K, V>, handle: &mut Handle) {
+    fn find(&self, key: &K, output: &mut Output<K, V>, handle: &mut Handle) {
         unsafe {
+            let cursor = &mut output.0;
+            let aux = &mut output.1;
             cursor.traverse(handle, |guard| loop {
-                if let Some(cursor) = self.find_inner(key, guard) {
+                if let Some(cursor) = self.find_inner(key, aux, guard) {
                     return cursor;
                 }
             })
         }
     }
 
-    fn insert(&self, key: K, value: V, cursor: &mut Cursor<K, V>, handle: &mut Handle) -> bool {
-        self.find(&key, cursor, handle);
-        if cursor.found(&key).is_some() {
+    fn insert(&self, key: K, value: V, output: &mut Output<K, V>, handle: &mut Handle) -> bool {
+        self.find(&key, output, handle);
+        if output.0.found(&key).is_some() {
             return false;
         }
 
@@ -361,11 +373,11 @@ where
         let height = new_node_ref.height;
 
         loop {
-            new_node_ref.next[0].store(cursor.succs[0].shared(), Ordering::Relaxed, handle);
+            new_node_ref.next[0].store(output.0.succs[0].shared(), Ordering::Relaxed, handle);
 
-            if unsafe { cursor.preds[0].deref_unchecked() }.next[0]
+            if unsafe { output.0.preds[0].deref_unchecked() }.next[0]
                 .compare_exchange(
-                    cursor.succs[0].shared(),
+                    output.0.succs[0].shared(),
                     new_node,
                     Ordering::SeqCst,
                     Ordering::SeqCst,
@@ -377,8 +389,8 @@ where
             }
 
             // We failed. Let's search for the key and try again.
-            self.find(&new_node_ref.key, cursor, handle);
-            if cursor.found(&new_node_ref.key).is_some() {
+            self.find(&new_node_ref.key, output, handle);
+            if output.0.found(&new_node_ref.key).is_some() {
                 drop(unsafe { new_node.into_owned() });
                 return false;
             }
@@ -389,8 +401,8 @@ where
         let guard = unsafe { &EpochGuard::unprotected() };
         'build: for level in 1..height {
             loop {
-                let pred = &cursor.preds[level];
-                let succ = &cursor.succs[level];
+                let pred = &output.0.preds[level];
+                let succ = &output.0.succs[level];
                 let next = new_node_ref.next[level].load(Ordering::SeqCst, guard);
 
                 // If the current pointer is marked, that means another thread is already
@@ -401,7 +413,7 @@ where
                 }
 
                 if succ.as_ref().map(|node| &node.key) == Some(&new_node_ref.key) {
-                    self.find(&new_node_ref.key, cursor, handle);
+                    self.find(&new_node_ref.key, output, handle);
                     continue;
                 }
 
@@ -436,7 +448,7 @@ where
 
                 // Installation failed.
                 new_node_ref.refs.fetch_sub(1, Ordering::Relaxed);
-                self.find(&new_node_ref.key, cursor, handle);
+                self.find(&new_node_ref.key, output, handle);
             }
         }
 
@@ -445,16 +457,17 @@ where
             .tag()
             != 0
         {
-            self.find(&new_node_ref.key, cursor, handle);
+            self.find(&new_node_ref.key, output, handle);
         }
 
         new_node_ref.decrement(handle);
         true
     }
 
-    fn remove(&self, key: &K, cursor: &mut Cursor<K, V>, handle: &mut Handle) -> bool {
+    fn remove(&self, key: &K, output: &mut Output<K, V>, handle: &mut Handle) -> bool {
         loop {
-            self.find(key, cursor, handle);
+            self.find(key, output, handle);
+            let cursor = &output.0;
             let node: &Node<K, V> = some_or!(cursor.found(key), return false);
 
             // Try removing the node by marking its tower.
@@ -476,7 +489,7 @@ where
                     {
                         node.decrement(handle);
                     } else {
-                        self.find(key, cursor, handle);
+                        self.find(key, output, handle);
                         break;
                     }
                 }
@@ -491,7 +504,7 @@ where
     K: Ord + Clone,
     V: Clone,
 {
-    type Output = Cursor<K, V>;
+    type Output = Output<K, V>;
 
     fn new() -> Self {
         SkipList::new()
@@ -499,7 +512,7 @@ where
 
     fn get(&self, key: &K, output: &mut Self::Output, handle: &mut Handle) -> bool {
         self.find_optimistic(key, output, handle);
-        output.found(key).is_some()
+        output.0.found(key).is_some()
     }
 
     fn insert(&self, key: K, value: V, output: &mut Self::Output, handle: &mut Handle) -> bool {

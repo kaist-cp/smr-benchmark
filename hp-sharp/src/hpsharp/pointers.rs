@@ -7,7 +7,7 @@ use std::{
 
 use crate::{
     hpsharp::{guard::EpochGuard, guard::Invalidate, handle::Handle, hazard::HazardPointer},
-    Guard, Retire,
+    CrashGuard, Guard, Retire,
 };
 
 /// A result of unsuccessful `compare_exchange`.
@@ -511,9 +511,9 @@ pub trait Protector {
     /// writes on a global variable and system-calls(File I/O and etc.) are dangerous, as they
     /// may cause an unexpected inconsistency on the whole system after a crash.
     #[inline(always)]
-    unsafe fn traverse<F>(&mut self, handle: &mut Handle, body: F)
+    unsafe fn traverse<F>(&mut self, handle: &mut Handle, mut body: F)
     where
-        F: for<'r> Fn(&'r mut EpochGuard) -> Self::Target<'r>,
+        F: for<'r> FnMut(&'r mut EpochGuard) -> Self::Target<'r>,
     {
         handle.crcu_handle.borrow_mut().pin(|guard| {
             // Execute the body of this read phase.
@@ -529,6 +529,41 @@ pub trait Protector {
             // it has the same meaning with a well-known HP validation:
             // we can safely assume that the pointers are not reclaimed yet.
         })
+    }
+
+    /// Starts a non-crashable section where we can conduct operations with global side-effects.
+    ///
+    /// In this section, we do not restart immediately when we receive signals from reclaimers.
+    /// The whole critical section restarts after this `mask` section ends, if a reclaimer sent
+    /// a signal, or we advanced our epoch to reclaim a full local garbage bag.
+    unsafe fn mask<'r, F>(&mut self, eg: &EpochGuard, to_deref: Self::Target<'r>, body: F)
+    where
+        F: FnOnce(&Self, &mut CrashGuard) -> WriteResult,
+    {
+        let eg_inner = &mut *eg.inner;
+        eg_inner.mask(|guard| {
+            let result = {
+                // Store pointers in hazard slots and issue a fence.
+                self.protect_unchecked(&to_deref);
+                fence(Ordering::SeqCst);
+
+                // Restart if the thread is crashed while protecting.
+                if guard.must_rollback() {
+                    guard.repin();
+                }
+
+                body(self, &mut CrashGuard::new(guard, eg.handle))
+            };
+
+            compiler_fence(Ordering::SeqCst);
+            if result == WriteResult::RepinEpoch {
+                // Invalidate any saved checkpoints.
+                if let Some(backup_idx) = eg.backup_idx {
+                    unsafe { backup_idx.as_ref() }.store(2, Ordering::Relaxed);
+                }
+                guard.repin();
+            }
+        });
     }
 
     /// Starts a crashable critical section where we cannot perform operations with side-effects,

@@ -1,11 +1,11 @@
 use std::{
     ptr::{null, null_mut, NonNull},
-    sync::atomic::{compiler_fence, fence, AtomicUsize, Ordering},
+    sync::atomic::AtomicUsize,
 };
 
 use crate::{
     crcu::{self, Deferrable},
-    hpsharp::{handle::free, Handle, Protector, Shared, WriteResult},
+    hpsharp::{handle::free, Handle, Shared},
     sync::Deferred,
 };
 
@@ -19,9 +19,9 @@ use crate::{
 /// writing data on non-atomic storage. To conduct jobs with side-effects, we must open a
 /// non-crashable section by `mask` method.
 pub struct EpochGuard {
-    inner: *mut crcu::EpochGuard,
-    handle: *const Handle,
-    backup_idx: Option<NonNull<AtomicUsize>>,
+    pub(crate) inner: *mut crcu::EpochGuard,
+    pub(crate) handle: *const Handle,
+    pub(crate) backup_idx: Option<NonNull<AtomicUsize>>,
 }
 
 impl EpochGuard {
@@ -37,46 +37,6 @@ impl EpochGuard {
                 NonNull::new_unchecked(at as *const AtomicUsize as *mut AtomicUsize)
             }),
         }
-    }
-
-    /// Starts a non-crashable section where we can conduct operations with global side-effects.
-    ///
-    /// In this section, we do not restart immediately when we receive signals from reclaimers.
-    /// The whole critical section restarts after this `mask` section ends, if a reclaimer sent
-    /// a signal, or we advanced our epoch to reclaim a full local garbage bag.
-    pub fn mask<'r, F, D>(&'r self, to_deref: D::Target<'r>, body: F)
-    where
-        F: Fn(&D, &mut CrashGuard) -> WriteResult,
-        D: Protector,
-    {
-        // Note that protecting must be conducted in a crash-free section.
-        // Otherwise it may forget to drop acquired hazard slot on crashing.
-        unsafe { &mut *self.inner }.mask(|guard| {
-            let result = {
-                // Allocate fresh hazard slots to protect pointers.
-                let mut def = D::empty(unsafe { &mut *self.handle.cast_mut() });
-                // Store pointers in hazard slots and issue a fence.
-                def.protect_unchecked(&to_deref);
-                fence(Ordering::SeqCst);
-
-                // Restart if the thread is crashed while protecting.
-                if guard.must_rollback() {
-                    drop(def);
-                    guard.repin();
-                }
-
-                body(&def, &mut CrashGuard::new(guard, self.handle))
-            };
-
-            compiler_fence(Ordering::SeqCst);
-            if result == WriteResult::RepinEpoch {
-                // Invalidate any saved checkpoints.
-                if let Some(backup_idx) = self.backup_idx {
-                    unsafe { backup_idx.as_ref() }.store(2, Ordering::Relaxed);
-                }
-                guard.repin();
-            }
-        });
     }
 
     /// Creates an unprotected `EpochGuard`.

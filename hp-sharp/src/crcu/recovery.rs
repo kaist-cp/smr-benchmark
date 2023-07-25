@@ -108,7 +108,7 @@ impl RecoveryGuard {
     #[inline]
     pub fn atomic<F, R>(&mut self, body: F) -> R
     where
-        F: Fn(&Self) -> R,
+        F: FnOnce(&Self) -> R,
     {
         self.status.store(Status::InCa.bits(), Ordering::Relaxed);
 
