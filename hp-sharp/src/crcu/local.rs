@@ -2,7 +2,7 @@ use std::{
     cell::{Cell, UnsafeCell},
     marker::PhantomData,
     ptr::null_mut,
-    sync::atomic::{compiler_fence, fence, AtomicBool, AtomicPtr, Ordering},
+    sync::atomic::{compiler_fence, fence, AtomicBool, AtomicPtr, AtomicU8, Ordering},
 };
 
 use atomic::Atomic;
@@ -12,6 +12,7 @@ use nix::sys::{
     signal::{pthread_sigmask, SigmaskHow},
     signalfd::SigSet,
 };
+use setjmp::sigjmp_buf;
 use static_assertions::const_assert;
 
 use crate::sync::{Bag, Deferred};
@@ -20,7 +21,7 @@ use super::{
     epoch::{AtomicEpoch, Epoch},
     global::Global,
     guard::EpochGuard,
-    recovery, Deferrable, RecoveryData,
+    recovery, Deferrable,
 };
 
 const_assert!(Atomic::<Pthread>::is_lock_free());
@@ -29,6 +30,25 @@ pub(crate) struct Local {
     pub(crate) epoch: CachePadded<AtomicEpoch>,
     pub(crate) owner: Atomic<Pthread>,
     pub(crate) bag: UnsafeCell<Bag>,
+    /// Represents a thread-local status.
+    ///
+    /// A thread entering a crashable section sets its `STATUS` by calling `guard!` macro.
+    ///
+    /// Note that `STATUS` must be a type which can be read and written in tear-free manner.
+    /// For this reason, using non-atomic type such as `u8` is not safe, as any writes on this
+    /// variable may be splitted into multiple instructions and the thread may read inconsistent
+    /// value in its signal handler.
+    ///
+    /// According to ISO/IEC TS 17961 C Secure Coding Rules, accessing values of objects that are
+    /// neither lock-free atomic objects nor of type `volatile sig_atomic_t` in a signal handler
+    /// results in undefined behavior.
+    ///
+    /// `AtomicU8` is likely to be safe, because any accesses to it will be compiled into a
+    /// single ISA instruction. On top of that, by preventing reordering instructions across this
+    /// variable by issuing `compiler_fence`, we can have the same restrictions which
+    /// `volatile sig_atomic_t` has.
+    status: AtomicU8,
+    chkpt: sigjmp_buf,
     next: AtomicPtr<Local>,
     using: AtomicBool,
     global: *const Global,
@@ -44,6 +64,8 @@ impl Local {
             epoch: CachePadded::new(AtomicEpoch::new(Epoch::starting())),
             owner: unsafe { core::mem::zeroed() },
             bag: UnsafeCell::new(Bag::new()),
+            status: AtomicU8::new(0),
+            chkpt: unsafe { core::mem::zeroed() },
             next: AtomicPtr::new(null_mut()),
             using: AtomicBool::new(using),
             global,
@@ -121,13 +143,13 @@ impl Local {
     /// * https://github.com/jeff-davis/setjmp.rs#problems
     #[cfg(not(sanitize = "address"))]
     #[inline(never)]
-    unsafe fn pin<F>(&mut self, data: &RecoveryData, mut body: F)
+    unsafe fn pin<F>(&mut self, mut body: F)
     where
         F: FnMut(&mut EpochGuard),
     {
         {
             // Makes a checkpoint and create a `RecoveryGuard`.
-            let guard = recovery::guard!(data);
+            let guard = recovery::guard!(&self.status, &mut self.chkpt);
 
             // Repin the current epoch.
             // Acquiring an epoch must be proceeded after starting the crashable section,
@@ -152,7 +174,7 @@ impl Local {
 
     #[cfg(sanitize = "address")]
     #[inline(never)]
-    unsafe fn pin<F>(&mut self, data: &RecoveryData, mut body: F)
+    unsafe fn pin<F>(&mut self, mut body: F)
     where
         F: FnMut(&mut EpochGuard),
     {
@@ -172,7 +194,7 @@ impl Local {
         loop {
             {
                 // Makes a checkpoint and create a `RecoveryGuard`.
-                let guard = recovery::guard!(data);
+                let guard = recovery::guard!(&self.status, &mut self.chkpt);
 
                 // Repin the current epoch.
                 // Acquiring an epoch must be proceeded after starting the crashable section,
@@ -289,6 +311,7 @@ impl LocalList {
             }
         };
         local.owner.store(tid, Ordering::Release);
+        recovery::set_data(&local.status, &mut local.chkpt);
         Handle::new(local)
     }
 
@@ -351,16 +374,12 @@ where
 /// A thread-local handle managing local epoch and defering.
 pub struct Handle {
     local: *mut Local,
-    data: RecoveryData,
 }
 
 impl Handle {
     #[inline]
     fn new(local: &mut Local) -> Self {
-        Self {
-            local,
-            data: unsafe { RecoveryData::new() }
-        }
+        Self { local }
     }
 
     /// Starts a crashable critical section where we cannot perform operations with side-effects,
@@ -376,7 +395,7 @@ impl Handle {
     where
         F: FnMut(&mut EpochGuard),
     {
-        unsafe { (*self.local).pin(&self.data, body) }
+        unsafe { (*self.local).pin(body) }
     }
 }
 
@@ -393,5 +412,6 @@ impl Drop for Handle {
         let local = unsafe { &*self.local };
         local.epoch.store(Epoch::starting(), Ordering::Release);
         local.using.store(false, Ordering::Release);
+        recovery::clear_data();
     }
 }
