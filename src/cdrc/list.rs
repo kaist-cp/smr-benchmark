@@ -33,26 +33,6 @@ where
     }
 }
 
-impl<K, V, Guard> Drop for List<K, V, Guard>
-where
-    Guard: AcquireRetire,
-{
-    fn drop(&mut self) {
-        let guard = &Guard::handle();
-        unsafe {
-            let mut curr = self.head.load(guard);
-            let mut next;
-
-            while !curr.is_null() {
-                let curr_ref = curr.deref_mut();
-                next = curr_ref.next.load(guard);
-                curr_ref.next.store_null(guard);
-                curr = next;
-            }
-        }
-    }
-}
-
 impl<K, V, Guard> Node<K, V, Guard>
 where
     Guard: AcquireRetire,
@@ -260,7 +240,7 @@ where
     /// Creates a new list.
     pub fn new() -> Self {
         List {
-            head: AtomicRcPtr::new(Node::head(), &Guard::handle()),
+            head: AtomicRcPtr::new(Node::head(), unsafe { &Guard::unprotected() }),
         }
     }
 

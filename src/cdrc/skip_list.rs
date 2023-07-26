@@ -56,9 +56,9 @@ where
         height
     }
 
-    pub fn mark_tower(&self) -> bool {
+    pub fn mark_tower(&self, guard: &Guard) -> bool {
         for level in (0..self.height).rev() {
-            let tag = self.next[level].fetch_or(1, &Guard::handle()).mark();
+            let tag = self.next[level].fetch_or(1, guard).mark();
             // If the level 0 pointer was already marked, somebody else removed the node.
             if level == 0 && tag == 1 {
                 return false;
@@ -105,7 +105,7 @@ where
 {
     pub fn new() -> Self {
         Self {
-            head: AtomicRcPtr::new(Node::head(), &Guard::handle()),
+            head: AtomicRcPtr::new(Node::head(), unsafe { &Guard::unprotected() }),
         }
     }
 
@@ -315,7 +315,7 @@ where
             let node_ref = unsafe { node.deref() };
 
             // Try removing the node by marking its tower.
-            if node_ref.mark_tower() {
+            if node_ref.mark_tower(guard) {
                 for level in (0..node_ref.height).rev() {
                     let succ = node_ref.next[level].load_snapshot(guard);
 

@@ -8,6 +8,7 @@ extern crate crossbeam_pebr;
 extern crate smr_benchmark;
 
 use ::hp_pp::DEFAULT_DOMAIN;
+use cdrc_rs::{AcquireRetire, GuardEBR};
 use clap::{value_parser, Arg, ArgMatches, Command, ValueEnum};
 use crossbeam_utils::thread::scope;
 use csv::Writer;
@@ -502,38 +503,31 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             _ => panic!("Unsupported data structure for NBR"),
         },
         MM::CDRC_EBR => match config.ds {
-            DS::HList => bench_map_cdrc::<
-                cdrc_rs::GuardEBR,
-                cdrc::HList<usize, usize, cdrc_rs::GuardEBR>,
-                N,
-            >(config, PrefillStrategy::Decreasing),
-            DS::HMList => bench_map_cdrc::<
-                cdrc_rs::GuardEBR,
-                cdrc::HMList<usize, usize, cdrc_rs::GuardEBR>,
-                N,
-            >(config, PrefillStrategy::Decreasing),
-            DS::HHSList => bench_map_cdrc::<
-                cdrc_rs::GuardEBR,
-                cdrc::HHSList<usize, usize, cdrc_rs::GuardEBR>,
-                N,
-            >(config, PrefillStrategy::Decreasing),
-            DS::HashMap => bench_map_cdrc::<
-                cdrc_rs::GuardEBR,
-                cdrc::HashMap<usize, usize, cdrc_rs::GuardEBR>,
-                N,
-            >(config, PrefillStrategy::Decreasing),
-            DS::NMTree => bench_map_cdrc::<
-                cdrc_rs::GuardEBR,
-                cdrc::NMTreeMap<usize, usize, cdrc_rs::GuardEBR>,
-                N,
-            >(config, PrefillStrategy::Random),
-            DS::SkipList => bench_map_cdrc::<
-                cdrc_rs::GuardEBR,
-                cdrc::SkipList<usize, usize, cdrc_rs::GuardEBR>,
-                N,
-            >(config, PrefillStrategy::Random),
+            DS::HList => bench_map_cdrc::<cdrc::HList<usize, usize, cdrc_rs::GuardEBR>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::HMList => bench_map_cdrc::<cdrc::HMList<usize, usize, cdrc_rs::GuardEBR>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::HHSList => bench_map_cdrc::<cdrc::HHSList<usize, usize, cdrc_rs::GuardEBR>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::HashMap => bench_map_cdrc::<cdrc::HashMap<usize, usize, cdrc_rs::GuardEBR>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::NMTree => bench_map_cdrc::<cdrc::NMTreeMap<usize, usize, cdrc_rs::GuardEBR>, N>(
+                config,
+                PrefillStrategy::Random,
+            ),
+            DS::SkipList => bench_map_cdrc::<cdrc::SkipList<usize, usize, cdrc_rs::GuardEBR>, N>(
+                config,
+                PrefillStrategy::Random,
+            ),
             DS::BonsaiTree => bench_map_cdrc::<
-                cdrc_rs::GuardEBR,
                 cdrc::BonsaiTreeMap<usize, usize, cdrc_rs::GuardEBR>,
                 N,
             >(config, PrefillStrategy::Random),
@@ -766,15 +760,12 @@ impl PrefillStrategy {
         stdout().flush().unwrap();
     }
 
-    fn prefill_cdrc<
-        Guard: cdrc_rs::AcquireRetire,
-        M: cdrc::ConcurrentMap<usize, usize, Guard> + Send + Sync,
-    >(
+    fn prefill_cdrc<M: cdrc::ConcurrentMap<usize, usize, GuardEBR> + Send + Sync>(
         self,
         config: &Config,
         map: &M,
     ) {
-        let guard = &Guard::handle();
+        let guard = unsafe { &GuardEBR::unprotected() };
         let rng = &mut rand::thread_rng();
         match self {
             PrefillStrategy::Random => {
@@ -1364,16 +1355,14 @@ fn bench_map_nbr<M: nbr::ConcurrentMap<usize, usize> + Send + Sync>(
     (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
 }
 
-fn bench_map_cdrc<
-    Guard: cdrc_rs::AcquireRetire,
-    M: cdrc::ConcurrentMap<usize, usize, Guard> + Send + Sync,
-    N: Unsigned,
->(
+fn bench_map_cdrc<M: cdrc::ConcurrentMap<usize, usize, GuardEBR> + Send + Sync, N: Unsigned>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
     let map = &M::new();
     strategy.prefill_cdrc(config, map);
+
+    let collector = &cdrc_rs::ebr::Collector::new();
 
     let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
     let (ops_sender, ops_receiver) = mpsc::channel();
@@ -1427,10 +1416,11 @@ fn bench_map_cdrc<
             s.spawn(move |_| {
                 let mut ops: u64 = 0;
                 let mut rng = &mut rand::thread_rng();
+                let handle = collector.register();
                 barrier.clone().wait();
                 let start = Instant::now();
 
-                let mut guard = Guard::handle();
+                let mut guard = GuardEBR::handle_with(&handle);
                 while start.elapsed() < config.duration {
                     let key = config.key_dist.sample(rng);
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
@@ -1447,7 +1437,7 @@ fn bench_map_cdrc<
                     }
                     ops += 1;
                     if ops % N::to_u64() == 0 {
-                        guard.release();
+                        guard.release_with(&handle);
                     }
                 }
 

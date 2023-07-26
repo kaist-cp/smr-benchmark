@@ -118,8 +118,8 @@ where
         Node {
             key: right.key.clone(),
             value: None,
-            left: AtomicRcPtr::new(left, &Guard::handle()),
-            right: AtomicRcPtr::new(right, &Guard::handle()),
+            left: AtomicRcPtr::new(left, unsafe { &Guard::unprotected() }),
+            right: AtomicRcPtr::new(right, unsafe { &Guard::unprotected() }),
         }
     }
 }
@@ -219,7 +219,7 @@ where
         let s = Node::new_internal(inf0, inf1);
         let r = Node::new_internal(s, inf2);
         NMTreeMap {
-            r: AtomicRcPtr::new(r, &Guard::handle()),
+            r: AtomicRcPtr::new(r, unsafe { &Guard::unprotected() }),
         }
     }
 
