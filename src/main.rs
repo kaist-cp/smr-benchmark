@@ -30,12 +30,6 @@ use smr_benchmark::pebr;
 use smr_benchmark::{cdrc, ebr};
 use smr_benchmark::{hp, hp_sharp as hp_sharp_bench};
 
-const NBR_LARGE_CAP: NBRConfig = NBRConfig {
-    // We found that this configuration performs better for our benchmark than the original:
-    // https://gitlab.com/aajayssingh/nbr_setbench_plus/-/blob/eaadbd3c/common/recordmgr/reclaimer_nbrplus.h
-    bag_cap_pow2: 8192,
-    lowatermark: 1024,
-};
 const NBR_CAP: NBRConfig = NBRConfig {
     bag_cap_pow2: 256,
     lowatermark: 32,
@@ -66,7 +60,6 @@ pub enum MM {
     PEBR,
     HP,
     HP_PP,
-    NBR_LARGE,
     NBR,
     CDRC_EBR,
     HP_SHARP,
@@ -480,92 +473,30 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 PrefillStrategy::Random,
             ),
         },
-        MM::NBR_LARGE => match config.ds {
-            DS::HList => bench_map_nbr::<nbr::HList<usize, usize>>(
-                config,
-                PrefillStrategy::Decreasing,
-                2,
-                &NBR_LARGE_CAP,
-            ),
-            DS::HMList => bench_map_nbr::<nbr::HMList<usize, usize>>(
-                config,
-                PrefillStrategy::Decreasing,
-                2,
-                &NBR_LARGE_CAP,
-            ),
-            DS::HHSList => bench_map_nbr::<nbr::HHSList<usize, usize>>(
-                config,
-                PrefillStrategy::Decreasing,
-                2,
-                &NBR_LARGE_CAP,
-            ),
-            DS::HashMap => bench_map_nbr::<nbr::HashMap<usize, usize>>(
-                config,
-                PrefillStrategy::Decreasing,
-                2,
-                &NBR_LARGE_CAP,
-            ),
-            DS::NMTree => bench_map_nbr::<nbr::NMTreeMap<usize, usize>>(
-                config,
-                PrefillStrategy::Random,
-                4,
-                &NBR_LARGE_CAP,
-            ),
-            DS::SkipList => bench_map_nbr::<nbr::SkipList<usize, usize>>(
-                config,
-                PrefillStrategy::Random,
-                nbr::skip_list::MAX_HEIGHT * 2 + 1,
-                &NBR_LARGE_CAP,
-            ),
-            DS::EFRBTree => bench_map_nbr::<nbr::EFRBTree<usize, usize>>(
-                config,
-                PrefillStrategy::Random,
-                11,
-                &NBR_LARGE_CAP,
-            ),
-            _ => panic!("Unsupported data structure for NBR"),
-        },
         MM::NBR => match config.ds {
             DS::HList => bench_map_nbr::<nbr::HList<usize, usize>>(
                 config,
                 PrefillStrategy::Decreasing,
-                2,
                 &NBR_CAP,
             ),
             DS::HMList => bench_map_nbr::<nbr::HMList<usize, usize>>(
                 config,
                 PrefillStrategy::Decreasing,
-                2,
                 &NBR_CAP,
             ),
             DS::HHSList => bench_map_nbr::<nbr::HHSList<usize, usize>>(
                 config,
                 PrefillStrategy::Decreasing,
-                2,
                 &NBR_CAP,
             ),
             DS::HashMap => bench_map_nbr::<nbr::HashMap<usize, usize>>(
                 config,
                 PrefillStrategy::Decreasing,
-                2,
                 &NBR_CAP,
             ),
             DS::NMTree => bench_map_nbr::<nbr::NMTreeMap<usize, usize>>(
                 config,
                 PrefillStrategy::Random,
-                4,
-                &NBR_CAP,
-            ),
-            DS::SkipList => bench_map_nbr::<nbr::SkipList<usize, usize>>(
-                config,
-                PrefillStrategy::Random,
-                nbr::skip_list::MAX_HEIGHT * 2 + 1,
-                &NBR_CAP,
-            ),
-            DS::EFRBTree => bench_map_nbr::<nbr::EFRBTree<usize, usize>>(
-                config,
-                PrefillStrategy::Random,
-                11,
                 &NBR_CAP,
             ),
             _ => panic!("Unsupported data structure for NBR"),
@@ -807,14 +738,16 @@ impl PrefillStrategy {
         config: &Config,
         map: &M,
     ) {
-        let guard = unsafe { nbr_rs::unprotected() };
+        let collector = &nbr_rs::Collector::new(1, 256, 32);
+        let mut guard = collector.register();
+        let mut handle = M::handle(&mut guard);
         let rng = &mut rand::thread_rng();
         match self {
             PrefillStrategy::Random => {
                 for _ in 0..config.prefill {
                     let key = config.key_dist.sample(rng);
                     let value = key.clone();
-                    map.insert(key, value, guard);
+                    map.insert(key, value, &mut handle, &guard);
                 }
             }
             PrefillStrategy::Decreasing => {
@@ -825,7 +758,7 @@ impl PrefillStrategy {
                 keys.sort_by(|a, b| b.cmp(a));
                 for key in keys.drain(..) {
                     let value = key.clone();
-                    map.insert(key, value, guard);
+                    map.insert(key, value, &mut handle, &guard);
                 }
             }
         }
@@ -1328,7 +1261,6 @@ fn bench_map_hp<M: hp::ConcurrentMap<usize, usize> + Send + Sync, N: Unsigned>(
 fn bench_map_nbr<M: nbr::ConcurrentMap<usize, usize> + Send + Sync>(
     config: &Config,
     strategy: PrefillStrategy,
-    max_hazptr_per_thread: usize,
     nbr_config: &NBRConfig,
 ) -> (u64, usize, usize, usize, usize) {
     let map = &M::new();
@@ -1336,7 +1268,6 @@ fn bench_map_nbr<M: nbr::ConcurrentMap<usize, usize> + Send + Sync>(
 
     let collector = &nbr_rs::Collector::new(
         config.threads,
-        max_hazptr_per_thread,
         nbr_config.bag_cap_pow2,
         nbr_config.lowatermark,
     );
@@ -1394,7 +1325,8 @@ fn bench_map_nbr<M: nbr::ConcurrentMap<usize, usize> + Send + Sync>(
             s.spawn(move |_| {
                 let mut ops: u64 = 0;
                 let mut rng = &mut rand::thread_rng();
-                let guard = collector.register();
+                let mut guard = collector.register();
+                let mut handle = M::handle(&mut guard);
                 barrier.clone().wait();
                 let start = Instant::now();
 
@@ -1402,14 +1334,14 @@ fn bench_map_nbr<M: nbr::ConcurrentMap<usize, usize> + Send + Sync>(
                     let key = config.key_dist.sample(rng);
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
                         Op::Get => {
-                            map.get(&key, &guard);
+                            map.get(&key, &mut handle, &guard);
                         }
                         Op::Insert => {
                             let value = key.clone();
-                            map.insert(key, value, &guard);
+                            map.insert(key, value, &mut handle, &guard);
                         }
                         Op::Remove => {
-                            map.remove(&key, &guard);
+                            map.remove(&key, &mut handle, &guard);
                         }
                     }
                     ops += 1;
@@ -1515,8 +1447,7 @@ fn bench_map_cdrc<
                     }
                     ops += 1;
                     if ops % N::to_u64() == 0 {
-                        drop(guard);
-                        guard = Guard::handle();
+                        guard.release();
                     }
                 }
 
@@ -1543,6 +1474,8 @@ fn bench_map_hp_sharp<M: hp_sharp_bench::ConcurrentMap<usize, usize> + Send + Sy
 ) -> (u64, usize, usize, usize, usize) {
     let map = &M::new();
     strategy.prefill_hp_sharp(config, map);
+
+    let collector = &hp_sharp::Global::new();
 
     let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
     let (ops_sender, ops_receiver) = mpsc::channel();
@@ -1597,30 +1530,28 @@ fn bench_map_hp_sharp<M: hp_sharp_bench::ConcurrentMap<usize, usize> + Send + Sy
             s.spawn(move |_| {
                 let mut ops: u64 = 0;
                 let mut rng = &mut rand::thread_rng();
-                hp_sharp::HANDLE.with(|handle| {
-                    let handle = &mut **handle.borrow_mut();
-                    let output = &mut M::empty_output(handle);
-                    barrier.clone().wait();
-                    let start = Instant::now();
+                let handle = &mut collector.register();
+                let output = &mut M::empty_output(handle);
+                barrier.clone().wait();
+                let start = Instant::now();
 
-                    while start.elapsed() < config.duration {
-                        let key = config.key_dist.sample(rng);
-                        match Op::OPS[config.op_dist.sample(&mut rng)] {
-                            Op::Get => {
-                                map.get(&key, output, handle);
-                            }
-                            Op::Insert => {
-                                let value = key.clone();
-                                map.insert(key, value, output, handle);
-                            }
-                            Op::Remove => {
-                                map.remove(&key, output, handle);
-                            }
+                while start.elapsed() < config.duration {
+                    let key = config.key_dist.sample(rng);
+                    match Op::OPS[config.op_dist.sample(&mut rng)] {
+                        Op::Get => {
+                            map.get(&key, output, handle);
                         }
-                        ops += 1;
+                        Op::Insert => {
+                            let value = key.clone();
+                            map.insert(key, value, output, handle);
+                        }
+                        Op::Remove => {
+                            map.remove(&key, output, handle);
+                        }
                     }
-                    ops_sender.send(ops).unwrap();
-                });
+                    ops += 1;
+                }
+                ops_sender.send(ops).unwrap();
             });
         }
     })

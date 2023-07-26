@@ -445,7 +445,7 @@ where
         }
 
         match node_ref.key.cmp(key) {
-            cmp::Ordering::Equal => (node.clone(guard).as_rc(), false),
+            cmp::Ordering::Equal => (node.clone(guard).as_rc(guard), false),
             cmp::Ordering::Less => {
                 let (new_right, inserted) = self.do_insert(&right, key, value, guard);
                 (self.mk_balanced(node, &left, &new_right, guard), inserted)

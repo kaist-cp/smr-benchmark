@@ -86,9 +86,33 @@ pub(crate) unsafe fn send_signal(pthread: Pthread) -> nix::Result<()> {
     pthread_kill(pthread, CRASH_SIGNAL)
 }
 
+pub(crate) struct RecoveryData {
+    pub(crate) status: &'static AtomicU8,
+    pub(crate) jmp_buf: *mut sigjmp_buf,
+}
+
+impl RecoveryData {
+    #[inline]
+    pub(crate) unsafe fn new() -> Self {
+        Self {
+            status: status(),
+            jmp_buf: jmp_buf(),
+        }
+    }
+}
+
+impl Clone for RecoveryData {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            status: unsafe { &*(self.status as *const AtomicU8).clone() },
+            jmp_buf: self.jmp_buf,
+        }
+    }
+}
+
 pub(crate) struct RecoveryGuard {
-    status: &'static AtomicU8,
-    jmp_buf: *mut sigjmp_buf,
+    data: RecoveryData,
 }
 
 impl RecoveryGuard {
@@ -96,10 +120,10 @@ impl RecoveryGuard {
     ///
     /// A new `RecoveryGuard` must always be created by calling `checkpoint` macro, not calling
     /// this `new` method directly.
-    pub unsafe fn new(status: &'static AtomicU8, jmp_buf: *mut sigjmp_buf) -> Self {
-        status.store(Status::InCs.bits(), Ordering::Relaxed);
+    pub unsafe fn new(data: &RecoveryData) -> Self {
+        data.status.store(Status::InCs.bits(), Ordering::Relaxed);
         compiler_fence(Ordering::SeqCst);
-        RecoveryGuard { status, jmp_buf }
+        RecoveryGuard { data: data.clone() }
     }
 
     /// Performs a given closure crash-atomically.
@@ -110,13 +134,16 @@ impl RecoveryGuard {
     where
         F: FnOnce(&Self) -> R,
     {
-        self.status.store(Status::InCa.bits(), Ordering::Relaxed);
+        self.data
+            .status
+            .store(Status::InCa.bits(), Ordering::Relaxed);
 
         compiler_fence(Ordering::SeqCst);
         let result = body(self);
         compiler_fence(Ordering::SeqCst);
 
         if self
+            .data
             .status
             .compare_exchange(
                 Status::InCa.bits(),
@@ -135,32 +162,30 @@ impl RecoveryGuard {
     #[inline]
     pub fn restart(&self) -> ! {
         compiler_fence(Ordering::SeqCst);
-        unsafe { siglongjmp(self.jmp_buf, 1) }
+        unsafe { siglongjmp(self.data.jmp_buf, 1) }
     }
 
     #[inline]
     pub fn must_rollback(&self) -> bool {
         compiler_fence(Ordering::SeqCst);
-        Status::from_bits_truncate(self.status.load(Ordering::SeqCst)).contains(Status::InCaRb)
+        Status::from_bits_truncate(self.data.status.load(Ordering::SeqCst)).contains(Status::InCaRb)
     }
 }
 
 impl Drop for RecoveryGuard {
     #[inline]
     fn drop(&mut self) {
-        self.status.store(0, Ordering::Relaxed);
+        self.data.status.store(0, Ordering::Relaxed);
     }
 }
 
 /// Makes a checkpoint and create a `RecoveryGuard`.
 macro_rules! guard {
-    () => {{
-        let status = recovery::status();
-        let buf = recovery::jmp_buf();
+    ($data:expr) => {{
         compiler_fence(Ordering::SeqCst);
 
         // Make a checkpoint with `sigsetjmp` for recovering in this critical section.
-        if unsafe { setjmp::sigsetjmp(buf, 0) } == 1 {
+        if unsafe { setjmp::sigsetjmp($data.jmp_buf, 0) } == 1 {
             compiler_fence(Ordering::SeqCst);
 
             // Unblock the signal before restarting the section.
@@ -169,7 +194,7 @@ macro_rules! guard {
         }
         compiler_fence(Ordering::SeqCst);
 
-        crate::crcu::RecoveryGuard::new(status, buf)
+        crate::crcu::RecoveryGuard::new($data)
     }};
 }
 

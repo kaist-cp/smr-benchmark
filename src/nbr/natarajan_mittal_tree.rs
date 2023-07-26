@@ -1,8 +1,8 @@
 use super::concurrent_map::ConcurrentMap;
 use hp_pp::tagged;
 use hp_pp::{tag, untagged};
-use nbr_rs::read_phase;
 use nbr_rs::Guard;
+use nbr_rs::{read_phase, Shield};
 use std::cmp;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
@@ -147,6 +147,13 @@ struct SeekRecord<K, V> {
     leaf_dir: Direction,
 }
 
+pub struct Handle {
+    ancestor: Shield,
+    successor: Shield,
+    parent: Shield,
+    leaf: Shield,
+}
+
 // TODO(@jeehoonkang): code duplication...
 impl<K, V> SeekRecord<K, V> {
     fn successor_addr<'g>(&'g self) -> &'g AtomicPtr<Node<K, V>> {
@@ -233,10 +240,10 @@ where
     }
 
     // All `*mut Node<K, V>` fields are unmarked.
-    fn seek<'g>(&'g self, key: &K, guard: &'g Guard) -> SeekRecord<K, V> {
+    fn seek<'g>(&'g self, key: &K, handle: &mut Handle, guard: &'g Guard) -> SeekRecord<K, V> {
         let mut record;
 
-        read_phase!(guard; [record.ancestor, record.successor, record.parent, record.leaf] => {
+        read_phase!(guard => {
             let s = self.r.left.load(Ordering::Relaxed);
             let s_node = unsafe { &*untagged(s) };
             let mut leaf = tagged(s_node.left.load(Ordering::Relaxed), Marks::empty().bits());
@@ -275,6 +282,10 @@ where
                     curr = curr_node.right.load(Ordering::Acquire);
                 }
             }
+            handle.ancestor.protect(ancestor);
+            handle.successor.protect(successor);
+            handle.parent.protect(parent);
+            handle.leaf.protect(leaf);
             record = SeekRecord {
                 ancestor,
                 successor,
@@ -288,10 +299,10 @@ where
     }
 
     // All `*mut Node<K, V>` fields are unmarked.
-    fn seek_leaf<'g>(&'g self, key: &K, guard: &'g Guard) -> SeekRecord<K, V> {
+    fn seek_leaf<'g>(&'g self, key: &K, handle: &mut Handle, guard: &'g Guard) -> SeekRecord<K, V> {
         let mut record;
 
-        read_phase!(guard; [record.parent, record.leaf] => {
+        read_phase!(guard => {
             let s = self.r.left.load(Ordering::Relaxed);
             let s_node = unsafe { &*untagged(s) };
             let mut leaf = untagged(s_node.left.load(Ordering::Relaxed));
@@ -310,6 +321,7 @@ where
                 }
                 curr = untagged(curr);
             }
+            handle.leaf.protect(leaf);
             record = SeekRecord {
                 ancestor: ptr::null_mut(),
                 successor: ptr::null_mut(),
@@ -378,8 +390,8 @@ where
         is_unlinked
     }
 
-    pub fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
-        let record = self.seek_leaf(key, guard);
+    pub fn get<'g>(&'g self, key: &'g K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
+        let record = self.seek_leaf(key, handle, guard);
         let leaf_node = unsafe { &*record.leaf };
 
         if leaf_node.key.cmp(key) != cmp::Ordering::Equal {
@@ -389,7 +401,13 @@ where
         Some(leaf_node.value.as_ref().unwrap())
     }
 
-    pub fn insert(&self, key: K, value: V, guard: &Guard) -> Result<(), (K, V)> {
+    pub fn insert(
+        &self,
+        key: K,
+        value: V,
+        handle: &mut Handle,
+        guard: &Guard,
+    ) -> Result<(), (K, V)> {
         let new_leaf = Box::into_raw(Box::new(Node::new_leaf(Key::Fin(key.clone()), Some(value))));
 
         let new_internal = Box::into_raw(Box::new(Node {
@@ -400,7 +418,7 @@ where
         }));
 
         loop {
-            let record = self.seek(&key, guard);
+            let record = self.seek(&key, handle, guard);
             let leaf = record.leaf;
 
             let leaf_ref = unsafe { &*leaf };
@@ -442,13 +460,13 @@ where
         }
     }
 
-    pub fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+    pub fn remove<'g>(&'g self, key: &K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
         let mut record;
         // `leaf` and `value` are the snapshot of the node to be deleted.
         // NOTE: The paper version uses one big loop for both phases.
         // injection phase
         let (leaf, value) = loop {
-            record = self.seek(key, guard);
+            record = self.seek(key, handle, guard);
 
             // candidates
             let leaf = record.leaf;
@@ -489,7 +507,7 @@ where
 
         // cleanup phase
         loop {
-            record = self.seek(key, guard);
+            record = self.seek(key, handle, guard);
             if record.leaf != leaf {
                 // The edge to leaf flagged for deletion was removed by a helping thread
                 return Some(value);
@@ -508,21 +526,32 @@ where
     K: Ord + Clone,
     V: Clone,
 {
+    type Handle = Handle;
+
+    fn handle(guard: &mut Guard) -> Self::Handle {
+        Self::Handle {
+            ancestor: guard.acquire_shield().unwrap(),
+            successor: guard.acquire_shield().unwrap(),
+            parent: guard.acquire_shield().unwrap(),
+            leaf: guard.acquire_shield().unwrap(),
+        }
+    }
+
     fn new() -> Self {
         Self::new()
     }
 
     #[inline]
-    fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
-        self.get(key, guard)
+    fn get<'g>(&'g self, key: &'g K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
+        self.get(key, handle, guard)
     }
     #[inline]
-    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
-        self.insert(key, value, guard).is_ok()
+    fn insert(&self, key: K, value: V, handle: &mut Handle, guard: &Guard) -> bool {
+        self.insert(key, value, handle, guard).is_ok()
     }
     #[inline]
-    fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
-        self.remove(key, guard)
+    fn remove<'g>(&'g self, key: &K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
+        self.remove(key, handle, guard)
     }
 }
 
@@ -533,6 +562,6 @@ mod tests {
 
     #[test]
     fn smoke_nm_tree() {
-        concurrent_map::tests::smoke::<NMTreeMap<i32, String>>(4);
+        concurrent_map::tests::smoke::<NMTreeMap<i32, String>>();
     }
 }

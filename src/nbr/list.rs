@@ -1,5 +1,5 @@
 use super::concurrent_map::ConcurrentMap;
-use nbr_rs::{read_phase, Guard};
+use nbr_rs::{read_phase, Guard, Shield};
 
 use hp_pp::{tag, tagged, untagged};
 use std::cmp::Ordering::{Equal, Greater, Less};
@@ -50,6 +50,11 @@ struct Cursor<K, V> {
     found: bool,
 }
 
+pub struct Handle {
+    pub(crate) prev: Shield,
+    pub(crate) curr: Shield,
+}
+
 impl<K, V> List<K, V>
 where
     K: Ord,
@@ -61,12 +66,12 @@ where
     }
 
     /// Clean up a chain of logically removed nodes in each traversal.
-    fn find_harris(&self, key: &K, guard: &Guard) -> Cursor<K, V> {
+    fn find_harris(&self, key: &K, handle: &mut Handle, guard: &Guard) -> Cursor<K, V> {
         let mut cursor;
         let mut prev_next;
 
         loop {
-            read_phase!(guard; [cursor.prev, cursor.curr] => {
+            read_phase!(guard => {
                 (cursor, prev_next) = {
                     // Declaring inner cursor is important to let the compiler to conduct register
                     // optimization.
@@ -109,6 +114,8 @@ where
                     };
                     (cursor, prev_next)
                 };
+                handle.prev.protect(cursor.prev);
+                handle.curr.protect(cursor.curr);
             });
 
             // If prev and curr WERE adjacent, no need to clean up
@@ -138,12 +145,12 @@ where
         }
     }
 
-    fn find_harris_michael(&self, key: &K, guard: &Guard) -> Cursor<K, V> {
+    fn find_harris_michael(&self, key: &K, handle: &mut Handle, guard: &Guard) -> Cursor<K, V> {
         let mut cursor;
         let mut removed_next;
 
         loop {
-            read_phase!(guard; [cursor.prev, cursor.curr] => {
+            read_phase!(guard => {
                 (cursor, removed_next) = {
                     // Declaring inner cursor is important to let the compiler to conduct register
                     // optimization.
@@ -180,6 +187,8 @@ where
                     };
                     (cursor, removed_next)
                 };
+                handle.prev.protect(cursor.prev);
+                handle.curr.protect(cursor.curr);
             });
 
             if !removed_next.is_null() {
@@ -204,10 +213,15 @@ where
     }
 
     /// Gotta go fast. Doesn't fail.
-    fn find_harris_herlihy_shavit(&self, key: &K, guard: &Guard) -> Cursor<K, V> {
+    fn find_harris_herlihy_shavit(
+        &self,
+        key: &K,
+        handle: &mut Handle,
+        guard: &Guard,
+    ) -> Cursor<K, V> {
         let mut cursor;
 
-        read_phase!(guard; [cursor.prev, cursor.curr] => {
+        read_phase!(guard => {
             cursor = {
                 // Declaring inner cursor is important to let the compiler to conduct register
                 // optimization.
@@ -233,16 +247,24 @@ where
                 cursor.prev = untagged(cursor.prev);
                 cursor
             };
+            handle.curr.protect(cursor.curr);
         });
 
         return cursor;
     }
 
-    pub fn get<'g, F>(&'g self, key: &K, find: F, guard: &'g Guard) -> Option<&'g V>
+    #[inline]
+    pub fn get<'g, F>(
+        &'g self,
+        key: &K,
+        find: F,
+        handle: &mut Handle,
+        guard: &'g Guard,
+    ) -> Option<&'g V>
     where
-        F: Fn(&List<K, V>, &K, &Guard) -> Cursor<K, V>,
+        F: Fn(&List<K, V>, &K, &mut Handle, &Guard) -> Cursor<K, V>,
     {
-        let cursor = find(self, key, guard);
+        let cursor = find(self, key, handle, guard);
         if cursor.found {
             unsafe { cursor.curr.as_ref() }.map(|n| &n.value)
         } else {
@@ -250,13 +272,14 @@ where
         }
     }
 
-    pub fn insert<F>(&self, key: K, value: V, find: F, guard: &Guard) -> bool
+    #[inline]
+    pub fn insert<F>(&self, key: K, value: V, find: F, handle: &mut Handle, guard: &Guard) -> bool
     where
-        F: Fn(&List<K, V>, &K, &Guard) -> Cursor<K, V>,
+        F: Fn(&List<K, V>, &K, &mut Handle, &Guard) -> Cursor<K, V>,
     {
         let mut new_node = Box::new(Node::new(key, value));
         loop {
-            let cursor = find(self, &new_node.key, guard);
+            let cursor = find(self, &new_node.key, handle, guard);
             if cursor.found {
                 return false;
             }
@@ -276,12 +299,19 @@ where
         }
     }
 
-    pub fn remove<'g, F>(&'g self, key: &K, find: F, guard: &'g Guard) -> Option<&'g V>
+    #[inline]
+    pub fn remove<'g, F>(
+        &'g self,
+        key: &K,
+        find: F,
+        handle: &mut Handle,
+        guard: &'g Guard,
+    ) -> Option<&'g V>
     where
-        F: Fn(&List<K, V>, &K, &Guard) -> Cursor<K, V>,
+        F: Fn(&List<K, V>, &K, &mut Handle, &Guard) -> Cursor<K, V>,
     {
         loop {
-            let cursor = find(self, key, guard);
+            let cursor = find(self, key, handle, guard);
             if !cursor.found {
                 return None;
             }
@@ -304,16 +334,18 @@ where
         }
     }
 
-    fn pop<'g>(&self, guard: &'g Guard) -> Option<(&'g K, &'g V)> {
+    fn pop<'g>(&self, handle: &mut Handle, guard: &'g Guard) -> Option<(&'g K, &'g V)> {
         loop {
             let mut cursor = Cursor {
                 prev: ptr::null_mut(),
                 curr: ptr::null_mut(),
                 found: false,
             };
-            read_phase!(guard; [cursor.prev, cursor.curr] => {
+            read_phase!(guard => {
                 cursor.prev = &self.head as *const _ as *mut Node<K, V>;
                 cursor.curr = self.head.load(Ordering::Acquire);
+                handle.prev.protect(cursor.prev);
+                handle.curr.protect(cursor.curr);
             });
 
             let curr_node = match unsafe { cursor.curr.as_ref() } {
@@ -339,38 +371,82 @@ where
     }
 
     /// Omitted
-    pub fn harris_get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
-        self.get(key, Self::find_harris, guard)
+    #[inline]
+    pub fn harris_get<'g>(
+        &'g self,
+        key: &K,
+        handle: &mut Handle,
+        guard: &'g Guard,
+    ) -> Option<&'g V> {
+        self.get(key, Self::find_harris, handle, guard)
     }
 
     /// Omitted
-    pub fn harris_insert<'g>(&'g self, key: K, value: V, guard: &'g Guard) -> bool {
-        self.insert(key, value, Self::find_harris, guard)
+    #[inline]
+    pub fn harris_insert<'g>(
+        &'g self,
+        key: K,
+        value: V,
+        handle: &mut Handle,
+        guard: &'g Guard,
+    ) -> bool {
+        self.insert(key, value, Self::find_harris, handle, guard)
     }
 
     /// Omitted
-    pub fn harris_remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
-        self.remove(key, Self::find_harris, guard)
+    #[inline]
+    pub fn harris_remove<'g>(
+        &'g self,
+        key: &K,
+        handle: &mut Handle,
+        guard: &'g Guard,
+    ) -> Option<&'g V> {
+        self.remove(key, Self::find_harris, handle, guard)
     }
 
     /// Omitted
-    pub fn harris_michael_get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
-        self.get(key, Self::find_harris_michael, guard)
+    #[inline]
+    pub fn harris_michael_get<'g>(
+        &'g self,
+        key: &K,
+        handle: &mut Handle,
+        guard: &'g Guard,
+    ) -> Option<&'g V> {
+        self.get(key, Self::find_harris_michael, handle, guard)
     }
 
     /// Omitted
-    pub fn harris_michael_insert(&self, key: K, value: V, guard: &Guard) -> bool {
-        self.insert(key, value, Self::find_harris_michael, guard)
+    #[inline]
+    pub fn harris_michael_insert(
+        &self,
+        key: K,
+        value: V,
+        handle: &mut Handle,
+        guard: &Guard,
+    ) -> bool {
+        self.insert(key, value, Self::find_harris_michael, handle, guard)
     }
 
     /// Omitted
-    pub fn harris_michael_remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
-        self.remove(key, Self::find_harris_michael, guard)
+    #[inline]
+    pub fn harris_michael_remove<'g>(
+        &'g self,
+        key: &K,
+        handle: &mut Handle,
+        guard: &'g Guard,
+    ) -> Option<&'g V> {
+        self.remove(key, Self::find_harris_michael, handle, guard)
     }
 
     /// Omitted
-    pub fn harris_herlihy_shavit_get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
-        self.get(key, Self::find_harris_herlihy_shavit, guard)
+    #[inline]
+    pub fn harris_herlihy_shavit_get<'g>(
+        &'g self,
+        key: &K,
+        handle: &mut Handle,
+        guard: &'g Guard,
+    ) -> Option<&'g V> {
+        self.get(key, Self::find_harris_herlihy_shavit, handle, guard)
     }
 }
 
@@ -382,21 +458,30 @@ impl<K, V> ConcurrentMap<K, V> for HList<K, V>
 where
     K: Ord,
 {
+    type Handle = Handle;
+
+    fn handle(guard: &mut Guard) -> Self::Handle {
+        Self::Handle {
+            prev: guard.acquire_shield().unwrap(),
+            curr: guard.acquire_shield().unwrap(),
+        }
+    }
+
     fn new() -> Self {
         HList { inner: List::new() }
     }
 
     #[inline]
-    fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
-        self.inner.harris_get(key, guard)
+    fn get<'g>(&'g self, key: &K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
+        self.inner.harris_get(key, handle, guard)
     }
     #[inline]
-    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
-        self.inner.harris_insert(key, value, guard)
+    fn insert(&self, key: K, value: V, handle: &mut Handle, guard: &Guard) -> bool {
+        self.inner.harris_insert(key, value, handle, guard)
     }
     #[inline]
-    fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
-        self.inner.harris_remove(key, guard)
+    fn remove<'g>(&'g self, key: &K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
+        self.inner.harris_remove(key, handle, guard)
     }
 }
 
@@ -410,8 +495,13 @@ where
 {
     /// For optimistic search on HashMap
     #[inline]
-    pub fn get_harris_herlihy_shavit<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
-        self.inner.harris_herlihy_shavit_get(key, guard)
+    pub fn get_harris_herlihy_shavit<'g>(
+        &'g self,
+        key: &K,
+        handle: &mut Handle,
+        guard: &'g Guard,
+    ) -> Option<&'g V> {
+        self.inner.harris_herlihy_shavit_get(key, handle, guard)
     }
 }
 
@@ -419,21 +509,30 @@ impl<K, V> ConcurrentMap<K, V> for HMList<K, V>
 where
     K: Ord,
 {
+    type Handle = Handle;
+
+    fn handle(guard: &mut Guard) -> Self::Handle {
+        Self::Handle {
+            prev: guard.acquire_shield().unwrap(),
+            curr: guard.acquire_shield().unwrap(),
+        }
+    }
+
     fn new() -> Self {
         HMList { inner: List::new() }
     }
 
     #[inline]
-    fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
-        self.inner.harris_michael_get(key, guard)
+    fn get<'g>(&'g self, key: &K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
+        self.inner.harris_michael_get(key, handle, guard)
     }
     #[inline]
-    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
-        self.inner.harris_michael_insert(key, value, guard)
+    fn insert(&self, key: K, value: V, handle: &mut Handle, guard: &Guard) -> bool {
+        self.inner.harris_michael_insert(key, value, handle, guard)
     }
     #[inline]
-    fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
-        self.inner.harris_michael_remove(key, guard)
+    fn remove<'g>(&'g self, key: &K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
+        self.inner.harris_michael_remove(key, handle, guard)
     }
 }
 
@@ -445,8 +544,8 @@ impl<K, V> HHSList<K, V>
 where
     K: Ord,
 {
-    pub fn pop<'g>(&self, guard: &'g Guard) -> Option<(&'g K, &'g V)> {
-        self.inner.pop(guard)
+    pub fn pop<'g>(&self, handle: &mut Handle, guard: &'g Guard) -> Option<(&'g K, &'g V)> {
+        self.inner.pop(handle, guard)
     }
 }
 
@@ -454,21 +553,30 @@ impl<K, V> ConcurrentMap<K, V> for HHSList<K, V>
 where
     K: Ord,
 {
+    type Handle = Handle;
+
+    fn handle(guard: &mut Guard) -> Self::Handle {
+        Self::Handle {
+            prev: guard.acquire_shield().unwrap(),
+            curr: guard.acquire_shield().unwrap(),
+        }
+    }
+
     fn new() -> Self {
         HHSList { inner: List::new() }
     }
 
     #[inline]
-    fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
-        self.inner.harris_herlihy_shavit_get(key, guard)
+    fn get<'g>(&'g self, key: &K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
+        self.inner.harris_herlihy_shavit_get(key, handle, guard)
     }
     #[inline]
-    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
-        self.inner.harris_insert(key, value, guard)
+    fn insert(&self, key: K, value: V, handle: &mut Handle, guard: &Guard) -> bool {
+        self.inner.harris_insert(key, value, handle, guard)
     }
     #[inline]
-    fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
-        self.inner.harris_remove(key, guard)
+    fn remove<'g>(&'g self, key: &K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
+        self.inner.harris_remove(key, handle, guard)
     }
 }
 
@@ -479,17 +587,17 @@ mod tests {
 
     #[test]
     fn smoke_h_list() {
-        concurrent_map::tests::smoke::<HList<i32, String>>(2);
+        concurrent_map::tests::smoke::<HList<i32, String>>();
     }
 
     #[test]
     fn smoke_hm_list() {
-        concurrent_map::tests::smoke::<HMList<i32, String>>(2);
+        concurrent_map::tests::smoke::<HMList<i32, String>>();
     }
 
     #[test]
     fn smoke_hhs_list() {
-        concurrent_map::tests::smoke::<HHSList<i32, String>>(2);
+        concurrent_map::tests::smoke::<HHSList<i32, String>>();
     }
 
     #[test]
@@ -497,19 +605,21 @@ mod tests {
         use concurrent_map::ConcurrentMap;
         let map = HHSList::new();
 
-        let guard = unsafe { nbr_rs::unprotected() };
-        map.insert(1, "1", guard);
-        map.insert(2, "2", guard);
-        map.insert(3, "3", guard);
+        let collector = nbr_rs::Collector::new(1, 256, 32);
+        let guard = &mut collector.register();
+        let mut handle = HHSList::<i32, &str>::handle(guard);
+        map.insert(1, "1", &mut handle, guard);
+        map.insert(2, "2", &mut handle, guard);
+        map.insert(3, "3", &mut handle, guard);
 
         fn assert_eq(a: (&i32, &&str), b: (i32, &str)) {
             assert_eq!(*a.0, b.0);
             assert_eq!(*a.1, b.1);
         }
 
-        assert_eq(map.pop(guard).unwrap(), (1, "1"));
-        assert_eq(map.pop(guard).unwrap(), (2, "2"));
-        assert_eq(map.pop(guard).unwrap(), (3, "3"));
-        assert_eq!(map.pop(guard), None);
+        assert_eq(map.pop(&mut handle, guard).unwrap(), (1, "1"));
+        assert_eq(map.pop(&mut handle, guard).unwrap(), (2, "2"));
+        assert_eq(map.pop(&mut handle, guard).unwrap(), (3, "3"));
+        assert_eq!(map.pop(&mut handle, guard), None);
     }
 }

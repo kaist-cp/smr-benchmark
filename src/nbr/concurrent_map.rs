@@ -1,10 +1,18 @@
 use nbr_rs::Guard;
 
 pub trait ConcurrentMap<K, V> {
+    type Handle;
+
     fn new() -> Self;
-    fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V>;
-    fn insert(&self, key: K, value: V, guard: &Guard) -> bool;
-    fn remove<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V>;
+    fn handle(guard: &mut Guard) -> Self::Handle;
+    fn get<'g>(&'g self, key: &'g K, handle: &mut Self::Handle, guard: &'g Guard) -> Option<&'g V>;
+    fn insert(&self, key: K, value: V, handle: &mut Self::Handle, guard: &Guard) -> bool;
+    fn remove<'g>(
+        &'g self,
+        key: &'g K,
+        handle: &mut Self::Handle,
+        guard: &'g Guard,
+    ) -> Option<&'g V>;
 }
 
 #[cfg(test)]
@@ -20,26 +28,22 @@ pub mod tests {
     const ELEMENTS_PER_THREADS: i32 = 1000;
 
     /// `max_hazptr_per_thread` depends on the data structure.
-    pub fn smoke<M: ConcurrentMap<i32, String> + Send + Sync>(max_hazptr_per_thread: usize) {
+    pub fn smoke<M: ConcurrentMap<i32, String> + Send + Sync>() {
         let map = &M::new();
-        let collector = Arc::new(Collector::new(
-            THREADS as usize,
-            max_hazptr_per_thread,
-            256,
-            32,
-        ));
+        let collector = Arc::new(Collector::new(THREADS as usize, 256, 32));
 
         thread::scope(|s| {
             for t in 0..THREADS {
                 let collector = Arc::clone(&collector);
                 s.spawn(move |_| {
-                    let guard = collector.register();
+                    let mut guard = collector.register();
+                    let mut handle = M::handle(&mut guard);
                     let mut rng = rand::thread_rng();
                     let mut keys: Vec<i32> =
                         (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        assert!(map.insert(i, i.to_string(), &guard));
+                        assert!(map.insert(i, i.to_string(), &mut handle, &guard));
                     }
                 });
             }
@@ -54,18 +58,22 @@ pub mod tests {
             for t in 0..THREADS {
                 let collector = Arc::clone(&collector);
                 s.spawn(move |_| {
-                    let guard = collector.register();
+                    let mut guard = collector.register();
+                    let mut handle = M::handle(&mut guard);
                     let mut rng = rand::thread_rng();
                     let mut keys: Vec<i32> =
                         (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
                     keys.shuffle(&mut rng);
                     if t < THREADS / 2 {
                         for i in keys {
-                            assert_eq!(i.to_string(), *map.remove(&i, &guard).unwrap());
+                            assert_eq!(
+                                i.to_string(),
+                                *map.remove(&i, &mut handle, &guard).unwrap()
+                            );
                         }
                     } else {
                         for i in keys {
-                            assert_eq!(i.to_string(), *map.get(&i, &guard).unwrap());
+                            assert_eq!(i.to_string(), *map.get(&i, &mut handle, &guard).unwrap());
                         }
                     }
                 });

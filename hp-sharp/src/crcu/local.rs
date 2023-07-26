@@ -20,7 +20,7 @@ use super::{
     epoch::{AtomicEpoch, Epoch},
     global::Global,
     guard::EpochGuard,
-    recovery, Deferrable,
+    recovery, Deferrable, RecoveryData,
 };
 
 const_assert!(Atomic::<Pthread>::is_lock_free());
@@ -121,13 +121,13 @@ impl Local {
     /// * https://github.com/jeff-davis/setjmp.rs#problems
     #[cfg(not(sanitize = "address"))]
     #[inline(never)]
-    unsafe fn pin<F>(&mut self, mut body: F)
+    unsafe fn pin<F>(&mut self, data: &RecoveryData, mut body: F)
     where
         F: FnMut(&mut EpochGuard),
     {
         {
             // Makes a checkpoint and create a `RecoveryGuard`.
-            let guard = recovery::guard!();
+            let guard = recovery::guard!(data);
 
             // Repin the current epoch.
             // Acquiring an epoch must be proceeded after starting the crashable section,
@@ -152,7 +152,7 @@ impl Local {
 
     #[cfg(sanitize = "address")]
     #[inline(never)]
-    unsafe fn pin<F>(&mut self, mut body: F)
+    unsafe fn pin<F>(&mut self, data: &RecoveryData, mut body: F)
     where
         F: FnMut(&mut EpochGuard),
     {
@@ -172,7 +172,7 @@ impl Local {
         loop {
             {
                 // Makes a checkpoint and create a `RecoveryGuard`.
-                let guard = recovery::guard!();
+                let guard = recovery::guard!(data);
 
                 // Repin the current epoch.
                 // Acquiring an epoch must be proceeded after starting the crashable section,
@@ -289,7 +289,7 @@ impl LocalList {
             }
         };
         local.owner.store(tid, Ordering::Release);
-        Handle { local }
+        Handle::new(local)
     }
 
     /// Returns an iterator over all using `Local`s.
@@ -351,9 +351,18 @@ where
 /// A thread-local handle managing local epoch and defering.
 pub struct Handle {
     local: *mut Local,
+    data: RecoveryData,
 }
 
 impl Handle {
+    #[inline]
+    fn new(local: &mut Local) -> Self {
+        Self {
+            local,
+            data: unsafe { RecoveryData::new() }
+        }
+    }
+
     /// Starts a crashable critical section where we cannot perform operations with side-effects,
     /// such as system calls, non-atomic write on a global variable, etc.
     ///
@@ -367,7 +376,7 @@ impl Handle {
     where
         F: FnMut(&mut EpochGuard),
     {
-        unsafe { (*self.local).pin(body) }
+        unsafe { (*self.local).pin(&self.data, body) }
     }
 }
 

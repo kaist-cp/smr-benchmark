@@ -346,7 +346,7 @@ where
     ) -> bool {
         let cursor = &mut output.0;
         unsafe {
-            cursor.traverse(handle, |guard| {
+            cursor.curr.traverse(handle, |guard| {
                 let mut cursor = SharedCursor::new(&self.head, guard);
                 cursor.found = loop {
                     let curr_node = some_or!(cursor.curr.as_ref(guard), break false);
@@ -360,7 +360,7 @@ where
                         Greater => break false,
                     }
                 };
-                cursor
+                cursor.curr
             });
         }
         true

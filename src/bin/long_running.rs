@@ -265,7 +265,7 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
         MM::HP_PP => bench_map_hp_pp(config, PrefillStrategy::Decreasing),
         MM::CDRC_EBR => bench_map_cdrc::<cdrc_rs::GuardEBR, N>(config, PrefillStrategy::Decreasing),
         MM::HP_SHARP => bench_map_hp_sharp(config, PrefillStrategy::Decreasing),
-        MM::NBR => bench_map_nbr(config, PrefillStrategy::Decreasing, 2),
+        MM::NBR => bench_map_nbr(config, PrefillStrategy::Decreasing),
     };
     output
         .write_record(&[
@@ -472,14 +472,16 @@ impl PrefillStrategy {
         config: &Config,
         map: &M,
     ) {
-        let guard = unsafe { nbr_rs::unprotected() };
+        let collector = &nbr_rs::Collector::new(1, 256, 32);
+        let mut guard = collector.register();
+        let mut handle = M::handle(&mut guard);
         let rng = &mut rand::thread_rng();
         match self {
             PrefillStrategy::Random => {
                 for _ in 0..config.prefill {
                     let key = generate_key(config, rng);
                     let value = key.to_string();
-                    map.insert(key, value, guard);
+                    map.insert(key, value, &mut handle, &guard);
                 }
             }
             PrefillStrategy::Decreasing => {
@@ -490,7 +492,7 @@ impl PrefillStrategy {
                 keys.sort_by(|a, b| b.cmp(a));
                 for key in keys.drain(..) {
                     let value = key.to_string();
-                    map.insert(key, value, guard);
+                    map.insert(key, value, &mut handle, &guard);
                 }
             }
         }
@@ -1309,18 +1311,13 @@ fn bench_map_hp_sharp(
     (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
 }
 
-fn bench_map_nbr(
-    config: &Config,
-    strategy: PrefillStrategy,
-    max_hazptr_per_thread: usize,
-) -> (u64, usize, usize, usize, usize) {
+fn bench_map_nbr(config: &Config, strategy: PrefillStrategy) -> (u64, usize, usize, usize, usize) {
     use nbr::ConcurrentMap;
     let map = &nbr::HHSList::new();
     strategy.prefill_nbr(config, map);
 
     let collector = &nbr_rs::Collector::new(
         config.writers + config.readers,
-        max_hazptr_per_thread,
         NBR_CAP.bag_cap_pow2,
         NBR_CAP.lowatermark,
     );
@@ -1378,16 +1375,17 @@ fn bench_map_nbr(
         // Spawn writer threads.
         for _ in 0..config.writers {
             s.spawn(move |_| {
-                let guard = collector.register();
+                let mut guard = collector.register();
+                let mut handle = nbr::HHSList::<String, String>::handle(&mut guard);
                 barrier.clone().wait();
                 let start = Instant::now();
 
                 let mut acquired = None;
                 while start.elapsed() < config.duration {
                     if let Some((key, value)) = acquired.take() {
-                        assert!(map.insert(key, value, &guard));
+                        assert!(map.insert(key, value, &mut handle, &guard));
                     } else {
-                        let (key, value) = map.pop(&guard).unwrap();
+                        let (key, value) = map.pop(&mut handle, &guard).unwrap();
                         acquired = Some((key.clone(), value.clone()));
                     }
                 }
@@ -1398,7 +1396,8 @@ fn bench_map_nbr(
         for _ in 0..config.readers {
             let ops_sender = ops_sender.clone();
             s.spawn(move |_| {
-                let guard = collector.register();
+                let mut guard = collector.register();
+                let mut handle = nbr::HHSList::<String, String>::handle(&mut guard);
                 let mut ops: u64 = 0;
                 let rng = &mut rand::thread_rng();
                 barrier.clone().wait();
@@ -1406,7 +1405,7 @@ fn bench_map_nbr(
 
                 while start.elapsed() < config.duration {
                     let key = generate_key(config, rng);
-                    let _ = map.get(&key, &guard);
+                    let _ = map.get(&key, &mut handle, &guard);
                     ops += 1;
                 }
 

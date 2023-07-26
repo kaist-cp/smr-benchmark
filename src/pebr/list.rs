@@ -553,25 +553,6 @@ where
     ) -> Option<&'g V> {
         self.get(key, Cursor::find_harris_herlihy_shavit, cursor, guard)
     }
-
-    pub fn harris_herlihy_shavit_insert(
-        &self,
-        key: K,
-        value: V,
-        cursor: &mut Cursor<K, V>,
-        guard: &mut Guard,
-    ) -> bool {
-        self.insert(key, value, Cursor::find_harris_michael, cursor, guard)
-    }
-
-    pub fn harris_herlihy_shavit_remove(
-        &self,
-        key: &K,
-        cursor: &mut Cursor<K, V>,
-        guard: &mut Guard,
-    ) -> Option<V> {
-        self.remove(key, Cursor::find_harris_michael, cursor, guard)
-    }
 }
 
 pub struct HList<K, V> {
@@ -716,12 +697,11 @@ where
     }
     #[inline]
     fn insert(&self, handle: &mut Self::Handle, key: K, value: V, guard: &mut Guard) -> bool {
-        self.inner
-            .harris_herlihy_shavit_insert(key, value, handle, guard)
+        self.inner.harris_insert(key, value, handle, guard)
     }
     #[inline]
     fn remove(&self, handle: &mut Self::Handle, key: &K, guard: &mut Guard) -> Option<V> {
-        self.inner.harris_herlihy_shavit_remove(key, handle, guard)
+        self.inner.harris_remove(key, handle, guard)
     }
 }
 

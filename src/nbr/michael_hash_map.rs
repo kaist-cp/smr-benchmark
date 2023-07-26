@@ -3,7 +3,7 @@ use nbr_rs::Guard;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use super::list::HHSList;
+use super::list::{HHSList, Handle};
 
 pub struct HashMap<K, V> {
     buckets: Vec<HHSList<K, V>>,
@@ -35,19 +35,22 @@ where
         s.finish() as usize
     }
 
-    pub fn get<'g>(&'g self, k: &'g K, guard: &'g Guard) -> Option<&'g V> {
+    #[inline]
+    pub fn get<'g>(&'g self, k: &'g K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
         let i = Self::hash(k);
-        self.get_bucket(i).get(k, guard)
+        self.get_bucket(i).get(k, handle, guard)
     }
 
-    pub fn insert(&self, k: K, v: V, guard: &Guard) -> bool {
+    #[inline]
+    pub fn insert(&self, k: K, v: V, handle: &mut Handle, guard: &Guard) -> bool {
         let i = Self::hash(&k);
-        self.get_bucket(i).insert(k, v, guard)
+        self.get_bucket(i).insert(k, v, handle, guard)
     }
 
-    pub fn remove<'g>(&'g self, k: &'g K, guard: &'g Guard) -> Option<&'g V> {
+    #[inline]
+    pub fn remove<'g>(&'g self, k: &'g K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
         let i = Self::hash(&k);
-        self.get_bucket(i).remove(k, guard)
+        self.get_bucket(i).remove(k, handle, guard)
     }
 }
 
@@ -55,21 +58,30 @@ impl<K, V> ConcurrentMap<K, V> for HashMap<K, V>
 where
     K: Ord + Hash,
 {
+    type Handle = Handle;
+
+    fn handle(guard: &mut Guard) -> Self::Handle {
+        Self::Handle {
+            prev: guard.acquire_shield().unwrap(),
+            curr: guard.acquire_shield().unwrap(),
+        }
+    }
+
     fn new() -> Self {
         Self::with_capacity(30000)
     }
 
     #[inline]
-    fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
-        self.get(key, guard)
+    fn get<'g>(&'g self, key: &'g K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
+        self.get(key, handle, guard)
     }
     #[inline]
-    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
-        self.insert(key, value, guard)
+    fn insert(&self, key: K, value: V, handle: &mut Handle, guard: &Guard) -> bool {
+        self.insert(key, value, handle, guard)
     }
     #[inline]
-    fn remove<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
-        self.remove(key, guard)
+    fn remove<'g>(&'g self, key: &'g K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
+        self.remove(key, handle, guard)
     }
 }
 
@@ -80,6 +92,6 @@ mod tests {
 
     #[test]
     fn smoke_hashmap() {
-        concurrent_map::tests::smoke::<HashMap<i32, String>>(2);
+        concurrent_map::tests::smoke::<HashMap<i32, String>>();
     }
 }
