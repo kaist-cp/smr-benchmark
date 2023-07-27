@@ -265,7 +265,7 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
         MM::HP_PP => bench_map_hp_pp(config, PrefillStrategy::Decreasing),
         MM::CDRC_EBR => bench_map_cdrc::<cdrc_rs::GuardEBR, N>(config, PrefillStrategy::Decreasing),
         MM::HP_SHARP => bench_map_hp_sharp(config, PrefillStrategy::Decreasing),
-        MM::NBR => bench_map_nbr(config, PrefillStrategy::Decreasing),
+        MM::NBR => bench_map_nbr(config, PrefillStrategy::Decreasing, 2),
     };
     output
         .write_record(&[
@@ -471,8 +471,9 @@ impl PrefillStrategy {
         self,
         config: &Config,
         map: &M,
+        max_hazptrs: usize,
     ) {
-        let collector = &nbr_rs::Collector::new(1, 256, 32);
+        let collector = &nbr_rs::Collector::new(1, 256, 32, max_hazptrs);
         let mut guard = collector.register();
         let mut handle = M::handle(&mut guard);
         let rng = &mut rand::thread_rng();
@@ -1311,15 +1312,16 @@ fn bench_map_hp_sharp(
     (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
 }
 
-fn bench_map_nbr(config: &Config, strategy: PrefillStrategy) -> (u64, usize, usize, usize, usize) {
+fn bench_map_nbr(config: &Config, strategy: PrefillStrategy, max_hazptrs: usize) -> (u64, usize, usize, usize, usize) {
     use nbr::ConcurrentMap;
     let map = &nbr::HHSList::new();
-    strategy.prefill_nbr(config, map);
+    strategy.prefill_nbr(config, map, max_hazptrs);
 
     let collector = &nbr_rs::Collector::new(
         config.writers + config.readers,
         NBR_CAP.bag_cap_pow2,
         NBR_CAP.lowatermark,
+        max_hazptrs
     );
 
     let barrier = &Arc::new(Barrier::new(
