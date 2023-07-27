@@ -479,31 +479,31 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 config,
                 PrefillStrategy::Decreasing,
                 &NBR_CAP,
-                2
+                2,
             ),
             DS::HMList => bench_map_nbr::<nbr::HMList<usize, usize>>(
                 config,
                 PrefillStrategy::Decreasing,
                 &NBR_CAP,
-                2
+                2,
             ),
             DS::HHSList => bench_map_nbr::<nbr::HHSList<usize, usize>>(
                 config,
                 PrefillStrategy::Decreasing,
                 &NBR_CAP,
-                2
+                2,
             ),
             DS::HashMap => bench_map_nbr::<nbr::HashMap<usize, usize>>(
                 config,
                 PrefillStrategy::Decreasing,
                 &NBR_CAP,
-                2
+                2,
             ),
             DS::NMTree => bench_map_nbr::<nbr::NMTreeMap<usize, usize>>(
                 config,
                 PrefillStrategy::Random,
                 &NBR_CAP,
-                4
+                4,
             ),
             _ => panic!("Unsupported data structure for NBR"),
         },

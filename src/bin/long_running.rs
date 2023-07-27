@@ -1312,7 +1312,11 @@ fn bench_map_hp_sharp(
     (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
 }
 
-fn bench_map_nbr(config: &Config, strategy: PrefillStrategy, max_hazptrs: usize) -> (u64, usize, usize, usize, usize) {
+fn bench_map_nbr(
+    config: &Config,
+    strategy: PrefillStrategy,
+    max_hazptrs: usize,
+) -> (u64, usize, usize, usize, usize) {
     use nbr::ConcurrentMap;
     let map = &nbr::HHSList::new();
     strategy.prefill_nbr(config, map, max_hazptrs);
@@ -1321,7 +1325,7 @@ fn bench_map_nbr(config: &Config, strategy: PrefillStrategy, max_hazptrs: usize)
         config.writers + config.readers,
         NBR_CAP.bag_cap_pow2,
         NBR_CAP.lowatermark,
-        max_hazptrs
+        max_hazptrs,
     );
 
     let barrier = &Arc::new(Barrier::new(
