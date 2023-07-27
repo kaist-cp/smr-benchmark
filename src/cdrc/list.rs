@@ -33,6 +33,27 @@ where
     }
 }
 
+impl<K, V, Guard> Drop for List<K, V, Guard>
+where
+    Guard: AcquireRetire,
+{
+    fn drop(&mut self) {
+        // `Drop` for CDRC List is not necessary, but it effectively prevents a stack overflow.
+        let guard = unsafe { &Guard::unprotected() };
+        unsafe {
+            let mut curr = self.head.load(guard);
+            let mut next;
+
+            while !curr.is_null() {
+                let curr_ref = curr.deref_mut();
+                next = curr_ref.next.load(guard);
+                curr_ref.next.store_null(guard);
+                curr = next;
+            }
+        }
+    }
+}
+
 impl<K, V, Guard> Node<K, V, Guard>
 where
     Guard: AcquireRetire,
