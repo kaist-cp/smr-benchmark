@@ -479,26 +479,31 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 config,
                 PrefillStrategy::Decreasing,
                 &NBR_CAP,
+                2
             ),
             DS::HMList => bench_map_nbr::<nbr::HMList<usize, usize>>(
                 config,
                 PrefillStrategy::Decreasing,
                 &NBR_CAP,
+                2
             ),
             DS::HHSList => bench_map_nbr::<nbr::HHSList<usize, usize>>(
                 config,
                 PrefillStrategy::Decreasing,
                 &NBR_CAP,
+                2
             ),
             DS::HashMap => bench_map_nbr::<nbr::HashMap<usize, usize>>(
                 config,
                 PrefillStrategy::Decreasing,
                 &NBR_CAP,
+                2
             ),
             DS::NMTree => bench_map_nbr::<nbr::NMTreeMap<usize, usize>>(
                 config,
                 PrefillStrategy::Random,
                 &NBR_CAP,
+                4
             ),
             _ => panic!("Unsupported data structure for NBR"),
         },
@@ -731,8 +736,9 @@ impl PrefillStrategy {
         self,
         config: &Config,
         map: &M,
+        max_hazptrs: usize,
     ) {
-        let collector = &nbr_rs::Collector::new(1, 256, 32);
+        let collector = &nbr_rs::Collector::new(1, 256, 32, max_hazptrs);
         let mut guard = collector.register();
         let mut handle = M::handle(&mut guard);
         let rng = &mut rand::thread_rng();
@@ -1253,14 +1259,16 @@ fn bench_map_nbr<M: nbr::ConcurrentMap<usize, usize> + Send + Sync>(
     config: &Config,
     strategy: PrefillStrategy,
     nbr_config: &NBRConfig,
+    max_hazptrs: usize,
 ) -> (u64, usize, usize, usize, usize) {
     let map = &M::new();
-    strategy.prefill_nbr(config, map);
+    strategy.prefill_nbr(config, map, max_hazptrs);
 
     let collector = &nbr_rs::Collector::new(
         config.threads,
         nbr_config.bag_cap_pow2,
         nbr_config.lowatermark,
+        max_hazptrs,
     );
 
     let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));

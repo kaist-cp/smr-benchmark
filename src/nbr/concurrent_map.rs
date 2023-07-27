@@ -30,7 +30,7 @@ pub mod tests {
     /// `max_hazptr_per_thread` depends on the data structure.
     pub fn smoke<M: ConcurrentMap<i32, String> + Send + Sync>() {
         let map = &M::new();
-        let collector = Arc::new(Collector::new(THREADS as usize, 256, 32));
+        let collector = Arc::new(Collector::new(THREADS as usize, 256, 32, 16));
 
         thread::scope(|s| {
             for t in 0..THREADS {
