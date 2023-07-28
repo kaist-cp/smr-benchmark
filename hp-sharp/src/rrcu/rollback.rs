@@ -105,7 +105,7 @@ impl Rollbacker {
     #[inline]
     pub fn must_rollback(&self) -> bool {
         compiler_fence(Ordering::SeqCst);
-        Status::from_bits_truncate(unsafe { &*self.status }.load(Ordering::SeqCst))
+        Status::from_bits_truncate(unsafe { &*self.status }.load(Ordering::Relaxed))
             .contains(Status::InCaRb)
     }
 }

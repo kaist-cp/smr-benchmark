@@ -65,7 +65,7 @@ impl CsGuardRRCU for CsGuard {
         compiler_fence(Ordering::SeqCst);
         let result = self.rb.atomic(|rb| {
             let mut guard = RaGuard {
-                local: unsafe { &mut *self.local },
+                local: self.local,
                 rb,
             };
             let result = body(&mut guard);

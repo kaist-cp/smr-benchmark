@@ -100,6 +100,7 @@ impl LocalRRCU for Local {
     {
         // Makes a checkpoint and create a `Rollbacker`.
         let rb = rollback::checkpoint!(&self.status, &mut self.chkpt);
+        compiler_fence(Ordering::SeqCst);
 
         // Repin the current epoch.
         // Acquiring an epoch must be proceeded after starting the crashable section,
@@ -142,29 +143,29 @@ impl LocalRRCU for Local {
         //
         // So, they are added to avoid false positives from the sanitizer.
         loop {
-            {
-                // Makes a checkpoint and create a `Rollbacker`.
-                let rb = rollback::checkpoint!(&self.status, &mut self.chkpt);
+            // Makes a checkpoint and create a `Rollbacker`.
+            let rb = rollback::checkpoint!(&self.status, &mut self.chkpt);
+            compiler_fence(Ordering::SeqCst);
 
-                // Repin the current epoch.
-                // Acquiring an epoch must be proceeded after starting the crashable section,
-                // not before. This is because if we acquire it before allowing a crash,
-                // it is possible to be ejected before allowing. Although an ejection is occured,
-                // the critical section would continues, as we would not `longjmp` from
-                // the signal handler.
-                self.repin();
-                compiler_fence(Ordering::SeqCst);
+            // Repin the current epoch.
+            // Acquiring an epoch must be proceeded after starting the crashable section,
+            // not before. This is because if we acquire it before allowing a crash,
+            // it is possible to be ejected before allowing. Although an ejection is occured,
+            // the critical section would continues, as we would not `longjmp` from
+            // the signal handler.
+            self.repin();
+            compiler_fence(Ordering::SeqCst);
 
-                // Execute the body of this section.
-                let mut guard = CsGuard::new(self, rb);
-                body(&mut guard);
-
-                // Finaly, close this critical section by dropping `guard`.
-            }
+            // Execute the body of this section.
+            let mut guard = CsGuard::new(self, rb);
+            body(&mut guard);
+            compiler_fence(Ordering::SeqCst);
 
             // We are now out of the critical(crashable) section.
             // Unpin the local epoch to help reclaimers to freely collect bags.
             self.unpin_inner();
+
+            // Finaly, close this critical section by dropping `rb`.
 
             // # HACK: A dummy loop and `blackbox`
             // (See comments on the loop for more information.)

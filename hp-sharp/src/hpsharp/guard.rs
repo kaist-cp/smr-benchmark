@@ -1,3 +1,5 @@
+use std::mem::ManuallyDrop;
+
 use crate::{rrcu::Deferrable, CsGuard, Deferred, RaGuard, Thread};
 
 use super::{free, Shared};
@@ -46,7 +48,7 @@ impl Retire for RaGuard {
         ));
 
         if let Some(collected) = collected {
-            Thread { local: self.local }.retire_inner(collected);
+            ManuallyDrop::new(Thread { local: self.local }).retire_inner(collected);
         }
     }
 }
