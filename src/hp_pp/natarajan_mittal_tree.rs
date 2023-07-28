@@ -1,4 +1,4 @@
-use hp_pp::{tag, tagged, untagged, HazardPointer, light_membarrier};
+use hp_pp::{light_membarrier, tag, tagged, untagged, HazardPointer};
 use hp_pp::{try_unlink, ProtectError};
 
 use crate::hp::concurrent_map::ConcurrentMap;
