@@ -1,84 +1,10 @@
-use std::{
-    ptr::{null, null_mut, NonNull},
-    sync::atomic::AtomicUsize,
-};
+use crate::{rrcu::Deferrable, CsGuard, Deferred, RaGuard, Thread};
 
-use crate::{
-    crcu::{self, Deferrable},
-    hpsharp::{handle::free, Handle, Shared},
-    sync::Deferred,
-};
-
-/// A high-level crashable critical section guard.
-///
-/// It is different with [`crate::crcu::EpochGuard`], as it contains a pointer to HP# [`Handle`]
-/// on the top of [`crate::crcu::EpochGuard`]. This allow us to start a `mask` section with
-/// protecting some desired pointers.
-///
-/// Note that defering is not allowed in this critical section because a crash may occur while
-/// writing data on non-atomic storage. To conduct jobs with side-effects, we must open a
-/// non-crashable section by `mask` method.
-pub struct EpochGuard {
-    pub(crate) inner: *mut crcu::EpochGuard,
-    pub(crate) handle: *const Handle,
-    pub(crate) backup_idx: Option<NonNull<AtomicUsize>>,
-}
-
-impl EpochGuard {
-    pub(crate) fn new(
-        inner: &mut crcu::EpochGuard,
-        handle: &Handle,
-        backup_idx: Option<&AtomicUsize>,
-    ) -> Self {
-        Self {
-            inner,
-            handle,
-            backup_idx: backup_idx.map(|at| unsafe {
-                NonNull::new_unchecked(at as *const AtomicUsize as *mut AtomicUsize)
-            }),
-        }
-    }
-
-    /// Creates an unprotected `EpochGuard`.
-    pub unsafe fn unprotected() -> Self {
-        Self {
-            inner: null_mut(),
-            handle: null(),
-            backup_idx: None,
-        }
-    }
-}
-
-/// A high-level non-crashable write section guard.
-///
-/// It is different with [`crate::crcu::CrashGuard`], as it contains a pointer to HP# [`Handle`]
-/// on the top of [`crate::crcu::CrashGuard`]. This allow us to retire pointers whose epochs are
-/// expired.
-///
-/// Unlike a [`EpochGuard`], it may perform jobs with side-effects such as retiring, or physical
-/// deletion for a data structure.
-pub struct CrashGuard {
-    inner: *mut crcu::CrashGuard,
-    handle: *const Handle,
-}
-
-impl CrashGuard {
-    pub(crate) fn new(inner: &mut crcu::CrashGuard, handle: *const Handle) -> Self {
-        Self { inner, handle }
-    }
-
-    /// Creates an unprotected `CrashGuard`.
-    pub unsafe fn unprotected() -> Self {
-        Self {
-            inner: null_mut(),
-            handle: null(),
-        }
-    }
-}
+use super::{free, Shared};
 
 pub trait Invalidate {
     fn invalidate(&self);
-    fn is_invalidated(&self, guard: &EpochGuard) -> bool;
+    fn is_invalidated(&self, guard: &CsGuard) -> bool;
 }
 
 pub trait Retire {
@@ -91,13 +17,13 @@ pub trait Retire {
     unsafe fn retire<'r, T: Invalidate>(&mut self, ptr: Shared<'r, T>);
 }
 
-impl Retire for Handle {
+impl Retire for Thread {
     #[inline]
     unsafe fn retire<'r, T: Invalidate>(&mut self, ptr: Shared<'r, T>) {
         // Invalidate immediately to prevent a slow thread to resume its traversal after a crash.
         ptr.deref_unchecked().invalidate();
 
-        let collected = self.crcu_handle.borrow_mut().defer(Deferred::new(
+        let collected = self.defer(Deferred::new(
             ptr.untagged().as_raw() as *const u8 as *mut u8,
             free::<T>,
         ));
@@ -108,19 +34,19 @@ impl Retire for Handle {
     }
 }
 
-impl Retire for CrashGuard {
+impl Retire for RaGuard {
     #[inline]
     unsafe fn retire<'r, T: Invalidate>(&mut self, ptr: Shared<'r, T>) {
         // Invalidate immediately to prevent a slow thread to resume its traversal after a crash.
         ptr.deref_unchecked().invalidate();
 
-        let collected = (*self.inner).defer(Deferred::new(
+        let collected = self.defer(Deferred::new(
             ptr.untagged().as_raw() as *const u8 as *mut u8,
             free::<T>,
         ));
 
         if let Some(collected) = collected {
-            (*self.handle.cast_mut()).retire_inner(collected);
+            Thread { local: self.local }.retire_inner(collected);
         }
     }
 }
@@ -128,6 +54,6 @@ impl Retire for CrashGuard {
 /// A marker for all RAII guard types.
 pub trait Guard {}
 
-impl Guard for Handle {}
-impl Guard for EpochGuard {}
-impl Guard for CrashGuard {}
+impl Guard for Thread {}
+impl Guard for CsGuard {}
+impl Guard for RaGuard {}

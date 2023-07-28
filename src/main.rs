@@ -12,6 +12,7 @@ use cdrc_rs::{AcquireRetire, GuardEBR};
 use clap::{value_parser, Arg, ArgMatches, Command, ValueEnum};
 use crossbeam_utils::thread::scope;
 use csv::Writer;
+use hp_sharp::GlobalHPSharp;
 use rand::distributions::{Uniform, WeightedIndex};
 use rand::prelude::*;
 use std::cmp::max;
@@ -802,7 +803,7 @@ impl PrefillStrategy {
         config: &Config,
         map: &M,
     ) {
-        hp_sharp::HANDLE.with(|handle| {
+        hp_sharp::THREAD.with(|handle| {
             let handle = &mut **handle.borrow_mut();
             let output = &mut M::empty_output(handle);
             let rng = &mut rand::thread_rng();
@@ -1502,7 +1503,7 @@ fn bench_map_hp_sharp<M: hp_sharp_bench::ConcurrentMap<usize, usize> + Send + Sy
                         acc += allocated;
                         peak = max(peak, allocated);
 
-                        let garbages = hp_sharp::GLOBAL_GARBAGE_COUNT.load(Ordering::Acquire);
+                        let garbages = collector.garbage_count();
                         garb_acc += garbages;
                         garb_peak = max(garb_peak, garbages);
 

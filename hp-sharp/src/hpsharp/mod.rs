@@ -1,11 +1,11 @@
 mod global;
 mod guard;
-mod handle;
 mod hazard;
 mod pointers;
+mod thread;
 
 pub use global::*;
 pub use guard::*;
-pub use handle::*;
-pub use hazard::*;
+use hazard::*;
 pub use pointers::*;
+use thread::*;

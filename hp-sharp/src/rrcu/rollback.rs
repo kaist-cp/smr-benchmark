@@ -4,8 +4,7 @@ use nix::libc::{c_void, siginfo_t};
 use nix::sys::pthread::{pthread_kill, Pthread};
 use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 use setjmp::{sigjmp_buf, siglongjmp};
-use std::cell::UnsafeCell;
-use std::ptr::{null, null_mut, NonNull};
+use std::ptr::NonNull;
 use std::sync::atomic::{compiler_fence, AtomicU8, Ordering};
 
 /// A CRCU crash signal which is used to restart a slow thread.
@@ -22,54 +21,10 @@ bitflags! {
     }
 }
 
-thread_local! {
-    static CHKPT: UnsafeCell<*mut sigjmp_buf> = UnsafeCell::new(null_mut());
-    /// Represents a thread-local status.
-    ///
-    /// A thread entering a crashable section sets its `STATUS` by calling `guard!` macro.
-    ///
-    /// Note that `STATUS` must be a type which can be read and written in tear-free manner.
-    /// For this reason, using non-atomic type such as `u8` is not safe, as any writes on this
-    /// variable may be splitted into multiple instructions and the thread may read inconsistent
-    /// value in its signal handler.
-    ///
-    /// According to ISO/IEC TS 17961 C Secure Coding Rules, accessing values of objects that are
-    /// neither lock-free atomic objects nor of type `volatile sig_atomic_t` in a signal handler
-    /// results in undefined behavior.
-    ///
-    /// `AtomicU8` is likely to be safe, because any accesses to it will be compiled into a
-    /// single ISA instruction. On top of that, by preventing reordering instructions across this
-    /// variable by issuing `compiler_fence`, we can have the same restrictions which
-    /// `volatile sig_atomic_t` has.
-    static STATUS: UnsafeCell<*const AtomicU8> = UnsafeCell::new(null());
-}
-
-pub(crate) fn set_data(status: &AtomicU8, chkpt: &mut sigjmp_buf) {
-    unsafe {
-        CHKPT.with(|c| *c.get() = chkpt);
-        STATUS.with(|s| *s.get() = status);
-    }
-}
-
-pub(crate) fn clear_data() {
-    unsafe {
-        CHKPT.with(|c| *c.get() = null_mut());
-        STATUS.with(|s| *s.get() = null());
-    }
-}
-
 #[inline]
-fn chkpt() -> Option<NonNull<sigjmp_buf>> {
-    match CHKPT.try_with(|c| c.get()) {
-        Ok(c) => NonNull::new(unsafe { *c }),
-        Err(_) => None,
-    }
-}
-
-#[inline]
-fn status() -> Option<NonNull<AtomicU8>> {
-    match STATUS.try_with(|s| s.get()) {
-        Ok(s) => NonNull::new(unsafe { (*s).cast_mut() }),
+fn local() -> Option<NonNull<Local>> {
+    match LOCAL.try_with(|c| c.get()) {
+        Ok(l) => NonNull::new(unsafe { *l }),
         Err(_) => None,
     }
 }
@@ -101,27 +56,22 @@ pub(crate) unsafe fn send_signal(pthread: Pthread) -> nix::Result<()> {
     pthread_kill(pthread, CRASH_SIGNAL)
 }
 
-pub(crate) struct RecoveryGuard {
-    status: *const AtomicU8,
-    chkpt: *mut sigjmp_buf,
-}
-
-impl RecoveryGuard {
-    /// Creates a new `RecoveryGuard`.
+impl Rollbacker {
+    /// Creates a new `Rollbacker`.
     ///
-    /// A new `RecoveryGuard` must always be created by calling `checkpoint` macro, not calling
+    /// A new `Rollbacker` must always be created by calling `checkpoint` macro, not calling
     /// this `new` method directly.
+    #[inline(always)]
     pub unsafe fn new(status: &AtomicU8, chkpt: &mut sigjmp_buf) -> Self {
         status.store(Status::InCs.bits(), Ordering::Relaxed);
-        compiler_fence(Ordering::SeqCst);
-        RecoveryGuard { status, chkpt }
+        Rollbacker { status, chkpt }
     }
 
     /// Performs a given closure crash-atomically.
     ///
     /// It takes a mutable reference, so calling `atomic` recursively is not possible.
     #[inline]
-    pub fn atomic<F, R>(&mut self, body: F) -> R
+    pub fn atomic<F, R>(&self, body: F) -> R
     where
         F: FnOnce(&Self) -> R,
     {
@@ -160,15 +110,23 @@ impl RecoveryGuard {
     }
 }
 
-impl Drop for RecoveryGuard {
+impl Drop for Rollbacker {
     #[inline]
     fn drop(&mut self) {
-        unsafe { &*self.status }.store(0, Ordering::Relaxed);
+        if let Some(status) = unsafe { self.status.as_ref() } {
+            if cfg!(any(target_arch = "x86", target_arch = "x86_64")) {
+                status
+                    .compare_exchange(Status::InCs.bits(), 0, Ordering::SeqCst, Ordering::SeqCst)
+                    .expect("`Rollbacker` is dropped outside of a critical section");
+            } else {
+                status.store(0, Ordering::Relaxed);
+            }
+        }
     }
 }
 
-/// Makes a checkpoint and create a `RecoveryGuard`.
-macro_rules! guard {
+/// Makes a checkpoint and create a `Rollbacker`.
+macro_rules! checkpoint {
     ($status:expr, $chkpt:expr) => {{
         compiler_fence(Ordering::SeqCst);
 
@@ -182,11 +140,13 @@ macro_rules! guard {
         }
         compiler_fence(Ordering::SeqCst);
 
-        crate::crcu::RecoveryGuard::new($status, $chkpt)
+        crate::Rollbacker::new($status, $chkpt)
     }};
 }
 
-pub(crate) use guard;
+pub(crate) use checkpoint;
+
+use crate::{Local, Rollbacker, LOCAL};
 
 extern "C" fn handle_signal(_: i32, _: *mut siginfo_t, _: *mut c_void) {
     // In a signal handler, we are safe to access(and modify) Rust's Thread-local storage.
@@ -195,22 +155,21 @@ extern "C" fn handle_signal(_: i32, _: *mut siginfo_t, _: *mut c_void) {
     //
     // `try_with` is used instead of `with` to prevent panics when a signal is handled while
     // destructing the thread local storage.
-    let status: &AtomicU8 = match status() {
-        Some(s) => unsafe { s.as_ref() },
+    let local = match local() {
+        Some(mut l) => unsafe { l.as_mut() },
         None => return,
     };
-    let current = Status::from_bits_truncate(status.load(Ordering::Relaxed));
+    let current = Status::from_bits_truncate(local.status.load(Ordering::Relaxed));
 
     // if we have made a checkpoint and are not in crash-atomic section, it is good to `longjmp`.
     if current == Status::InCs {
-        if let Some(chkpt) = chkpt() {
-            unsafe { siglongjmp(chkpt.as_ptr(), 1) }
-        }
-        return;
+        unsafe { siglongjmp(&mut local.chkpt, 1) }
     }
 
-    // If we are in crash-atomic section by `RecoveryGuard::atomic`, turn `InCaRb` on.
+    // If we are in crash-atomic section by `Rollbacker::atomic`, turn `InCaRb` on.
     if current == Status::InCa {
-        status.store((Status::InCa | Status::InCaRb).bits(), Ordering::Relaxed);
+        local
+            .status
+            .store((Status::InCa | Status::InCaRb).bits(), Ordering::Relaxed);
     }
 }

@@ -37,25 +37,28 @@ where
         s.finish() as usize
     }
 
-    pub fn get(&self, k: &K, output: &mut Output<K, V>, handle: &mut hp_sharp::Handle) -> bool {
+    #[inline]
+    pub fn get(&self, k: &K, output: &mut Output<K, V>, thread: &mut hp_sharp::Thread) -> bool {
         let i = Self::hash(k);
-        self.get_bucket(i).get(k, output, handle)
+        self.get_bucket(i).get(k, output, thread)
     }
 
+    #[inline]
     pub fn insert(
         &self,
         k: K,
         v: V,
         output: &mut Output<K, V>,
-        handle: &mut hp_sharp::Handle,
+        thread: &mut hp_sharp::Thread,
     ) -> bool {
         let i = Self::hash(&k);
-        self.get_bucket(i).insert(k, v, output, handle)
+        self.get_bucket(i).insert(k, v, output, thread)
     }
 
-    pub fn remove(&self, k: &K, output: &mut Output<K, V>, handle: &mut hp_sharp::Handle) -> bool {
+    #[inline]
+    pub fn remove(&self, k: &K, output: &mut Output<K, V>, thread: &mut hp_sharp::Thread) -> bool {
         let i = Self::hash(&k);
-        self.get_bucket(i).remove(k, output, handle)
+        self.get_bucket(i).remove(k, output, thread)
     }
 }
 
@@ -66,13 +69,14 @@ where
 {
     type Output = Output<K, V>;
 
+    #[inline]
     fn new() -> Self {
         Self::with_capacity(30000)
     }
 
     #[inline]
-    fn get(&self, key: &K, output: &mut Output<K, V>, handle: &mut hp_sharp::Handle) -> bool {
-        self.get(key, output, handle)
+    fn get(&self, key: &K, output: &mut Output<K, V>, thread: &mut hp_sharp::Thread) -> bool {
+        self.get(key, output, thread)
     }
     #[inline]
     fn insert(
@@ -80,13 +84,13 @@ where
         key: K,
         value: V,
         output: &mut Output<K, V>,
-        handle: &mut hp_sharp::Handle,
+        thread: &mut hp_sharp::Thread,
     ) -> bool {
-        self.insert(key, value, output, handle)
+        self.insert(key, value, output, thread)
     }
     #[inline]
-    fn remove(&self, key: &K, output: &mut Output<K, V>, handle: &mut hp_sharp::Handle) -> bool {
-        self.remove(key, output, handle)
+    fn remove(&self, key: &K, output: &mut Output<K, V>, thread: &mut hp_sharp::Thread) -> bool {
+        self.remove(key, output, thread)
     }
 }
 

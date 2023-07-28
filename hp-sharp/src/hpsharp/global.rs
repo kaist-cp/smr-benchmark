@@ -1,42 +1,64 @@
-use crossbeam_utils::CachePadded;
+use std::sync::atomic::AtomicPtr;
+
+use atomic::Ordering;
 use rustc_hash::FxHashSet;
 
-use super::{handle::Handle, hazard::ThreadRecords};
-use crate::crcu;
-use crate::sync::{Deferred, Pile};
+use crate::{rrcu::GlobalRRCU, Global, Local, Thread};
 
-pub struct Global {
-    pub(crate) crcu: crcu::Global,
-    pub(crate) threads: CachePadded<ThreadRecords>,
-    pub(crate) deferred: CachePadded<Pile<Deferred>>,
+use super::HazardPointer;
+
+pub trait GlobalHPSharp {
+    fn register(&self) -> Thread;
+    fn collect_guarded_ptrs(&self, reclaimer: &mut Thread) -> FxHashSet<*mut u8>;
 }
 
-impl Global {
-    pub const fn new() -> Self {
-        Self {
-            crcu: crcu::Global::new(),
-            threads: CachePadded::new(ThreadRecords::new()),
-            deferred: CachePadded::new(Pile::new()),
-        }
+impl GlobalHPSharp for Global {
+    fn register(&self) -> Thread {
+        let thread = GlobalRRCU::register(self);
+        let hazptrs_len = unsafe { &*(*thread.local).hazptrs.load(Ordering::Relaxed) }.len();
+        unsafe { &mut *thread.local }.available_indices = (0..hazptrs_len).collect();
+        thread
     }
 
-    pub fn register(&self) -> Handle {
-        Handle::new(self)
-    }
-
-    pub fn collect_guarded_ptrs(&self, reclaimer: &mut Handle) -> FxHashSet<*mut u8> {
-        self.threads
-            .iter()
-            .flat_map(|thread| thread.iter(reclaimer))
+    fn collect_guarded_ptrs(&self, reclaimer: &mut Thread) -> FxHashSet<*mut u8> {
+        self.locals
+            .iter_using()
+            .flat_map(|local| ThreadHazardArrayIter::new(local, reclaimer))
             .collect()
     }
 }
 
-impl Drop for Global {
-    fn drop(&mut self) {
-        let mut deferred = self.deferred.pop_all();
-        for r in deferred.drain(..) {
-            unsafe { r.execute() };
+struct ThreadHazardArrayIter {
+    array: *const [AtomicPtr<u8>],
+    idx: usize,
+    _hp: HazardPointer,
+}
+
+impl ThreadHazardArrayIter {
+    fn new(local: &Local, reader: &mut Thread) -> Self {
+        let hp = HazardPointer::new(reader);
+        let array = hp.protect(&local.hazptrs);
+        ThreadHazardArrayIter {
+            array: unsafe { &*array }.as_slice(),
+            idx: 0,
+            _hp: hp,
         }
+    }
+}
+
+impl Iterator for ThreadHazardArrayIter {
+    type Item = *mut u8;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let array = unsafe { &*self.array };
+        for i in self.idx..array.len() {
+            self.idx += 1;
+            let slot = unsafe { array.get_unchecked(i) };
+            let value = slot.load(Ordering::Acquire);
+            if !value.is_null() {
+                return Some(value);
+            }
+        }
+        None
     }
 }

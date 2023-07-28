@@ -1,13 +1,11 @@
 //! A *Crash-Optimized RCU*.
 
-mod epoch;
 mod global;
 mod guard;
 mod local;
-mod recovery;
+mod rollback;
 
-pub use epoch::*;
 pub use global::*;
 pub use guard::*;
 pub use local::*;
-pub use recovery::*;
+pub use rollback::*;

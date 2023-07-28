@@ -1,7 +1,7 @@
 use std::{cmp, sync::atomic::Ordering};
 
 use hp_sharp::{
-    Atomic, EpochGuard, Handle, Invalidate, Owned, Pointer, Protector, Retire, Shared, Shield,
+    Atomic, CsGuard, Invalidate, Owned, Pointer, Protector, Retire, Shared, Shield, Thread,
 };
 
 use super::{concurrent_map::OutputHolder, ConcurrentMap};
@@ -104,7 +104,7 @@ impl<K, V> Invalidate for Node<K, V> {
     }
 
     #[inline]
-    fn is_invalidated(&self, _: &EpochGuard) -> bool {
+    fn is_invalidated(&self, _: &CsGuard) -> bool {
         false
         // We do not use `traverse_loop` for this data structure.
     }
@@ -147,7 +147,7 @@ enum Direction {
 pub struct Output<K, V>(SeekRecord<K, V>, SeekRecord<K, V>);
 
 impl<K, V> OutputHolder<V> for Output<K, V> {
-    fn default(handle: &mut Handle) -> Self {
+    fn default(handle: &mut Thread) -> Self {
         Self(SeekRecord::empty(handle), SeekRecord::empty(handle))
     }
 
@@ -205,7 +205,7 @@ impl<K, V> Protector for SeekRecord<K, V> {
     type Target<'r> = SharedSeekRecord<'r, K, V>;
 
     #[inline]
-    fn empty(handle: &mut Handle) -> Self {
+    fn empty(handle: &mut Thread) -> Self {
         Self {
             ancestor: Shield::null(handle),
             successor: Shield::null(handle),
@@ -227,7 +227,7 @@ impl<K, V> Protector for SeekRecord<K, V> {
     }
 
     #[inline]
-    fn as_target<'r>(&self, guard: &'r EpochGuard) -> Option<Self::Target<'r>> {
+    fn as_target<'r>(&self, guard: &'r CsGuard) -> Option<Self::Target<'r>> {
         Some(SharedSeekRecord {
             ancestor: self.ancestor.as_target(guard)?,
             successor: self.successor.as_target(guard)?,
@@ -289,7 +289,7 @@ where
 impl<K, V> Drop for NMTreeMap<K, V> {
     fn drop(&mut self) {
         unsafe {
-            let guard = &EpochGuard::unprotected();
+            let guard = &CsGuard::unprotected();
             let mut stack = vec![
                 self.r.left.load(Ordering::Relaxed, guard),
                 self.r.right.load(Ordering::Relaxed, guard),
@@ -333,7 +333,7 @@ where
     }
 
     /// All `Shared<_>` fields are unmarked.
-    fn seek(&self, key: &K, output: &mut Output<K, V>, handle: &mut Handle) {
+    fn seek(&self, key: &K, output: &mut Output<K, V>, handle: &mut Thread) {
         let result = &mut output.0;
         unsafe {
             result.traverse(handle, |guard| {
@@ -391,7 +391,7 @@ where
     }
 
     /// Similar to `seek`, but traverse the tree with only two pointers
-    fn seek_leaf(&self, key: &K, output: &mut Output<K, V>, handle: &mut Handle) {
+    fn seek_leaf(&self, key: &K, output: &mut Output<K, V>, handle: &mut Thread) {
         let result = &mut output.0.leaf;
         unsafe {
             result.traverse(handle, |guard| {
@@ -418,7 +418,7 @@ where
     /// Physically removes node.
     ///
     /// Returns true if it successfully unlinks the flagged node in `record`.
-    fn cleanup(&self, record: &SeekRecord<K, V>, handle: &mut Handle) -> bool {
+    fn cleanup(&self, record: &SeekRecord<K, V>, handle: &mut Thread) -> bool {
         // Identify the node(subtree) that will replace `successor`.
         let leaf_marked = record.leaf_addr().load(Ordering::Acquire, handle);
         let leaf_flag = Marks::from_bits_truncate(leaf_marked.tag()).flag();
@@ -453,7 +453,7 @@ where
             unsafe {
                 // Safety: As this thread is a winner of the physical CAS, it is the only one who
                 // retires this chain.
-                let guard = &EpochGuard::unprotected();
+                let guard = &CsGuard::unprotected();
 
                 // destroy the subtree of successor except target_sibling
                 let mut stack = vec![record.successor.shared()];
@@ -478,14 +478,14 @@ where
         is_unlinked
     }
 
-    pub fn get(&self, key: &K, output: &mut Output<K, V>, handle: &mut Handle) -> bool {
+    pub fn get(&self, key: &K, output: &mut Output<K, V>, handle: &mut Thread) -> bool {
         self.seek_leaf(key, output, handle);
         let leaf_node = unsafe { output.0.leaf.deref_unchecked() };
 
         leaf_node.key.cmp(key) == cmp::Ordering::Equal
     }
 
-    pub fn insert(&self, key: K, value: V, output: &mut Output<K, V>, handle: &mut Handle) -> bool {
+    pub fn insert(&self, key: K, value: V, output: &mut Output<K, V>, handle: &mut Thread) -> bool {
         let new_leaf = Owned::new(Node::new_leaf(Key::Fin(key.clone()), Some(value))).into_shared();
 
         let mut new_internal = Owned::new(Node {
@@ -541,7 +541,7 @@ where
         }
     }
 
-    pub fn remove<'g>(&self, key: &K, output: &mut Output<K, V>, handle: &mut Handle) -> bool {
+    pub fn remove<'g>(&self, key: &K, output: &mut Output<K, V>, handle: &mut Thread) -> bool {
         // `leaf` and `value` are the snapshot of the node to be deleted.
         // NOTE: The paper version uses one big loop for both phases.
         // injection phase
@@ -615,11 +615,11 @@ where
         Self::new()
     }
 
-    fn get(&self, key: &K, output: &mut Self::Output, handle: &mut Handle) -> bool {
+    fn get(&self, key: &K, output: &mut Self::Output, handle: &mut Thread) -> bool {
         self.get(key, output, handle)
     }
 
-    fn insert(&self, key: K, value: V, output: &mut Self::Output, handle: &mut Handle) -> bool {
+    fn insert(&self, key: K, value: V, output: &mut Self::Output, handle: &mut Thread) -> bool {
         self.insert(key, value, output, handle)
     }
 
@@ -627,7 +627,7 @@ where
         &self,
         key: &K,
         output: &mut Self::Output,
-        handle: &mut Handle,
+        handle: &mut Thread,
     ) -> bool {
         self.remove(key, output, handle)
     }

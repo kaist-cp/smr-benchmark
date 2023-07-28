@@ -1,24 +1,15 @@
 use std::sync::atomic::{compiler_fence, Ordering};
 
-use crate::sync::Deferred;
+use crate::rrcu::local::LocalRRCU;
+use crate::{CsGuard, Deferred, RaGuard, Thread};
 
-use super::{local::Local, RecoveryGuard};
-
-/// A crashable critical section guard.
-///
-/// Note that defering is not allowed in this critical section because a crash may occur while
-/// writing data on non-atomic storage. To conduct jobs with side-effects, we must open a
-/// non-crashable section by `mask` method.
-pub struct EpochGuard {
-    local: *mut Local,
-    inner: RecoveryGuard,
+pub trait ThreadRRCU {
+    unsafe fn pin<F>(&mut self, body: F)
+    where
+        F: FnMut(&mut CsGuard);
 }
 
-impl EpochGuard {
-    pub(crate) fn new(local: &mut Local, inner: RecoveryGuard) -> Self {
-        Self { local, inner }
-    }
-
+pub trait CsGuardRRCU {
     /// Starts a non-crashable section where we can conduct operations with global side-effects.
     ///
     /// In this section, we do not restart immediately when we receive signals from reclaimers.
@@ -30,15 +21,53 @@ impl EpochGuard {
     /// [`String`] or [`Box`] is dangerous to return as it will be leaked on a crash! On the other
     /// hand, [`Copy`] types is likely to be safe as they are totally defined by their bit-wise
     /// representations, and have no possibilities to be leaked after an unexpected crash.
-    #[inline(always)]
-    pub fn mask<F, R>(&mut self, body: F) -> R
+    fn mask<F, R>(&self, body: F) -> R
     where
-        F: FnOnce(&mut CrashGuard) -> R,
+        F: FnOnce(&mut RaGuard) -> R,
+        R: Copy;
+}
+
+pub trait RaGuardRRCU {
+    /// Repins its critical section if we are crashed(in other words, ejected).
+    ///
+    /// Developers must ensure that there is no possibilities of memory leaks across this.
+    fn repin(&self) -> !;
+
+    /// TODO(@jeonghyeon): replace it with remask
+    fn must_rollback(&self) -> bool;
+}
+
+impl ThreadRRCU for Thread {
+    /// Starts a crashable critical section where we cannot perform operations with side-effects,
+    /// such as system calls, non-atomic write on a global variable, etc.
+    ///
+    /// # Safety
+    ///
+    /// In a section body, only *rollback-safe* operations are allowed. For example, non-atomic
+    /// writes on a global variable and system-calls(File I/O and etc.) are dangerous, as they
+    /// may cause an unexpected inconsistency on the whole system after a crash.
+    #[inline(always)]
+    unsafe fn pin<F>(&mut self, body: F)
+    where
+        F: FnMut(&mut CsGuard),
+    {
+        unsafe { (*self.local).pin(body) }
+    }
+}
+
+impl CsGuardRRCU for CsGuard {
+    #[inline(always)]
+    fn mask<F, R>(&self, body: F) -> R
+    where
+        F: FnOnce(&mut RaGuard) -> R,
         R: Copy,
     {
         compiler_fence(Ordering::SeqCst);
-        let result = self.inner.atomic(|guard| {
-            let mut guard = CrashGuard::new(unsafe { &mut *self.local }, guard);
+        let result = self.rb.atomic(|rb| {
+            let mut guard = RaGuard {
+                local: unsafe { &mut *self.local },
+                rb,
+            };
             let result = body(&mut guard);
             result
         });
@@ -47,33 +76,18 @@ impl EpochGuard {
     }
 }
 
-/// A non-crashable write section guard.
-///
-/// Unlike a [`EpochGuard`], it may perform jobs with side-effects such as retiring, or physical
-/// deletion for a data structure.
-pub struct CrashGuard {
-    local: *mut Local,
-    inner: *const RecoveryGuard,
-}
-
-/// A non-crashable section guard.
-impl CrashGuard {
-    #[inline]
-    pub(crate) fn new(local: &mut Local, inner: &RecoveryGuard) -> Self {
-        Self { local, inner }
-    }
-
+impl RaGuardRRCU for RaGuard {
     /// Repins its critical section if we are crashed(in other words, ejected).
     ///
     /// Developers must ensure that there is no possibilities of memory leaks across this.
     #[inline]
-    pub fn repin(&self) -> ! {
-        unsafe { (*self.inner).restart() }
+    fn repin(&self) -> ! {
+        unsafe { &*self.rb }.restart()
     }
 
     #[inline]
-    pub fn must_rollback(&self) -> bool {
-        unsafe { &*self.inner }.must_rollback()
+    fn must_rollback(&self) -> bool {
+        unsafe { &*self.rb }.must_rollback()
     }
 }
 
@@ -89,7 +103,15 @@ pub trait Deferrable {
     fn defer(&mut self, def: Deferred) -> Option<Vec<Deferred>>;
 }
 
-impl Deferrable for CrashGuard {
+impl Deferrable for Thread {
+    #[inline]
+    #[must_use]
+    fn defer(&mut self, def: Deferred) -> Option<Vec<Deferred>> {
+        unsafe { (*self.local).defer(def) }
+    }
+}
+
+impl Deferrable for RaGuard {
     #[inline]
     #[must_use]
     fn defer(&mut self, def: Deferred) -> Option<Vec<Deferred>> {

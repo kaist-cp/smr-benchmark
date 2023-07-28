@@ -1,14 +1,18 @@
 use std::{
     marker::PhantomData,
-    mem::{self, forget, swap, transmute, zeroed, MaybeUninit},
+    mem::{align_of, forget, swap, transmute, zeroed, MaybeUninit},
     ops::{Deref, DerefMut},
-    sync::atomic::{compiler_fence, fence, AtomicUsize, Ordering},
+    sync::atomic::{compiler_fence, AtomicUsize},
 };
 
+use atomic::{fence, Ordering};
+
 use crate::{
-    hpsharp::{guard::EpochGuard, guard::Invalidate, handle::Handle, hazard::HazardPointer},
-    CrashGuard, Guard, Retire,
+    rrcu::{CsGuardRRCU, RaGuardRRCU, ThreadRRCU},
+    CsGuard, RaGuard, Thread,
 };
+
+use super::{hazard::HazardPointer, Guard, Invalidate, Retire};
 
 /// A result of unsuccessful `compare_exchange`.
 pub struct CompareExchangeError<'g, T: ?Sized, P: Pointer> {
@@ -197,7 +201,7 @@ impl<'r, T> Shared<'r, T> {
     /// It is possible to directly dereference a [`Shared`] if and only if the current context is
     /// in a critical section which can be started by `traverse` and `traverse_loop` method.
     #[inline]
-    pub fn as_ref(&self, _: &EpochGuard) -> Option<&'r T> {
+    pub fn as_ref(&self, _: &CsGuard) -> Option<&'r T> {
         unsafe { decompose_data::<T>(self.inner).0.as_ref() }
     }
 
@@ -208,7 +212,7 @@ impl<'r, T> Shared<'r, T> {
     /// It is possible to directly dereference a [`Shared`] if and only if the current context is
     /// in a critical section which can be started by `traverse` and `traverse_loop` method.
     #[inline]
-    pub fn as_mut(&mut self, _: &EpochGuard) -> Option<&'r mut T> {
+    pub fn as_mut(&mut self, _: &CsGuard) -> Option<&'r mut T> {
         unsafe { decompose_data::<T>(self.inner).0.as_mut() }
     }
 
@@ -356,9 +360,9 @@ unsafe impl<T> Sync for Shield<T> {}
 
 impl<T> Shield<T> {
     #[inline]
-    pub fn null(handle: &mut Handle) -> Self {
+    pub fn null(thread: &mut Thread) -> Self {
         Self {
-            hazptr: HazardPointer::new(handle),
+            hazptr: HazardPointer::new(thread),
             inner: 0,
             _marker: PhantomData,
         }
@@ -482,7 +486,7 @@ pub trait Protector {
     type Target<'r>: Clone + Copy;
 
     /// Returns a default [`Protector`] with nulls for [`Shield`]s and defaults for other types.
-    fn empty(handle: &mut Handle) -> Self;
+    fn empty(thread: &mut Thread) -> Self;
 
     /// Stores the given `Target` pointers in hazard slots without any validations.
     ///
@@ -494,7 +498,7 @@ pub trait Protector {
 
     /// Loads currently protected pointers and checks whether any of them are invalidated.
     /// If not, creates a new `Target` and returns it.
-    fn as_target<'r>(&self, guard: &'r EpochGuard) -> Option<Self::Target<'r>>;
+    fn as_target<'r>(&self, guard: &'r CsGuard) -> Option<Self::Target<'r>>;
 
     /// Resets all hazard slots, allowing the previous memory block to be reclaimed.
     fn release(&mut self);
@@ -511,24 +515,29 @@ pub trait Protector {
     /// writes on a global variable and system-calls(File I/O and etc.) are dangerous, as they
     /// may cause an unexpected inconsistency on the whole system after a crash.
     #[inline(always)]
-    unsafe fn traverse<F>(&mut self, handle: &mut Handle, mut body: F)
+    unsafe fn traverse<F>(&mut self, thread: &mut Thread, mut body: F)
     where
-        F: for<'r> FnMut(&'r mut EpochGuard) -> Self::Target<'r>,
+        F: for<'r> FnMut(&'r mut CsGuard) -> Self::Target<'r>,
     {
-        handle.crcu_handle.borrow_mut().pin(|guard| {
-            // Execute the body of this read phase.
-            let mut guard = EpochGuard::new(guard, handle, None);
-            let result = body(&mut guard);
-            compiler_fence(Ordering::SeqCst);
+        thread.pin(
+            #[inline(always)]
+            |guard| {
+                // Execute the body of this read phase.
+                let result = body(guard);
+                // Store pointers in hazard slots and issue a fence.
+                self.protect_unchecked(&result);
+                if cfg!(any(target_arch = "x86", target_arch = "x86_64")) {
+                    // The store buffer is flushed in `Drop` of `Rollbacker`.
+                    compiler_fence(Ordering::SeqCst);
+                } else {
+                    fence(Ordering::SeqCst);
+                }
 
-            // Store pointers in hazard slots and issue a fence.
-            self.protect_unchecked(&result);
-            fence(Ordering::SeqCst);
-
-            // If we successfully protected pointers without an intermediate crash,
-            // it has the same meaning with a well-known HP validation:
-            // we can safely assume that the pointers are not reclaimed yet.
-        })
+                // If we successfully protected pointers without an intermediate crash,
+                // it has the same meaning with a well-known HP validation:
+                // we can safely assume that the pointers are not reclaimed yet.
+            },
+        )
     }
 
     /// Starts a non-crashable section where we can conduct operations with global side-effects.
@@ -536,12 +545,12 @@ pub trait Protector {
     /// In this section, we do not restart immediately when we receive signals from reclaimers.
     /// The whole critical section restarts after this `mask` section ends, if a reclaimer sent
     /// a signal, or we advanced our epoch to reclaim a full local garbage bag.
-    unsafe fn mask<'r, F>(&mut self, eg: &EpochGuard, to_deref: Self::Target<'r>, body: F)
+    unsafe fn traverse_mask<'r, F>(&mut self, cs: &CsGuard, to_deref: Self::Target<'r>, body: F)
     where
-        F: FnOnce(&Self, &mut CrashGuard) -> WriteResult,
+        F: FnOnce(&Self, &mut RaGuard) -> WriteResult,
     {
-        let eg_inner = &mut *eg.inner;
-        eg_inner.mask(|guard| {
+        let backup_idx = cs.backup_idx.clone();
+        cs.mask(|guard| {
             let result = {
                 // Store pointers in hazard slots and issue a fence.
                 self.protect_unchecked(&to_deref);
@@ -552,13 +561,13 @@ pub trait Protector {
                     guard.repin();
                 }
 
-                body(self, &mut CrashGuard::new(guard, eg.handle))
+                body(self, guard)
             };
 
             compiler_fence(Ordering::SeqCst);
             if result == WriteResult::RepinEpoch {
                 // Invalidate any saved checkpoints.
-                if let Some(backup_idx) = eg.backup_idx {
+                if let Some(backup_idx) = backup_idx {
                     unsafe { backup_idx.as_ref() }.store(2, Ordering::Relaxed);
                 }
                 guard.repin();
@@ -585,12 +594,12 @@ pub trait Protector {
     unsafe fn traverse_loop<F1, F2>(
         &mut self,
         backup: &mut Self,
-        handle: &mut Handle,
+        thread: &mut Thread,
         init_result: F1,
         step_forward: F2,
     ) where
-        F1: for<'r> Fn(&'r mut EpochGuard) -> Self::Target<'r>,
-        F2: for<'r> Fn(&mut Self::Target<'r>, &'r mut EpochGuard) -> TraverseStatus,
+        F1: for<'r> Fn(&'r mut CsGuard) -> Self::Target<'r>,
+        F2: for<'r> Fn(&mut Self::Target<'r>, &'r mut CsGuard) -> TraverseStatus,
         Self: Sized,
     {
         const ITER_BETWEEN_CHECKPOINTS: usize = 512;
@@ -603,9 +612,9 @@ pub trait Protector {
         {
             let defs = [&mut *self, backup];
 
-            handle.crcu_handle.borrow_mut().pin(|guard| {
+            thread.pin(|guard| {
                 // Load the saved intermediate result, if one exists.
-                let mut guard = EpochGuard::new(guard, handle, Some(&backup_idx));
+                guard.set_backup(&backup_idx);
 
                 // Initialize the first `result`. It is either a checkpointed result or an very
                 // first result(probably pointing a root of a data structure) returned by
@@ -617,7 +626,7 @@ pub trait Protector {
                         // As `F1` takes a mutable reference to `guard`, `init_result` returns
                         // `Read<'r>` and `guard`'s lifetime becomes an another arbitrary value.
                         // They must be synchronized to use them on `step_forward`.
-                        transmute(init_result(&mut guard))
+                        transmute(init_result(guard))
                     });
 
                 for iter in 0.. {
@@ -627,7 +636,7 @@ pub trait Protector {
                     // After a single `step_forward`, the lifetimes become different to each other,
                     // for example, `'r` and `'g` respectively. On the next iteration, they are
                     // synchronized again with the same value.
-                    let step_result = step_forward(transmute(&mut result), &mut guard);
+                    let step_result = step_forward(transmute(&mut result), guard);
 
                     let finished = step_result == TraverseStatus::Finished;
                     // TODO(@jeonghyeon): Apply an adaptive checkpointing.
@@ -675,7 +684,7 @@ impl Protector for () {
     type Target<'r> = ();
 
     #[inline]
-    fn empty(_: &mut Handle) -> Self {
+    fn empty(_: &mut Thread) -> Self {
         ()
     }
 
@@ -683,7 +692,7 @@ impl Protector for () {
     fn protect_unchecked(&mut self, _: &Self::Target<'_>) {}
 
     #[inline]
-    fn as_target<'r>(&self, _: &'r EpochGuard) -> Option<Self::Target<'r>> {
+    fn as_target<'r>(&self, _: &'r CsGuard) -> Option<Self::Target<'r>> {
         Some(())
     }
 
@@ -696,8 +705,8 @@ impl<T: Invalidate> Protector for Shield<T> {
     type Target<'r> = Shared<'r, T>;
 
     #[inline]
-    fn empty(handle: &mut Handle) -> Self {
-        Shield::null(handle)
+    fn empty(thread: &mut Thread) -> Self {
+        Shield::null(thread)
     }
 
     #[inline]
@@ -709,7 +718,7 @@ impl<T: Invalidate> Protector for Shield<T> {
     }
 
     #[inline]
-    fn as_target<'r>(&self, guard: &'r EpochGuard) -> Option<Self::Target<'r>> {
+    fn as_target<'r>(&self, guard: &'r CsGuard) -> Option<Self::Target<'r>> {
         let read = Shared::new(self.inner);
         if let Some(value) = self.as_ref() {
             if value.is_invalidated(guard) {
@@ -733,10 +742,10 @@ macro_rules! impl_protector_for_array {(
             type Target<'r> = [Shared<'r, T>; $N];
 
             #[inline]
-            fn empty(handle: &mut Handle) -> Self {
+            fn empty(thread: &mut Thread) -> Self {
                 let mut result: [MaybeUninit<Shield<T>>; $N] = unsafe { zeroed() };
                 for shield in result.iter_mut() {
-                    shield.write(Shield::null(handle));
+                    shield.write(Shield::null(thread));
                 }
                 unsafe { transmute(result) }
             }
@@ -749,7 +758,7 @@ macro_rules! impl_protector_for_array {(
             }
 
             #[inline]
-            fn as_target<'r>(&self, guard: &'r EpochGuard) -> Option<Self::Target<'r>> {
+            fn as_target<'r>(&self, guard: &'r CsGuard) -> Option<Self::Target<'r>> {
                 let mut result: [MaybeUninit<Shared<'r, T>>; $N] = unsafe { zeroed() };
                 for (shield, shared) in self.iter().zip(result.iter_mut()) {
                     match shield.as_target(guard) {
@@ -805,7 +814,7 @@ pub fn ensure_aligned<T>(raw: *const T) {
 /// Returns a bitmask containing the unused least significant bits of an aligned pointer to `T`.
 #[inline]
 pub fn low_bits<T>() -> usize {
-    (1 << mem::align_of::<T>().trailing_zeros()) - 1
+    (1 << align_of::<T>().trailing_zeros()) - 1
 }
 
 /// Given a tagged pointer `data`, returns the same pointer, but tagged with `tag`.
@@ -837,9 +846,11 @@ mod test {
     use atomic::Ordering;
 
     use crate::{
-        Atomic, CrashGuard, EpochGuard, Global, Invalidate, Owned, Protector, Retire, Shared,
-        Shield,
+        hpsharp::{GlobalHPSharp, Invalidate, Owned, Retire},
+        CsGuard, Global,
     };
+
+    use super::{Atomic, Protector, Shared, Shield};
 
     struct Node {
         next: Atomic<Node>,
@@ -847,16 +858,12 @@ mod test {
 
     impl Invalidate for Node {
         fn invalidate(&self) {
-            let guard = &unsafe { EpochGuard::unprotected() };
-            let ptr = self.next.load(Ordering::Relaxed, guard);
-            self.next
-                .store(ptr.with_tag(1), Ordering::Relaxed, &unsafe {
-                    CrashGuard::unprotected()
-                });
+            // We do not use traverse_loop here.
         }
 
-        fn is_invalidated(&self, guard: &EpochGuard) -> bool {
-            (self.next.load(Ordering::Relaxed, guard).tag() & 1) != 0
+        fn is_invalidated(&self, _: &CsGuard) -> bool {
+            // We do not use traverse_loop here.
+            false
         }
     }
 
@@ -868,10 +875,10 @@ mod test {
     impl Protector for Cursor {
         type Target<'r> = SharedCursor<'r>;
 
-        fn empty(handle: &mut crate::Handle) -> Self {
+        fn empty(thread: &mut crate::Thread) -> Self {
             Self {
-                prev: Shield::null(handle),
-                curr: Shield::null(handle),
+                prev: Shield::null(thread),
+                curr: Shield::null(thread),
             }
         }
 
@@ -880,7 +887,7 @@ mod test {
             self.curr.protect_unchecked(&read.curr);
         }
 
-        fn as_target<'r>(&self, guard: &'r EpochGuard) -> Option<Self::Target<'r>> {
+        fn as_target<'r>(&self, guard: &'r CsGuard) -> Option<Self::Target<'r>> {
             Some(SharedCursor {
                 prev: self.prev.as_target(guard)?,
                 curr: self.curr.as_target(guard)?,
@@ -911,15 +918,15 @@ mod test {
         });
 
         unsafe {
-            let global = &Global::new();
+            let global = Global::new();
             scope(|s| {
                 for _ in 0..THREADS {
                     s.spawn(|| {
-                        let mut handle = global.register();
-                        let mut cursor = Cursor::empty(&mut handle);
+                        let mut thread = global.register();
+                        let mut cursor = Cursor::empty(&mut thread);
                         for _ in 0..COUNT_PER_THREAD {
                             loop {
-                                cursor.traverse(&mut handle, |guard| {
+                                cursor.traverse(&mut thread, |guard| {
                                     let mut cursor = SharedCursor {
                                         prev: Shared::null(),
                                         curr: Shared::null(),
@@ -947,18 +954,18 @@ mod test {
                                     new,
                                     Ordering::AcqRel,
                                     Ordering::Acquire,
-                                    &handle,
+                                    &thread,
                                 ) {
                                     Ok(_) => {
-                                        handle.retire(cursor.prev.shared());
-                                        handle.retire(cursor.curr.shared());
+                                        thread.retire(cursor.prev.shared());
+                                        thread.retire(cursor.curr.shared());
                                         break;
                                     }
                                     Err(e) => {
                                         let new = e.new;
                                         drop(
                                             new.next
-                                                .load(Ordering::Relaxed, &EpochGuard::unprotected())
+                                                .load(Ordering::Relaxed, &CsGuard::unprotected())
                                                 .into_owned(),
                                         );
                                     }
@@ -971,7 +978,7 @@ mod test {
             let head = head.into_owned();
             drop(
                 head.next
-                    .load(Ordering::Relaxed, &EpochGuard::unprotected())
+                    .load(Ordering::Relaxed, &CsGuard::unprotected())
                     .into_owned(),
             );
         }

@@ -11,6 +11,7 @@ use ::hp_pp::DEFAULT_DOMAIN;
 use clap::{value_parser, Arg, ArgMatches, Command, ValueEnum};
 use crossbeam_utils::thread::scope;
 use csv::Writer;
+use hp_sharp::GLOBAL;
 use rand::distributions::Uniform;
 use rand::prelude::*;
 use std::cmp::max;
@@ -438,7 +439,7 @@ impl PrefillStrategy {
         config: &Config,
         map: &M,
     ) {
-        hp_sharp::HANDLE.with(|handle| {
+        hp_sharp::THREAD.with(|handle| {
             let handle = &mut **handle.borrow_mut();
             let output = &mut M::empty_output(handle);
             let rng = &mut rand::thread_rng();
@@ -1226,7 +1227,7 @@ fn bench_map_hp_sharp(
                         acc += allocated;
                         peak = max(peak, allocated);
 
-                        let garbages = hp_sharp::GLOBAL_GARBAGE_COUNT.load(Ordering::Acquire);
+                        let garbages = GLOBAL.garbage_count();
                         garb_acc += garbages;
                         garb_peak = max(garb_peak, garbages);
 
@@ -1250,7 +1251,7 @@ fn bench_map_hp_sharp(
         // Spawn writer threads.
         for _ in 0..config.writers {
             s.spawn(move |_| {
-                hp_sharp::HANDLE.with(|handle| {
+                hp_sharp::THREAD.with(|handle| {
                     let handle = &mut **handle.borrow_mut();
                     let output =
                         &mut hp_sharp_bench::HHSList::<String, String>::empty_output(handle);
@@ -1279,7 +1280,7 @@ fn bench_map_hp_sharp(
         for _ in 0..config.readers {
             let ops_sender = ops_sender.clone();
             s.spawn(move |_| {
-                hp_sharp::HANDLE.with(|handle| {
+                hp_sharp::THREAD.with(|handle| {
                     let handle = &mut **handle.borrow_mut();
                     let output =
                         &mut hp_sharp_bench::HHSList::<String, String>::empty_output(handle);

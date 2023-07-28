@@ -1,7 +1,7 @@
 use std::sync::atomic::{fence, AtomicUsize, Ordering};
 
 use hp_sharp::{
-    Atomic, EpochGuard, Handle, Invalidate, Owned, Pointer, Protector, Retire, Shared, Shield,
+    Atomic, CsGuard, Invalidate, Owned, Pointer, Protector, Retire, Shared, Shield, Thread,
     WriteResult,
 };
 
@@ -58,7 +58,7 @@ impl<K, V> Node<K, V> {
         }
     }
 
-    pub fn mark_tower(&self, handle: &Handle) -> bool {
+    pub fn mark_tower(&self, handle: &Thread) -> bool {
         for level in (0..self.height).rev() {
             let tag = self.next[level].fetch_or(1, Ordering::SeqCst, handle).tag();
             // If the level 0 pointer was already marked, somebody else removed the node.
@@ -77,7 +77,7 @@ impl<K, V> Invalidate for Node<K, V> {
     }
 
     #[inline]
-    fn is_invalidated(&self, _: &hp_sharp::EpochGuard) -> bool {
+    fn is_invalidated(&self, _: &hp_sharp::CsGuard) -> bool {
         false
         // We do not use `traverse_loop` for this data structure.
     }
@@ -106,7 +106,7 @@ where
 impl<K, V> Protector for Cursor<K, V> {
     type Target<'r> = SharedCursor<'r, K, V>;
 
-    fn empty(handle: &mut Handle) -> Self {
+    fn empty(handle: &mut Thread) -> Self {
         Self {
             preds: Protector::empty(handle),
             succs: Protector::empty(handle),
@@ -132,7 +132,7 @@ impl<K, V> Protector for Cursor<K, V> {
         self.found.protect_unchecked(&read.found);
     }
 
-    fn as_target<'r>(&self, guard: &'r hp_sharp::EpochGuard) -> Option<Self::Target<'r>> {
+    fn as_target<'r>(&self, guard: &'r hp_sharp::CsGuard) -> Option<Self::Target<'r>> {
         Some(SharedCursor {
             preds: self.preds.as_target(guard)?,
             succs: self.succs.as_target(guard)?,
@@ -168,7 +168,7 @@ impl<'r, K, V> Clone for SharedCursor<'r, K, V> {
 impl<'r, K, V> Copy for SharedCursor<'r, K, V> {}
 
 impl<'r, K, V> SharedCursor<'r, K, V> {
-    fn new(head: &Tower<K, V>, _: &'r EpochGuard) -> Self {
+    fn new(head: &Tower<K, V>, _: &'r CsGuard) -> Self {
         let preds = [unsafe { Shared::from_usize(head as *const _ as usize) }; MAX_HEIGHT];
         let succs = Default::default();
         let found = Default::default();
@@ -184,7 +184,7 @@ impl<'r, K, V> SharedCursor<'r, K, V> {
 pub struct Output<K, V>(Cursor<K, V>, Shield<Node<K, V>>);
 
 impl<K, V> OutputHolder<V> for Output<K, V> {
-    fn default(handle: &mut Handle) -> Self {
+    fn default(handle: &mut Thread) -> Self {
         Self(Cursor::empty(handle), Shield::empty(handle))
     }
 
@@ -199,7 +199,7 @@ pub struct SkipList<K, V> {
 
 impl<K, V> Drop for SkipList<K, V> {
     fn drop(&mut self) {
-        let guard = unsafe { EpochGuard::unprotected() };
+        let guard = unsafe { CsGuard::unprotected() };
         let mut node = self.head[0].load(Ordering::Relaxed, &guard);
 
         while let Some(node_ref) = node.as_ref(&guard) {
@@ -221,7 +221,7 @@ where
         }
     }
 
-    fn find_optimistic_inner<'r>(&self, key: &K, guard: &'r EpochGuard) -> Shared<'r, Node<K, V>> {
+    fn find_optimistic_inner<'r>(&self, key: &K, guard: &'r CsGuard) -> Shared<'r, Node<K, V>> {
         let mut level = MAX_HEIGHT;
         while level >= 1
             && self.head[level - 1]
@@ -257,7 +257,7 @@ where
         Shared::null()
     }
 
-    fn find_optimistic(&self, key: &K, cursor: &mut Output<K, V>, handle: &mut Handle) {
+    fn find_optimistic(&self, key: &K, cursor: &mut Output<K, V>, handle: &mut Thread) {
         unsafe {
             cursor
                 .0
@@ -270,7 +270,7 @@ where
         &self,
         key: &K,
         aux: &mut Shield<Node<K, V>>,
-        guard: &'r EpochGuard,
+        guard: &'r CsGuard,
     ) -> Option<SharedCursor<'r, K, V>> {
         let mut cursor = SharedCursor::new(&self.head, guard);
 
@@ -300,7 +300,7 @@ where
 
                 if succ.tag() != 0 {
                     unsafe {
-                        aux.mask(guard, pred, |pred, guard| {
+                        aux.traverse_mask(guard, pred, |pred, guard| {
                             match pred.deref_unchecked().next[level].compare_exchange(
                                 curr.with_tag(0),
                                 succ.with_tag(0),
@@ -347,7 +347,7 @@ where
         Some(cursor)
     }
 
-    fn find(&self, key: &K, output: &mut Output<K, V>, handle: &mut Handle) {
+    fn find(&self, key: &K, output: &mut Output<K, V>, handle: &mut Thread) {
         unsafe {
             let cursor = &mut output.0;
             let aux = &mut output.1;
@@ -359,7 +359,7 @@ where
         }
     }
 
-    fn insert(&self, key: K, value: V, output: &mut Output<K, V>, handle: &mut Handle) -> bool {
+    fn insert(&self, key: K, value: V, output: &mut Output<K, V>, handle: &mut Thread) -> bool {
         self.find(&key, output, handle);
         if output.0.found(&key).is_some() {
             return false;
@@ -398,7 +398,7 @@ where
 
         // The new node was successfully installed.
         // Build the rest of the tower above level 0.
-        let guard = unsafe { &EpochGuard::unprotected() };
+        let guard = unsafe { &CsGuard::unprotected() };
         'build: for level in 1..height {
             loop {
                 let pred = &output.0.preds[level];
@@ -464,7 +464,7 @@ where
         true
     }
 
-    fn remove(&self, key: &K, output: &mut Output<K, V>, handle: &mut Handle) -> bool {
+    fn remove(&self, key: &K, output: &mut Output<K, V>, handle: &mut Thread) -> bool {
         loop {
             self.find(key, output, handle);
             let cursor = &output.0;
@@ -473,8 +473,8 @@ where
             // Try removing the node by marking its tower.
             if node.mark_tower(handle) {
                 for level in (0..node.height).rev() {
-                    let succ = node.next[level]
-                        .load(Ordering::SeqCst, unsafe { &EpochGuard::unprotected() });
+                    let succ =
+                        node.next[level].load(Ordering::SeqCst, unsafe { &CsGuard::unprotected() });
 
                     // Try linking the predecessor and successor at this level.
                     if unsafe { cursor.preds[level].deref_unchecked() }.next[level]
@@ -510,12 +510,12 @@ where
         SkipList::new()
     }
 
-    fn get(&self, key: &K, output: &mut Self::Output, handle: &mut Handle) -> bool {
+    fn get(&self, key: &K, output: &mut Self::Output, handle: &mut Thread) -> bool {
         self.find_optimistic(key, output, handle);
         output.0.found(key).is_some()
     }
 
-    fn insert(&self, key: K, value: V, output: &mut Self::Output, handle: &mut Handle) -> bool {
+    fn insert(&self, key: K, value: V, output: &mut Self::Output, handle: &mut Thread) -> bool {
         self.insert(key, value, output, handle)
     }
 
@@ -523,7 +523,7 @@ where
         &self,
         key: &K,
         output: &mut Self::Output,
-        handle: &mut Handle,
+        handle: &mut Thread,
     ) -> bool {
         self.remove(key, output, handle)
     }

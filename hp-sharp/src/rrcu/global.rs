@@ -1,121 +1,17 @@
 //! A *Crash-Optimized RCU*.
 
 use atomic::{fence, Ordering};
-use crossbeam_utils::CachePadded;
-use nix::{errno::Errno, sys::pthread::pthread_self};
+use nix::errno::Errno;
 use std::mem;
 
-use crate::{
-    sync::{Bag, Pile},
-    GLOBAL_GARBAGE_COUNT,
-};
+use crate::{set_data, Bag, Epoch, Global, SealedBag, Thread, BAGS_WIDTH};
 
-use super::{
-    epoch::{AtomicEpoch, Epoch},
-    local::{Handle, LocalList},
-    recovery,
-};
+use super::rollback;
 
-/// The width of the number of bags.
-const BAGS_WIDTH: u32 = 3;
-
-/// A pair of an epoch and a bag.
-struct SealedBag {
-    epoch: Epoch,
-    inner: Bag,
-}
-
-/// It is safe to share `SealedBag` because `is_expired` only inspects the epoch.
-unsafe impl Sync for SealedBag {}
-
-impl SealedBag {
-    /// Checks if it is safe to drop the bag w.r.t. the given global epoch.
-    fn is_expired(&self, global_epoch: Epoch) -> bool {
-        global_epoch.value() - self.epoch.value() >= 2
-    }
-}
-
-/// The global data for a garbage collector.
-pub struct Global {
-    /// The intrusive linked list of `Local`s.
-    locals: LocalList,
-
-    /// The global pool of bags of deferred functions.
-    bags: [CachePadded<Pile<SealedBag>>; 1 << BAGS_WIDTH],
-
-    /// The global epoch.
-    pub(crate) epoch: CachePadded<AtomicEpoch>,
-}
-
-impl Global {
-    /// Creates a new global data for garbage collection.
-    ///
-    /// ```
-    /// use hp_sharp::crcu::Global;
-    ///
-    /// let global = Global::new();
-    /// ```
-    #[inline]
-    pub const fn new() -> Self {
-        Self {
-            locals: LocalList::new(),
-            bags: [
-                CachePadded::new(Pile::new()),
-                CachePadded::new(Pile::new()),
-                CachePadded::new(Pile::new()),
-                CachePadded::new(Pile::new()),
-                CachePadded::new(Pile::new()),
-                CachePadded::new(Pile::new()),
-                CachePadded::new(Pile::new()),
-                CachePadded::new(Pile::new()),
-            ],
-            epoch: CachePadded::new(AtomicEpoch::new(Epoch::starting())),
-        }
-    }
-
-    /// Registers a current thread as a participant associated with this [`Global`] epoch
+pub trait GlobalRRCU {
+    /// Registers a current thread as a participant associated with this [`GlobalRRCU`] epoch
     /// manager.
-    ///
-    /// ```
-    /// use hp_sharp::crcu::Global;
-    ///
-    /// let global = Global::new();
-    ///
-    /// let handle = global.register();
-    /// ```
-    #[inline]
-    pub fn register(&self) -> Handle {
-        // Install a signal handler to handle manual crash triggered by a reclaimer.
-        unsafe { recovery::install() };
-        let tid = pthread_self();
-        self.locals.acquire(tid, self)
-    }
-
-    pub(crate) fn push_bag(&self, bag: &mut Bag) {
-        GLOBAL_GARBAGE_COUNT.fetch_add(bag.len(), Ordering::AcqRel);
-        let bag = mem::take(bag);
-
-        fence(Ordering::SeqCst);
-
-        let epoch = self.epoch.load(Ordering::Relaxed);
-        let slot = &self.bags[epoch.value() as usize % (1 << BAGS_WIDTH)];
-        slot.push(SealedBag { epoch, inner: bag });
-    }
-
-    #[must_use]
-    pub(crate) fn collect(&self, global_epoch: Epoch) -> Vec<Bag> {
-        let index = (global_epoch.value() - 2) as usize % (1 << BAGS_WIDTH);
-        let bags = unsafe { self.bags.get_unchecked(index) };
-
-        let deferred = bags.pop_all();
-        let (collected, deferred): (Vec<_>, Vec<_>) = deferred
-            .into_iter()
-            .partition(|bag| bag.is_expired(global_epoch));
-
-        bags.append(deferred.into_iter());
-        collected.into_iter().map(|bag| bag.inner).collect()
-    }
-
+    fn register(&self) -> Thread;
     /// Attempts to advance the global epoch.
     ///
     /// The global epoch can advance if all currently pinned participants have been pinned in
@@ -124,19 +20,58 @@ impl Global {
     /// Returns the current global epoch.
     ///
     /// `try_advance()` is annotated `#[cold]` because it is rarely called.
+    fn try_advance(&self) -> Result<Epoch, Epoch>;
+    /// Force advancing the global epoch.
     ///
-    /// # Example
+    /// if currently there are pinned participants have been pinned in the other epoch than
+    /// the current global epoch, sends signals to restart the slow participants.
     ///
-    /// ```
-    /// use hp_sharp::crcu::Global;
+    /// Returns the advanced global epoch.
     ///
-    /// let global = &Global::new();
-    ///
-    /// // If there's no working thread, `try_advance` would trivially succeed.
-    /// assert!(global.try_advance().is_ok());
-    /// ```
+    /// `advance()` is annotated `#[cold]` because it is rarely called.
+    fn advance(&self) -> Epoch;
+}
+
+impl Global {
+    #[inline]
+    pub(crate) fn push_bag(&self, bag: &mut Bag) {
+        self.garbage_count.fetch_add(bag.len(), Ordering::AcqRel);
+        let bag = mem::take(bag);
+
+        fence(Ordering::SeqCst);
+
+        let epoch = self.epoch.load(Ordering::Relaxed);
+        let slot = &self.epoch_bags[epoch.value() as usize % (1 << BAGS_WIDTH)];
+        slot.push(SealedBag { epoch, inner: bag });
+    }
+
+    #[must_use]
+    pub(crate) fn collect(&self, global_epoch: Epoch) -> Vec<Bag> {
+        let index = (global_epoch.value() - 2) as usize % (1 << BAGS_WIDTH);
+        let bags = unsafe { self.epoch_bags.get_unchecked(index) };
+
+        let deferred = bags.pop_all();
+        let (collected, deferred): (Vec<_>, Vec<_>) = deferred
+            .into_iter()
+            .partition(|bag| bag.is_expired(global_epoch));
+
+        bags.append(deferred.into_iter());
+        collected.into_iter().map(|bag| bag.into_inner()).collect()
+    }
+}
+
+impl GlobalRRCU for Global {
+    #[inline]
+    fn register(&self) -> Thread {
+        // Install a signal handler to handle manual crash triggered by a reclaimer.
+        unsafe { rollback::install() };
+        let local = self.acquire();
+        set_data(local);
+        Thread { local }
+    }
+
     #[cold]
-    pub fn try_advance(&self) -> Result<Epoch, Epoch> {
+    fn try_advance(&self) -> Result<Epoch, Epoch> {
         let global_epoch = self.epoch.load(Ordering::Relaxed);
         fence(Ordering::SeqCst);
 
@@ -170,27 +105,8 @@ impl Global {
         Ok(new_epoch)
     }
 
-    /// Force advancing the global epoch.
-    ///
-    /// if currently there are pinned participants have been pinned in the other epoch than
-    /// the current global epoch, sends signals to restart the slow participants.
-    ///
-    /// Returns the advanced global epoch.
-    ///
-    /// `advance()` is annotated `#[cold]` because it is rarely called.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use hp_sharp::crcu::Global;
-    ///
-    /// let global = &Global::new();
-    ///
-    /// // `advance` always succeeds, and it will restart any slow threads.
-    /// global.advance();
-    /// ```
     #[cold]
-    pub fn advance(&self) -> Epoch {
+    fn advance(&self) -> Epoch {
         let global_epoch = self.epoch.load(Ordering::Relaxed);
         fence(Ordering::SeqCst);
 
@@ -204,7 +120,7 @@ impl Global {
 
             // If the participant was pinned in a different epoch, we eject its epoch.
             if local_epoch.is_pinned() && local_epoch.unpinned().value() < global_epoch.value() {
-                match unsafe { recovery::send_signal(local.owner.load(Ordering::Relaxed)) } {
+                match unsafe { rollback::send_signal(local.owner.load(Ordering::Relaxed)) } {
                     // `ESRCH` indicates that the given pthread is already exited.
                     Ok(_) | Err(Errno::ESRCH) => {}
                     Err(err) => panic!("Failed to restart the thread: {}", err),
@@ -228,24 +144,10 @@ impl Global {
     }
 }
 
-impl Drop for Global {
-    fn drop(&mut self) {
-        self.locals
-            .iter()
-            .flat_map(|local| mem::take(unsafe { &mut *local.bag.get() }).into_iter())
-            .chain(self.bags.iter_mut().flat_map(|pile| {
-                pile.pop_all()
-                    .into_iter()
-                    .flat_map(|bag| bag.inner.into_iter())
-            }))
-            .for_each(|def| unsafe { def.execute() });
-    }
-}
-
 #[cfg(test)]
 mod test {
-    use crate::crcu::Deferrable;
-    use crate::sync::Deferred;
+    use crate::rrcu::{CsGuardRRCU, Deferrable, GlobalRRCU, ThreadRRCU};
+    use crate::Deferred;
 
     use super::Global;
     use std::hint::black_box;
@@ -376,9 +278,9 @@ mod test {
             scope(|s| {
                 for _ in 0..THREADS {
                     s.spawn(|| {
-                        let mut handle = global.register();
+                        let mut thread = global.register();
                         for _ in 0..COUNT_PER_THREAD {
-                            handle.pin(|guard| {
+                            thread.pin(|guard| {
                                 let ptr = head.load(Ordering::Acquire);
                                 guard.mask(|guard| {
                                     let new = Box::into_raw(Box::new(0i32));
