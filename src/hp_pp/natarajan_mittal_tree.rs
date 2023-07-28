@@ -1,4 +1,4 @@
-use hp_pp::{tag, tagged, untagged, HazardPointer};
+use hp_pp::{tag, tagged, untagged, HazardPointer, light_membarrier};
 use hp_pp::{try_unlink, ProtectError};
 
 use crate::hp::concurrent_map::ConcurrentMap;
@@ -12,7 +12,7 @@ bitflags! {
     /// A remove operation is registered by marking the corresponding edges: the (parent, target)
     /// edge is _flagged_ and the (parent, sibling) edge is _tagged_.
     struct Marks: usize {
-        const STOP = 1usize.wrapping_shl(2);
+        const INVALID = 1usize.wrapping_shl(2);
         const FLAG = 1usize.wrapping_shl(1);
         const TAG  = 1usize.wrapping_shl(0);
     }
@@ -20,13 +20,13 @@ bitflags! {
 
 impl Marks {
     fn new(stop: bool, flag: bool, tag: bool) -> Self {
-        (if stop { Marks::STOP } else { Marks::empty() })
+        (if stop { Marks::INVALID } else { Marks::empty() })
             | (if flag { Marks::FLAG } else { Marks::empty() })
             | (if tag { Marks::TAG } else { Marks::empty() })
     }
 
-    fn stop(self) -> bool {
-        !(self & Marks::STOP).is_empty()
+    fn invalid(self) -> bool {
+        !(self & Marks::INVALID).is_empty()
     }
 
     fn flag(self) -> bool {
@@ -352,7 +352,7 @@ where
         let s = untagged(self.r.left.load(Ordering::Relaxed));
         let s_node = unsafe { &*s };
 
-        // We doesn't have to defend with hazard pointers here
+        // no protection needed here
         record.ancestor = &self.r as *const _ as *mut _;
         record.successor = s; // TODO: should preserve tag?
 
@@ -360,7 +360,7 @@ where
 
         let leaf = untagged(s_node.left.load(Ordering::Relaxed));
 
-        // We doesn't have to defend with hazard pointers here
+        // no protection needed here
         record.parent = s;
 
         record
@@ -378,21 +378,36 @@ where
         let mut curr = unsafe { &*record.leaf }.left.load(Ordering::Relaxed);
 
         while !untagged(curr).is_null() {
-            if !prev_tag {
-                // untagged edge: advance ancestor and successor pointers
-                record
-                    .handle
-                    .ancestor_h
-                    .protect_raw(untagged(record.parent));
+            if prev_tag {
+                // only advance parent
+                //   p  O              O
+                //     / \            / \
+                // l  O   O  ==>  p  O   O
+                //   / \            / \
+                //  O   O          O   O
+                record.parent = record.leaf;
+                mem::swap(&mut record.handle.parent_h, &mut record.handle.leaf_h);
+            } else {
+                // advance parent, ancestor, successor
+                //   p  O             a  O
+                //     / \              / \
+                // l  O   O  ==>  p,s  O   O
+                //   / \              / \
+                //  O   O            O   O
+                HazardPointer::swap(&mut record.handle.ancestor_h, &mut record.handle.parent_h);
+                HazardPointer::swap(&mut record.handle.successor_h, &mut record.handle.leaf_h);
+                record.handle.parent_h.protect_raw(record.leaf);
+                light_membarrier();
+                if record.leaf != record.leaf_addr().load(Ordering::Relaxed) {
+                    return Err(());
+                }
                 record.ancestor = record.parent;
-                record.handle.successor_h.protect_raw(untagged(record.leaf));
                 record.successor = record.leaf;
                 record.successor_dir = record.leaf_dir;
+                record.parent = record.leaf;
             }
 
-            // advance parent and leaf pointers
-            mem::swap(&mut record.parent, &mut record.leaf);
-            mem::swap(&mut record.handle.parent_h, &mut record.handle.leaf_h);
+            // advance leaf
             let mut curr_base = untagged(curr);
             let parent_ref = unsafe { &*record.parent };
             loop {
@@ -408,12 +423,12 @@ where
                             Direction::L => src.left.load(Ordering::Acquire),
                             Direction::R => src.right.load(Ordering::Acquire),
                         }))
-                        .stop()
+                        .invalid()
                     },
                 ) {
                     Ok(_) => break,
                     Err(ProtectError::Changed(curr_base_new)) => curr_base = curr_base_new,
-                    Err(ProtectError::Stopped) => return Err(()),
+                    Err(ProtectError::Invalidated) => return Err(()),
                 }
             }
 
@@ -475,12 +490,12 @@ where
                             Direction::L => src.left.load(Ordering::Acquire),
                             Direction::R => src.right.load(Ordering::Acquire),
                         }))
-                        .stop()
+                        .invalid()
                     },
                 ) {
                     Ok(_) => break,
                     Err(ProtectError::Changed(curr_base_new)) => curr_base = curr_base_new,
-                    Err(ProtectError::Stopped) => return Err(()),
+                    Err(ProtectError::Invalidated) => return Err(()),
                 }
             }
 

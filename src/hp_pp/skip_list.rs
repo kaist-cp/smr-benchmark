@@ -1,10 +1,9 @@
 use std::mem::transmute;
+use std::ptr;
 use std::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering};
-use std::{ptr, slice};
 
 use hp_pp::{
-    decompose_ptr, light_membarrier, tag, tagged, untagged, HazardPointer, ProtectError, Thread,
-    DEFAULT_DOMAIN,
+    decompose_ptr, light_membarrier, tag, tagged, untagged, HazardPointer, Thread, DEFAULT_DOMAIN,
 };
 
 use crate::hp::concurrent_map::ConcurrentMap;
@@ -49,14 +48,12 @@ impl<K, V> Node<K, V> {
         height
     }
 
-    pub fn decrement<F>(&self, on_zero: F)
-    where
-        F: FnOnce(*mut Self),
-    {
+    pub fn decrement(&self) -> bool {
         if self.refs.fetch_sub(1, Ordering::Release) == 1 {
             fence(Ordering::Acquire);
-            on_zero(self as *const _ as _);
+            return true;
         }
+        false
     }
 
     pub fn mark_tower(&self) -> bool {
@@ -76,18 +73,21 @@ impl<K, V> Node<K, V> {
         index: usize,
         hazptr: &mut HazardPointer<'domain>,
     ) -> Result<*mut Node<K, V>, ()> {
-        let mut next = self.next[index].load(Ordering::Relaxed);
+        let mut next = untagged(self.next[index].load(Ordering::Relaxed));
         loop {
-            match hazptr.try_protect_pp(untagged(next), &self, &self.next[index], &|src| {
-                (tag(src.next[index].load(Ordering::Acquire)) & 2) != 0
-            }) {
-                Ok(_) => return Ok(next),
-                Err(ProtectError::Changed(new_next)) => {
-                    next = new_next;
-                    continue;
-                }
-                Err(ProtectError::Stopped) => return Err(()),
+            // Inlined version of hp++ protection, without duplicate load
+            hazptr.protect_raw(next);
+            light_membarrier();
+            let (new_next_base, new_next_tag) =
+                decompose_ptr(self.next[index].load(Ordering::Acquire));
+            if new_next_tag == 3 {
+                // invalidated
+                return Err(());
+            } else if new_next_base != next {
+                next = new_next_base;
+                continue;
             }
+            return Ok(next);
         }
     }
 }
@@ -179,8 +179,8 @@ where
             let mut pred = &self.head as *const _ as *mut Node<K, V>;
             while level >= 1 {
                 level -= 1;
-                let mut curr =
-                    untagged(unsafe { &*untagged(pred) }.next[level].load(Ordering::Acquire));
+                // untagged
+                let mut curr = untagged(unsafe { &*pred }.next[level].load(Ordering::Acquire));
 
                 loop {
                     if curr.is_null() {
@@ -194,11 +194,11 @@ where
                     light_membarrier();
                     let (curr_new_base, curr_new_tag) =
                         decompose_ptr(pred_ref.next[level].load(Ordering::Acquire));
-                    if (curr_new_tag & 2) != 0 {
-                        // Stopped. Restart from head.
+                    if curr_new_tag == 3 {
+                        // Invalidated. Restart from head.
                         continue 'search;
                     } else if curr_new_base != curr {
-                        // If link changed but not stopped, retry protecting the new node.
+                        // If link changed but not invalidated, retry protecting the new node.
                         curr = curr_new_base;
                         continue;
                     }
@@ -208,7 +208,7 @@ where
                     match curr_node.key.cmp(key) {
                         std::cmp::Ordering::Less => {
                             pred = curr;
-                            curr = curr_node.next[level].load(Ordering::Acquire);
+                            curr = untagged(curr_node.next[level].load(Ordering::Acquire));
                             HazardPointer::swap(
                                 &mut handle.preds_h[level],
                                 &mut handle.succs_h[level],
@@ -266,6 +266,10 @@ where
                     }
 
                     if (tag(succ) & 1) != 0 {
+                        let frontier = &mut [ptr::null_mut(); MAX_HEIGHT][0..curr_ref.height];
+                        for level in 0..curr_ref.height {
+                            frontier[level] = curr_ref.next[level].load(Ordering::Acquire);
+                        }
                         unsafe {
                             handle.thread.try_unlink(
                                 PhysicalUnlink {
@@ -273,7 +277,7 @@ where
                                     curr,
                                     succ,
                                 },
-                                slice::from_ref(&untagged(succ)),
+                                frontier,
                             );
                         }
                         continue 'search;
@@ -384,7 +388,9 @@ where
             self.find(&new_node_ref.key, handle);
         }
 
-        new_node_ref.decrement(|ptr| unsafe { handle.thread.retire(ptr) });
+        if new_node_ref.decrement() {
+            unsafe { handle.thread.retire(new_node) }
+        }
         true
     }
 
@@ -396,28 +402,34 @@ where
         loop {
             let cursor = self.find(key, handle);
             let node = cursor.found(key)?;
-            handle
-                .removed_h
-                .protect_raw(node as *const _ as *mut Node<K, V>);
+            let node_ptr = node as *const _ as *mut Node<K, V>;
+            handle.removed_h.protect_raw(node_ptr);
             light_membarrier();
 
             // Try removing the node by marking its tower.
             if node.mark_tower() {
+                let frontier = &mut [ptr::null_mut(); MAX_HEIGHT][0..node.height];
+                for level in 0..node.height {
+                    frontier[level] = node.next[level].load(Ordering::Acquire);
+                }
+                let hps = handle.thread.protect_frontier(frontier);
                 for level in (0..node.height).rev() {
-                    let succ = node.next[level].load(Ordering::SeqCst);
+                    let succ = frontier[level];
 
-                    // Try linking the predecessor and successor at this level.
-                    if !unsafe {
-                        handle.thread.try_unlink(
-                            PhysicalUnlink {
-                                pred: &(*cursor.preds[level]).next[level],
-                                curr: node as *const _ as _,
-                                succ: tagged(succ, 0),
-                            },
-                            slice::from_ref(&untagged(succ)),
+                    if unsafe { &(*cursor.preds[level]).next[level] }
+                        .compare_exchange(
+                            node_ptr,
+                            untagged(succ),
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
                         )
-                    } {
+                        .is_err()
+                    {
+                        drop(hps);
                         self.find(key, handle);
+                        break;
+                    } else if node.decrement() {
+                        handle.thread.schedule_invalidation(hps, vec![node_ptr]);
                         break;
                     }
                 }
@@ -430,7 +442,8 @@ where
 impl<K, V> hp_pp::Invalidate for Node<K, V> {
     fn invalidate(&self) {
         for level in 0..self.height {
-            self.next[level].fetch_or(2, Ordering::SeqCst);
+            let a = self.next[level].load(Ordering::Acquire);
+            self.next[level].store(tagged(a, 3), Ordering::Release);
         }
     }
 }
@@ -450,17 +463,15 @@ where
         if self
             .pred
             .compare_exchange(
-                tagged(self.curr, 0),
-                tagged(self.succ, 0),
+                untagged(self.curr),
+                untagged(self.succ),
                 Ordering::SeqCst,
                 Ordering::SeqCst,
             )
             .is_ok()
         {
             let curr = unsafe { &*untagged(self.curr) };
-            let mut became_zero = false;
-            curr.decrement(|_| became_zero = true);
-            Ok(if became_zero {
+            Ok(if curr.decrement() {
                 vec![untagged(self.curr)]
             } else {
                 vec![]

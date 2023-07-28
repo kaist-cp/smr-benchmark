@@ -3,7 +3,7 @@ use std::ptr;
 use std::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering};
 
 use hp_pp::{light_membarrier, Thread};
-use hp_pp::{tag, tagged, untagged, HazardPointer, DEFAULT_DOMAIN};
+use hp_pp::{tag, untagged, HazardPointer, DEFAULT_DOMAIN};
 
 use super::concurrent_map::ConcurrentMap;
 
@@ -47,13 +47,10 @@ impl<K, V> Node<K, V> {
         height
     }
 
-    pub fn decrement<F>(&self, on_zero: F)
-    where
-        F: FnOnce(*mut Self),
-    {
+    pub fn decrement(&self, handle: &mut Handle) {
         if self.refs.fetch_sub(1, Ordering::Release) == 1 {
             fence(Ordering::Acquire);
-            on_zero(self as *const _ as _);
+            unsafe { handle.thread.retire(self as *const _ as *mut Node<K, V>) };
         }
     }
 
@@ -226,15 +223,15 @@ where
     ) -> bool {
         let success = pred
             .compare_exchange(
-                tagged(curr, 0),
-                tagged(succ, 0),
+                untagged(curr),
+                untagged(succ),
                 Ordering::Release,
                 Ordering::Relaxed,
             )
             .is_ok();
 
         if success {
-            unsafe { (&*untagged(curr)).decrement(|ptr| handle.thread.retire(ptr)) };
+            unsafe { (&*untagged(curr)).decrement(handle) };
         }
         success
     }
@@ -324,7 +321,7 @@ where
             self.find(&new_node_ref.key, handle);
         }
 
-        new_node_ref.decrement(|ptr| unsafe { handle.thread.retire(ptr) });
+        new_node_ref.decrement(handle);
         true
     }
 
@@ -350,13 +347,13 @@ where
                     if unsafe { &*cursor.preds[level] }.next[level]
                         .compare_exchange(
                             node as *const _ as _,
-                            tagged(succ, 0),
+                            untagged(succ),
                             Ordering::SeqCst,
                             Ordering::SeqCst,
                         )
                         .is_ok()
                     {
-                        node.decrement(|ptr| unsafe { handle.thread.retire(ptr) });
+                        node.decrement(handle);
                     } else {
                         self.find(key, handle);
                         break;

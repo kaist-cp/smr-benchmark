@@ -90,7 +90,7 @@ impl<K, V> Node<K, V> {
                     left = new_left;
                     continue;
                 }
-                Err(ProtectError::Stopped) => return Err(()),
+                Err(ProtectError::Invalidated) => return Err(()),
             }
             match right_h.try_protect_pp(right, &self.right, &self.right, &|child_link| {
                 Self::is_retired(child_link.load(Ordering::Acquire))
@@ -100,7 +100,7 @@ impl<K, V> Node<K, V> {
                     right = new_right;
                     continue;
                 }
-                Err(ProtectError::Stopped) => return Err(()),
+                Err(ProtectError::Invalidated) => return Err(()),
             }
             return Ok((left, right));
         }

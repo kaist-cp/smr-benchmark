@@ -1,7 +1,7 @@
 use super::concurrent_map::ConcurrentMap;
 use nbr_rs::{read_phase, Guard, Shield};
 
-use hp_pp::{tag, tagged, untagged};
+use hp_pp::{tag, untagged};
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
@@ -98,7 +98,7 @@ where
 
                         if tag(next) != 0 {
                             // We add a 0 tag here so that `cursor.curr`s tag is always 0.
-                            cursor.curr = tagged(next, 0);
+                            cursor.curr = untagged(next);
                             continue;
                         }
 
@@ -135,7 +135,7 @@ where
 
             // retire from cursor.prev.load() to cursor.curr (exclusive)
             let mut node = prev_next;
-            while tagged(node, 0) != cursor.curr {
+            while untagged(node) != cursor.curr {
                 let next = unsafe { &*untagged(node) }.next.load(Ordering::Acquire);
                 unsafe { guard.retire(untagged(node)) };
                 node = next;

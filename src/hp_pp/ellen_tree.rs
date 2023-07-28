@@ -197,7 +197,7 @@ impl<K, V> Node<K, V> {
                     left = new_left;
                     continue;
                 }
-                Err(ProtectError::Stopped) => return Err(()),
+                Err(ProtectError::Invalidated) => return Err(()),
             }
             match right_h.try_protect_pp(right, &self, &self.right, &|src| {
                 (tag(src.right.load(Ordering::Acquire)) & 1) != 0
@@ -207,7 +207,7 @@ impl<K, V> Node<K, V> {
                     right = new_right;
                     continue;
                 }
-                Err(ProtectError::Stopped) => return Err(()),
+                Err(ProtectError::Invalidated) => return Err(()),
             }
             return Ok((left, right));
         }
