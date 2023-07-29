@@ -383,9 +383,9 @@ where
     #[inline(never)]
     fn get<'domain, 'hp>(&self, handle: &'hp mut Self::Handle<'domain>, key: &K) -> Option<&'hp V> {
         let cursor = self.find(key, handle);
-        let node = unsafe { &*cursor.succs[0] };
+        let node = cursor.found(key)?;
         if node.key.eq(&key) {
-            Some(&node.value)
+            Some(unsafe { transmute(&node.value) })
         } else {
             None
         }
