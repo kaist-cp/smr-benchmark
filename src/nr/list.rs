@@ -3,7 +3,7 @@ use super::{tag, untagged};
 
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::ptr::null_mut;
-use std::sync::atomic::{compiler_fence, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicPtr, Ordering};
 
 #[derive(Debug)]
 struct Node<K, V> {
@@ -90,11 +90,6 @@ where
                 Greater => break false,
             }
         };
-
-        // HACK: This compiler fence makes read-only throughput more reasonably.
-        // (17377543 op/s, which is lower than EBR -> 22596132 op/s, which is higher than EBR)
-        // It seems this let the compiler generate more optimized code for the traversal loop.
-        compiler_fence(Ordering::SeqCst);
 
         // If prev and curr WERE adjacent, no need to clean up
         if prev_next == self.curr {
