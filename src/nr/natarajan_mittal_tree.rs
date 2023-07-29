@@ -1,6 +1,7 @@
 use super::compose_tag;
 use super::{concurrent_map::ConcurrentMap, tag, untagged};
 use std::cmp;
+use std::mem::transmute;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
@@ -205,7 +206,7 @@ where
     }
 
     // All `Shared<_>` fields are unmarked.
-    fn seek<'g>(&'g self, key: &K) -> SeekRecord<K, V> {
+    fn seek(&self, key: &K) -> SeekRecord<K, V> {
         let s = self.r.left.load(Ordering::Relaxed);
         let s_node = unsafe { &*untagged(s) };
         let leaf = untagged(s_node.left.load(Ordering::Relaxed));
@@ -252,7 +253,7 @@ where
     }
 
     /// Similar to `seek`, but traverse the tree with only two pointers
-    fn seek_leaf<'g>(&'g self, key: &K) -> SeekRecord<K, V> {
+    fn seek_leaf(&self, key: &K) -> SeekRecord<K, V> {
         let s = self.r.left.load(Ordering::Relaxed);
         let s_node = unsafe { &*untagged(s) };
         let leaf = untagged(s_node.left.load(Ordering::Acquire));
@@ -320,7 +321,7 @@ where
             .is_ok()
     }
 
-    pub fn get<'g>(&'g self, key: &'g K) -> Option<&'g V> {
+    pub fn get(&self, key: &K) -> Option<&'static V> {
         let record = self.seek_leaf(key);
         let leaf_node = unsafe { &*untagged(record.leaf) };
 
@@ -381,7 +382,7 @@ where
         }
     }
 
-    pub fn remove<'g>(&'g self, key: &K) -> Option<&'g V> {
+    pub fn remove(&self, key: &K) -> Option<&'static V> {
         let mut record;
         // `leaf` and `value` are the snapshot of the node to be deleted.
         // NOTE: The paper version uses one big loop for both phases.
@@ -397,7 +398,7 @@ where
                 return None;
             }
 
-            let value = leaf_node.value.as_ref().unwrap();
+            let value = unsafe { transmute(leaf_node.value.as_ref().unwrap()) };
 
             // Try injecting the deletion flag.
             match record.leaf_addr().compare_exchange(
@@ -452,7 +453,7 @@ where
     }
 
     #[inline(never)]
-    fn get<'g>(&'g self, key: &'g K) -> Option<&'g V> {
+    fn get(&self, key: &K) -> Option<&'static V> {
         self.get(key)
     }
     #[inline(never)]
@@ -460,7 +461,7 @@ where
         self.insert(key, value).is_ok()
     }
     #[inline(never)]
-    fn remove<'g>(&'g self, key: &K) -> Option<&'g V> {
+    fn remove(&self, key: &K) -> Option<&'static V> {
         self.remove(key)
     }
 }

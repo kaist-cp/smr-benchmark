@@ -1,8 +1,8 @@
 pub trait ConcurrentMap<K, V> {
     fn new() -> Self;
-    fn get<'g>(&'g self, key: &'g K) -> Option<&'g V>;
+    fn get(&self, key: &K) -> Option<&'static V>;
     fn insert(&self, key: K, value: V) -> bool;
-    fn remove<'g>(&'g self, key: &'g K) -> Option<&'g V>;
+    fn remove(&self, key: &K) -> Option<&'static V>;
 }
 
 #[cfg(test)]

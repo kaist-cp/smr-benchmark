@@ -107,7 +107,9 @@ where
                 break false;
             }
 
-            self.curr.defend(curr, guard).map_err(FindError::ShieldError)?;
+            self.curr
+                .defend(curr, guard)
+                .map_err(FindError::ShieldError)?;
             let curr_node = unsafe { curr.deref() };
 
             let next = curr_node.next.load(Ordering::Acquire, guard);
@@ -216,7 +218,9 @@ where
                 return Ok(false);
             }
 
-            self.curr.defend(curr, guard).map_err(FindError::ShieldError)?;
+            self.curr
+                .defend(curr, guard)
+                .map_err(FindError::ShieldError)?;
             let curr_node = unsafe { curr.deref() };
 
             match curr_node.key.cmp(key) {

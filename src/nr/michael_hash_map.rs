@@ -34,7 +34,7 @@ where
         s.finish() as usize
     }
 
-    pub fn get<'g>(&'g self, k: &'g K) -> Option<&'g V> {
+    pub fn get(&self, k: &K) -> Option<&'static V> {
         let i = Self::hash(k);
         self.get_bucket(i).get(k)
     }
@@ -44,7 +44,7 @@ where
         self.get_bucket(i).insert(k, v)
     }
 
-    pub fn remove<'g>(&'g self, k: &'g K) -> Option<&'g V> {
+    pub fn remove(&self, k: &K) -> Option<&'static V> {
         let i = Self::hash(&k);
         self.get_bucket(i).remove(k)
     }
@@ -59,7 +59,7 @@ where
     }
 
     #[inline(never)]
-    fn get<'g>(&'g self, key: &'g K) -> Option<&'g V> {
+    fn get(&self, key: &K) -> Option<&'static V> {
         self.get(key)
     }
     #[inline(never)]
@@ -67,7 +67,7 @@ where
         self.insert(key, value)
     }
     #[inline(never)]
-    fn remove<'g>(&'g self, key: &'g K) -> Option<&'g V> {
+    fn remove(&self, key: &K) -> Option<&'static V> {
         self.remove(key)
     }
 }

@@ -1,4 +1,5 @@
 use std::{
+    mem::transmute,
     ptr::null_mut,
     sync::atomic::{AtomicPtr, Ordering},
 };
@@ -314,9 +315,9 @@ where
     }
 
     #[inline(never)]
-    fn get<'g>(&'g self, key: &'g K) -> Option<&'g V> {
+    fn get(&self, key: &K) -> Option<&'static V> {
         let cursor = self.find_optimistic(key);
-        cursor.found.map(|node| &node.value)
+        unsafe { transmute(cursor.found.map(|node| &node.value)) }
     }
 
     #[inline(never)]
@@ -325,8 +326,8 @@ where
     }
 
     #[inline(never)]
-    fn remove<'g>(&'g self, key: &'g K) -> Option<&'g V> {
-        self.remove(key)
+    fn remove(&self, key: &K) -> Option<&'static V> {
+        unsafe { transmute(self.remove(key)) }
     }
 }
 

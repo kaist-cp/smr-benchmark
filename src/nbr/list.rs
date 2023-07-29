@@ -35,6 +35,7 @@ impl<K, V> Drop for List<K, V> {
 }
 
 impl<K, V> Node<K, V> {
+    #[inline]
     fn new(key: K, value: V) -> Self {
         Self {
             next: AtomicPtr::new(ptr::null_mut()),
@@ -66,6 +67,7 @@ where
     }
 
     /// Clean up a chain of logically removed nodes in each traversal.
+    #[inline]
     fn find_harris(&self, key: &K, handle: &mut Handle, guard: &Guard) -> Cursor<K, V> {
         let mut cursor;
         let mut prev_next;
@@ -145,6 +147,7 @@ where
         }
     }
 
+    #[inline]
     fn find_harris_michael(&self, key: &K, handle: &mut Handle, guard: &Guard) -> Cursor<K, V> {
         let mut cursor;
         let mut removed_next;
@@ -213,6 +216,7 @@ where
     }
 
     /// Gotta go fast. Doesn't fail.
+    #[inline]
     fn find_harris_herlihy_shavit(
         &self,
         key: &K,
@@ -334,6 +338,7 @@ where
         }
     }
 
+    #[inline]
     fn pop<'g>(&self, handle: &mut Handle, guard: &'g Guard) -> Option<(&'g K, &'g V)> {
         loop {
             let mut cursor = Cursor {
