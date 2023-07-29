@@ -107,7 +107,11 @@ impl Deferrable for Thread {
     #[inline]
     #[must_use]
     fn defer(&mut self, def: Deferred) -> Option<Vec<Deferred>> {
-        unsafe { (*self.local).defer(def) }
+        if let Some(local) = unsafe { self.local.as_mut() } {
+            local.defer(def)
+        } else {
+            Some(vec![def])
+        }
     }
 }
 
@@ -115,6 +119,10 @@ impl Deferrable for RaGuard {
     #[inline]
     #[must_use]
     fn defer(&mut self, def: Deferred) -> Option<Vec<Deferred>> {
-        unsafe { (*self.local).defer(def) }
+        if let Some(local) = unsafe { self.local.as_mut() } {
+            local.defer(def)
+        } else {
+            Some(vec![def])
+        }
     }
 }

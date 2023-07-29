@@ -9,9 +9,15 @@ use super::GlobalHPSharp;
 impl Thread {
     #[inline]
     pub(crate) unsafe fn retire_inner(&mut self, mut deferred: Vec<Deferred>) {
-        deferred.append(&mut (*self.local).local_deferred);
-        let mut not_freed = self.do_reclamation(deferred);
-        (*self.local).local_deferred.append(&mut not_freed);
+        if let Some(local) = self.local.as_mut() {
+            deferred.append(&mut local.local_deferred);
+            let mut not_freed = self.do_reclamation(deferred);
+            local.local_deferred.append(&mut not_freed);
+        } else {
+            for def in deferred {
+                unsafe { def.execute() };
+            }
+        }
     }
 
     pub(crate) fn do_reclamation(&mut self, deferred: Vec<Deferred>) -> Vec<Deferred> {

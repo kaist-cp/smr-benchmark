@@ -1,11 +1,13 @@
 // To use  `#[cfg(sanitize = "address")]`
 #![feature(cfg_sanitize)]
 
+mod cdrc;
 mod hpsharp;
 mod rrcu;
+pub use cdrc::*;
 pub use hpsharp::*;
 
-use std::cell::RefCell;
+use std::{cell::RefCell, mem::ManuallyDrop};
 
 pub static GLOBAL: Global = Global::new();
 
@@ -334,6 +336,19 @@ impl Drop for Global {
 /// A thread-local handle managing local epoch and defering.
 pub struct Thread {
     local: *mut Local,
+}
+
+impl Thread {
+    /// Creates an unprotected `Thread`.
+    pub unsafe fn unprotected() -> Self {
+        Self { local: null_mut() }
+    }
+
+    pub(crate) unsafe fn internal() -> ManuallyDrop<Self> {
+        ManuallyDrop::new(Self {
+            local: LOCAL.try_with(|local| *local.get()).unwrap_or(null_mut()),
+        })
+    }
 }
 
 impl Drop for Thread {
