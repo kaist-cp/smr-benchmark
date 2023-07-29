@@ -66,15 +66,15 @@ where
         Self::with_capacity(30000)
     }
 
-    #[inline]
+    #[inline(never)]
     fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
         self.get(key, guard)
     }
-    #[inline]
+    #[inline(never)]
     fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
         self.insert(key, value, guard)
     }
-    #[inline]
+    #[inline(never)]
     fn remove<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
         self.remove(key, guard)
     }

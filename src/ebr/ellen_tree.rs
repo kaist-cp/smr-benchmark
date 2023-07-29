@@ -524,6 +524,7 @@ where
         EFRBTree::new()
     }
 
+    #[inline(never)]
     fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
         match self.find(key, guard) {
             Some(node) => Some(node.value.as_ref().unwrap()),
@@ -531,10 +532,12 @@ where
         }
     }
 
+    #[inline(never)]
     fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
         self.insert(&key, value, guard)
     }
 
+    #[inline(never)]
     fn remove<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
         self.delete(key, guard)
     }

@@ -615,14 +615,17 @@ where
         Self::new()
     }
 
+    #[inline(never)]
     fn get(&self, key: &K, output: &mut Self::Output, handle: &mut Thread) -> bool {
         self.get(key, output, handle)
     }
 
+    #[inline(never)]
     fn insert(&self, key: K, value: V, output: &mut Self::Output, handle: &mut Thread) -> bool {
         self.insert(key, value, output, handle)
     }
 
+    #[inline(never)]
     fn remove<'domain, 'hp>(
         &self,
         key: &K,

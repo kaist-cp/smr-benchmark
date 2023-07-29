@@ -555,11 +555,11 @@ where
         HList { inner: List::new() }
     }
 
-    #[inline]
+    #[inline(never)]
     fn get<'domain, 'hp>(&self, handle: &'hp mut Self::Handle<'domain>, key: &K) -> Option<&'hp V> {
         self.inner.harris_get(key, handle)
     }
-    #[inline]
+    #[inline(never)]
     fn insert<'domain, 'hp>(
         &self,
         handle: &'hp mut Self::Handle<'domain>,
@@ -568,7 +568,7 @@ where
     ) -> bool {
         self.inner.harris_insert(key, value, handle)
     }
-    #[inline]
+    #[inline(never)]
     fn remove<'domain, 'hp>(
         &self,
         handle: &'hp mut Self::Handle<'domain>,
@@ -587,7 +587,7 @@ where
     K: Ord,
 {
     /// For optimistic search on HashMap
-    #[inline]
+    #[inline(never)]
     pub fn get_harris_herlihy_shavit<'domain, 'hp>(
         &self,
         handle: &'hp mut Handle<'domain>,
@@ -611,11 +611,11 @@ where
         HMList { inner: List::new() }
     }
 
-    #[inline]
+    #[inline(never)]
     fn get<'domain, 'hp>(&self, handle: &'hp mut Self::Handle<'domain>, key: &K) -> Option<&'hp V> {
         self.inner.harris_michael_get(key, handle)
     }
-    #[inline]
+    #[inline(never)]
     fn insert<'domain, 'hp>(
         &self,
         handle: &'hp mut Self::Handle<'domain>,
@@ -624,7 +624,7 @@ where
     ) -> bool {
         self.inner.harris_michael_insert(key, value, handle)
     }
-    #[inline]
+    #[inline(never)]
     fn remove<'domain, 'hp>(
         &self,
         handle: &'hp mut Self::Handle<'domain>,
@@ -663,11 +663,11 @@ where
         HHSList { inner: List::new() }
     }
 
-    #[inline]
+    #[inline(never)]
     fn get<'domain, 'hp>(&self, handle: &'hp mut Self::Handle<'domain>, key: &K) -> Option<&'hp V> {
         self.inner.harris_herlihy_shavit_get(key, handle)
     }
-    #[inline]
+    #[inline(never)]
     fn insert<'domain, 'hp>(
         &self,
         handle: &'hp mut Self::Handle<'domain>,
@@ -676,7 +676,7 @@ where
     ) -> bool {
         self.inner.harris_insert(key, value, handle)
     }
-    #[inline]
+    #[inline(never)]
     fn remove<'domain, 'hp>(
         &self,
         handle: &'hp mut Self::Handle<'domain>,

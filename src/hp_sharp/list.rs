@@ -681,12 +681,12 @@ pub mod traverse {
             Self { inner: List::new() }
         }
 
-        #[inline]
+        #[inline(never)]
         fn get(&self, key: &K, output: &mut Self::Output, thread: &mut hp_sharp::Thread) -> bool {
             self.inner.get(List::harris_traverse, key, output, thread)
         }
 
-        #[inline]
+        #[inline(never)]
         fn insert(
             &self,
             key: K,
@@ -698,7 +698,7 @@ pub mod traverse {
                 .insert(List::harris_traverse, key, value, output, thread)
         }
 
-        #[inline]
+        #[inline(never)]
         fn remove<'domain, 'hp>(
             &self,
             key: &K,
@@ -726,13 +726,13 @@ pub mod traverse {
             Self { inner: List::new() }
         }
 
-        #[inline]
+        #[inline(never)]
         fn get(&self, key: &K, output: &mut Self::Output, thread: &mut hp_sharp::Thread) -> bool {
             self.inner
                 .get(List::harris_michael_traverse, key, output, thread)
         }
 
-        #[inline]
+        #[inline(never)]
         fn insert(
             &self,
             key: K,
@@ -744,7 +744,7 @@ pub mod traverse {
                 .insert(List::harris_michael_traverse, key, value, output, thread)
         }
 
-        #[inline]
+        #[inline(never)]
         fn remove<'domain, 'hp>(
             &self,
             key: &K,
@@ -772,13 +772,13 @@ pub mod traverse {
             Self { inner: List::new() }
         }
 
-        #[inline]
+        #[inline(never)]
         fn get(&self, key: &K, output: &mut Self::Output, thread: &mut hp_sharp::Thread) -> bool {
             self.inner
                 .get(List::harris_herlihy_shavit_traverse, key, output, thread)
         }
 
-        #[inline]
+        #[inline(never)]
         fn insert(
             &self,
             key: K,
@@ -790,7 +790,7 @@ pub mod traverse {
                 .insert(List::harris_traverse, key, value, output, thread)
         }
 
-        #[inline]
+        #[inline(never)]
         fn remove<'domain, 'hp>(
             &self,
             key: &K,
@@ -837,13 +837,13 @@ pub mod traverse_loop {
             Self { inner: List::new() }
         }
 
-        #[inline]
+        #[inline(never)]
         fn get(&self, key: &K, output: &mut Self::Output, thread: &mut hp_sharp::Thread) -> bool {
             self.inner
                 .get(List::harris_traverse_loop, key, output, thread)
         }
 
-        #[inline]
+        #[inline(never)]
         fn insert(
             &self,
             key: K,
@@ -855,7 +855,7 @@ pub mod traverse_loop {
                 .insert(List::harris_traverse_loop, key, value, output, thread)
         }
 
-        #[inline]
+        #[inline(never)]
         fn remove<'domain, 'hp>(
             &self,
             key: &K,
@@ -894,7 +894,7 @@ pub mod traverse_loop {
             Self { inner: List::new() }
         }
 
-        #[inline]
+        #[inline(never)]
         fn get(&self, key: &K, output: &mut Self::Output, thread: &mut hp_sharp::Thread) -> bool {
             self.inner.get(
                 List::harris_herlihy_shavit_traverse_loop,
@@ -904,7 +904,7 @@ pub mod traverse_loop {
             )
         }
 
-        #[inline]
+        #[inline(never)]
         fn insert(
             &self,
             key: K,
@@ -916,7 +916,7 @@ pub mod traverse_loop {
                 .insert(List::harris_traverse_loop, key, value, output, thread)
         }
 
-        #[inline]
+        #[inline(never)]
         fn remove<'domain, 'hp>(
             &self,
             key: &K,

@@ -394,15 +394,15 @@ where
         HList { inner: List::new() }
     }
 
-    #[inline]
+    #[inline(never)]
     fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         self.inner.harris_get(key, guard)
     }
-    #[inline]
+    #[inline(never)]
     fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
         self.inner.harris_insert(key, value, guard)
     }
-    #[inline]
+    #[inline(never)]
     fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         self.inner.harris_remove(key, guard)
     }
@@ -417,7 +417,7 @@ where
     K: Ord,
 {
     /// For optimistic search on HashMap
-    #[inline]
+    #[inline(never)]
     pub fn get_harris_herlihy_shavit<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         self.inner.harris_herlihy_shavit_get(key, guard)
     }
@@ -431,15 +431,15 @@ where
         HMList { inner: List::new() }
     }
 
-    #[inline]
+    #[inline(never)]
     fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         self.inner.harris_michael_get(key, guard)
     }
-    #[inline]
+    #[inline(never)]
     fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
         self.inner.harris_michael_insert(key, value, guard)
     }
-    #[inline]
+    #[inline(never)]
     fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         self.inner.harris_michael_remove(key, guard)
     }
@@ -468,15 +468,15 @@ where
         HHSList { inner: List::new() }
     }
 
-    #[inline]
+    #[inline(never)]
     fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         self.inner.harris_herlihy_shavit_get(key, guard)
     }
-    #[inline]
+    #[inline(never)]
     fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
         self.inner.harris_insert(key, value, guard)
     }
-    #[inline]
+    #[inline(never)]
     fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
         self.inner.harris_remove(key, guard)
     }

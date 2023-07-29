@@ -344,15 +344,18 @@ where
         SkipList::new()
     }
 
+    #[inline(never)]
     fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
         let cursor = self.find_optimistic(key, guard);
         cursor.found.map(|node| &unsafe { node.deref() }.value)
     }
 
+    #[inline(never)]
     fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
         self.insert(key, value, guard)
     }
 
+    #[inline(never)]
     fn remove<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
         self.remove(key, guard)
     }

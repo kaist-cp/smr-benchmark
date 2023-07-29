@@ -510,15 +510,18 @@ where
         SkipList::new()
     }
 
+    #[inline(never)]
     fn get(&self, key: &K, output: &mut Self::Output, handle: &mut Thread) -> bool {
         self.find_optimistic(key, output, handle);
         output.0.found(key).is_some()
     }
 
+    #[inline(never)]
     fn insert(&self, key: K, value: V, output: &mut Self::Output, handle: &mut Thread) -> bool {
         self.insert(key, value, output, handle)
     }
 
+    #[inline(never)]
     fn remove<'domain, 'hp>(
         &self,
         key: &K,

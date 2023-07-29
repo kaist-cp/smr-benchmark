@@ -471,15 +471,15 @@ where
         HList { inner: List::new() }
     }
 
-    #[inline]
+    #[inline(never)]
     fn get<'g>(&'g self, key: &K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
         self.inner.harris_get(key, handle, guard)
     }
-    #[inline]
+    #[inline(never)]
     fn insert(&self, key: K, value: V, handle: &mut Handle, guard: &Guard) -> bool {
         self.inner.harris_insert(key, value, handle, guard)
     }
-    #[inline]
+    #[inline(never)]
     fn remove<'g>(&'g self, key: &K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
         self.inner.harris_remove(key, handle, guard)
     }
@@ -522,15 +522,15 @@ where
         HMList { inner: List::new() }
     }
 
-    #[inline]
+    #[inline(never)]
     fn get<'g>(&'g self, key: &K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
         self.inner.harris_michael_get(key, handle, guard)
     }
-    #[inline]
+    #[inline(never)]
     fn insert(&self, key: K, value: V, handle: &mut Handle, guard: &Guard) -> bool {
         self.inner.harris_michael_insert(key, value, handle, guard)
     }
-    #[inline]
+    #[inline(never)]
     fn remove<'g>(&'g self, key: &K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
         self.inner.harris_michael_remove(key, handle, guard)
     }
@@ -566,15 +566,15 @@ where
         HHSList { inner: List::new() }
     }
 
-    #[inline]
+    #[inline(never)]
     fn get<'g>(&'g self, key: &K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
         self.inner.harris_herlihy_shavit_get(key, handle, guard)
     }
-    #[inline]
+    #[inline(never)]
     fn insert(&self, key: K, value: V, handle: &mut Handle, guard: &Guard) -> bool {
         self.inner.harris_insert(key, value, handle, guard)
     }
-    #[inline]
+    #[inline(never)]
     fn remove<'g>(&'g self, key: &K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
         self.inner.harris_remove(key, handle, guard)
     }
