@@ -12,7 +12,6 @@ crossbeam-utils = { path = "./crossbeam-ebr/crossbeam-utils" }
 csv = "1.2.2"
 rand = "0.8"
 typenum = "1.16"
-scopeguard = "1.1.0"
 hp_pp = { path = "./hp_pp" }
 nbr-rs = { path = "./nbr-rs" }
 cdrc-rs = { path = "./cdrc-rs" }
