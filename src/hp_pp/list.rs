@@ -290,15 +290,16 @@ where
             }
 
             let curr_node = unsafe { &*self.curr };
+            let next = curr_node.next.load(Ordering::Acquire);
 
             match curr_node.key.cmp(key) {
                 Less => {
                     self.prev = self.curr;
-                    self.curr = curr_node.next.load(Ordering::Acquire);
+                    self.curr = next;
                     HazardPointer::swap(&mut self.handle.prev_h, &mut self.handle.curr_h);
                     continue;
                 }
-                Equal => return Ok(tag(curr_node.next.load(Ordering::Relaxed)) == 0),
+                Equal => return Ok(tag(next) == 0),
                 Greater => return Ok(false),
             }
         }

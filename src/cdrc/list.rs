@@ -219,13 +219,14 @@ where
         let mut cursor = Cursor::new(&self.head, guard);
         Ok(loop {
             let curr_node = some_or!(unsafe { cursor.curr.as_ref() }, break (false, cursor));
+            let next = curr_node.next.load_snapshot(guard);
             match curr_node.key.cmp(key) {
                 Less => {
                     mem::swap(&mut cursor.curr, &mut cursor.prev);
-                    cursor.curr = curr_node.next.load_snapshot(guard);
+                    cursor.curr = next;
                     continue;
                 }
-                Equal => break (curr_node.next.load_snapshot(guard).mark() == 0, cursor),
+                Equal => break (next.mark() == 0, cursor),
                 Greater => break (false, cursor),
             }
         })
@@ -252,8 +253,7 @@ where
     {
         let node = RcPtr::make_shared(Node::new(key, value), guard);
         loop {
-            let (found, cursor) =
-                ok_or!(find(self, unsafe { &node.deref().key }, guard), continue);
+            let (found, cursor) = ok_or!(find(self, unsafe { &node.deref().key }, guard), continue);
             if found {
                 return false;
             }

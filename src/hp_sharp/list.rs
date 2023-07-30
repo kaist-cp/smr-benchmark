@@ -370,15 +370,14 @@ where
                     let mut cursor = SharedCursor::new(&self.head, guard);
                     cursor.found = loop {
                         let curr_node = some_or!(cursor.curr.as_ref(guard), break false);
+                        let next = curr_node.next.load(Ordering::Acquire, guard);
                         match curr_node.key.cmp(key) {
                             Less => {
                                 cursor.prev = cursor.curr;
-                                cursor.curr = curr_node.next.load(Ordering::Acquire, guard);
+                                cursor.curr = next;
                                 continue;
                             }
-                            Equal => {
-                                break curr_node.next.load(Ordering::Relaxed, guard).tag() == 0
-                            }
+                            Equal => break next.tag() == 0,
                             Greater => break false,
                         }
                     };
@@ -413,15 +412,14 @@ where
                             return TraverseStatus::Finished;
                         }
                     };
+                    let next = curr_node.next.load(Ordering::Acquire, guard);
                     match curr_node.key.cmp(key) {
                         Less => {
                             cursor.prev = cursor.curr;
-                            cursor.curr = curr_node.next.load(Ordering::Acquire, guard);
+                            cursor.curr = next;
                             return TraverseStatus::Continue;
                         }
-                        Equal => {
-                            cursor.found = curr_node.next.load(Ordering::Relaxed, guard).tag() == 0
-                        }
+                        Equal => cursor.found = next.tag() == 0,
                         Greater => cursor.found = false,
                     }
                     TraverseStatus::Finished

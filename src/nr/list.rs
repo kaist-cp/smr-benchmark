@@ -161,14 +161,13 @@ where
                 unsafe { untagged(cursor.curr).as_ref() },
                 break (false, cursor)
             );
+            let next = curr_node.next.load(Ordering::Acquire);
             match curr_node.key.cmp(key) {
                 Less => {
-                    cursor.curr = curr_node.next.load(Ordering::Acquire);
-                    // NOTE: unnecessary (this function is expected to be used only for `get`)
-                    cursor.prev = &curr_node.next;
+                    cursor.curr = next;
                     continue;
                 }
-                Equal => break (tag(curr_node.next.load(Ordering::Relaxed)) == 0, cursor),
+                Equal => break (tag(next) == 0, cursor),
                 Greater => break (false, cursor),
             }
         })

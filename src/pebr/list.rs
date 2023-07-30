@@ -222,13 +222,14 @@ where
                 .defend(curr, guard)
                 .map_err(FindError::ShieldError)?;
             let curr_node = unsafe { curr.deref() };
+            let next = curr_node.next.load(Ordering::Acquire, guard);
 
             match curr_node.key.cmp(key) {
                 Less => {
-                    curr = curr_node.next.load(Ordering::Acquire, guard);
+                    curr = next;
                     continue;
                 }
-                Equal => return Ok(curr_node.next.load(Ordering::Relaxed, guard).tag() == 0),
+                Equal => return Ok(next.tag() == 0),
                 Greater => return Ok(false),
             }
         }
