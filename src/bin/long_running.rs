@@ -23,7 +23,7 @@ use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
 use typenum::{Unsigned, U1};
 
-use smr_benchmark::{cdrc, ebr};
+use smr_benchmark::{cdrc, ebr, cdrc_hp_sharp};
 use smr_benchmark::{hp, hp_pp, hp_sharp as hp_sharp_bench};
 use smr_benchmark::{nbr, pebr};
 
@@ -47,6 +47,7 @@ pub enum MM {
     HP_PP,
     CDRC_EBR,
     HP_SHARP,
+    CDRC_HP_SHARP,
     NBR,
 }
 
@@ -266,6 +267,7 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
         MM::HP_PP => bench_map_hp_pp(config, PrefillStrategy::Decreasing),
         MM::CDRC_EBR => bench_map_cdrc::<cdrc_rs::GuardEBR, N>(config, PrefillStrategy::Decreasing),
         MM::HP_SHARP => bench_map_hp_sharp(config, PrefillStrategy::Decreasing),
+        MM::CDRC_HP_SHARP => bench_map_cdrc_hp_sharp(config, PrefillStrategy::Decreasing),
         MM::NBR => bench_map_nbr(config, PrefillStrategy::Decreasing, 2),
     };
     output
@@ -1284,6 +1286,130 @@ fn bench_map_hp_sharp(
                     let handle = &mut **handle.borrow_mut();
                     let output =
                         &mut hp_sharp_bench::HHSList::<String, String>::empty_output(handle);
+                    let mut ops: u64 = 0;
+                    let rng = &mut rand::thread_rng();
+                    barrier.clone().wait();
+                    let start = Instant::now();
+
+                    while start.elapsed() < config.duration {
+                        let key = generate_key(config, rng);
+                        let _ = map.get(&key, output, handle);
+                        ops += 1;
+                    }
+
+                    ops_sender.send(ops).unwrap();
+                });
+            });
+        }
+    })
+    .unwrap();
+    println!("end");
+
+    let mut ops = 0;
+    for _ in 0..config.readers {
+        let local_ops = ops_receiver.recv().unwrap();
+        ops += local_ops;
+    }
+    let ops_per_sec = ops / config.interval;
+    let (peak_mem, avg_mem, garb_peak, garb_avg) = mem_receiver.recv().unwrap();
+    (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
+}
+
+fn bench_map_cdrc_hp_sharp(
+    config: &Config,
+    strategy: PrefillStrategy,
+) -> (u64, usize, usize, usize, usize) {
+    use hp_sharp_bench::concurrent_map::OutputHolder;
+    use hp_sharp_bench::ConcurrentMap;
+    let map = &cdrc_hp_sharp::traverse_loop::HHSList::new();
+    strategy.prefill_hp_sharp(config, map);
+
+    let barrier = &Arc::new(Barrier::new(
+        config.writers + config.readers + config.aux_thread,
+    ));
+    let (ops_sender, ops_receiver) = mpsc::channel();
+    let (mem_sender, mem_receiver) = mpsc::channel();
+
+    scope(|s| {
+        // sampling & interference thread
+        if config.aux_thread > 0 {
+            let mem_sender = mem_sender.clone();
+            s.spawn(move |_| {
+                let mut samples = 0usize;
+                let mut acc = 0usize;
+                let mut peak = 0usize;
+                let mut garb_acc = 0usize;
+                let mut garb_peak = 0usize;
+                barrier.clone().wait();
+
+                let start = Instant::now();
+                let mut next_sampling = start + config.sampling_period;
+                while start.elapsed() < config.duration {
+                    let now = Instant::now();
+                    if now > next_sampling {
+                        let allocated = config.mem_sampler.sample();
+                        samples += 1;
+
+                        acc += allocated;
+                        peak = max(peak, allocated);
+
+                        let garbages = GLOBAL.garbage_count();
+                        garb_acc += garbages;
+                        garb_peak = max(garb_peak, garbages);
+
+                        next_sampling = now + config.sampling_period;
+                    }
+                    std::thread::sleep(config.aux_thread_period);
+                }
+
+                if config.sampling {
+                    mem_sender
+                        .send((peak, acc / samples, garb_peak, garb_acc / samples))
+                        .unwrap();
+                } else {
+                    mem_sender.send((0, 0, 0, 0)).unwrap();
+                }
+            });
+        } else {
+            mem_sender.send((0, 0, 0, 0)).unwrap();
+        }
+
+        // Spawn writer threads.
+        for _ in 0..config.writers {
+            s.spawn(move |_| {
+                hp_sharp::THREAD.with(|handle| {
+                    let handle = &mut **handle.borrow_mut();
+                    let output =
+                        &mut cdrc_hp_sharp::HHSList::<String, String>::empty_output(handle);
+                    barrier.clone().wait();
+                    let start = Instant::now();
+
+                    let mut acquired: Option<String> = None;
+                    while start.elapsed() < config.duration {
+                        if let Some(value) = acquired.take() {
+                            assert!(map.insert(
+                                format!("{:0width$}", value, width = config.key_padding_width),
+                                value,
+                                output,
+                                handle
+                            ))
+                        } else {
+                            assert!(map.pop(output, handle));
+                            acquired = Some(output.output().clone());
+                        }
+                    }
+                });
+            });
+        }
+
+        // Spawn reader threads.
+        for _ in 0..config.readers {
+            let ops_sender = ops_sender.clone();
+            s.spawn(move |_| {
+                hp_sharp::THREAD.with(|handle| {
+                    let handle = &mut **handle.borrow_mut();
+                    let output =
+                        &mut cdrc_hp_sharp::HHSList::<String, String>::empty_output(handle);
                     let mut ops: u64 = 0;
                     let rng = &mut rand::thread_rng();
                     barrier.clone().wait();

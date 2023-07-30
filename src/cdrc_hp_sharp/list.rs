@@ -583,11 +583,24 @@ where
                 };
 
                 let next = &mut output.2[0];
-                next.protect_unchecked(&curr_node.next.fetch_or(1, Ordering::AcqRel, thread));
+                let mut next_ptr = curr_node.next.load(Ordering::Relaxed, thread);
+                loop {
+                    next.protect_unchecked(&next_ptr);
+                    fence(Ordering::SeqCst);
+                    let next_new = curr_node.next.load(Ordering::Acquire, thread);
+                    if next_ptr.with_tag(0) != next_new.with_tag(0) {
+                        next_ptr = next_new;
+                        continue;
+                    }
+                    break;
+                }
                 if (next.tag() & 1) != 0 {
                     continue;
                 }
-                fence(Ordering::SeqCst);
+
+                if curr_node.next.compare_exchange(next.shared(), next.with_tag(1), Ordering::AcqRel, Ordering::Relaxed, thread).is_err() {
+                    continue;
+                }
 
                 let _ = cursor.prev.deref_unchecked().next.compare_exchange(
                     cursor.curr.shared(),
