@@ -26,7 +26,7 @@ for mm in mms:
         cmds.append(cmd)
 
 print('number of configurations: ', len(cmds))
-print('estimated time: ', (len(cmds) * i * 1.1) // 60, ' min *', runs, 'times')
+print('estimated time: ', (len(cmds) * i * 1.7) // 60, ' min *', runs, 'times')
 
 failed = []
 for run in range(runs):
