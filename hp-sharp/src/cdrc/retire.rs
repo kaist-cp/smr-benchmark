@@ -33,16 +33,6 @@ pub trait RetireRc {
     }
 
     #[inline]
-    fn eject<T>(&mut self, counted: &Counted<T>, ret_type: RetireType) {
-        debug_assert!(!(counted as *const Counted<T>).is_null());
-
-        match ret_type {
-            RetireType::DecrementStrongCount => self.decrement_ref_cnt(counted),
-            RetireType::Dispose => self.dispose(counted),
-        }
-    }
-
-    #[inline]
     fn decrement_ref_cnt<T>(&mut self, counted: &Counted<T>) {
         debug_assert!(!(counted as *const Counted<T>).is_null());
         debug_assert!(counted.use_count() >= 1);
