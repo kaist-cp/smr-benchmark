@@ -314,18 +314,18 @@ where
         SkipList::new()
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn get(&self, key: &K) -> Option<&'static V> {
         let cursor = self.find_optimistic(key);
         unsafe { transmute(cursor.found.map(|node| &node.value)) }
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn insert(&self, key: K, value: V) -> bool {
         self.insert(key, value)
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn remove(&self, key: &K) -> Option<&'static V> {
         unsafe { transmute(self.remove(key)) }
     }

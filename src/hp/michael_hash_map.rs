@@ -66,11 +66,11 @@ where
         Handle::default()
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn get<'domain, 'hp>(&self, handle: &'hp mut Self::Handle<'domain>, key: &K) -> Option<&'hp V> {
         self.get(handle, key)
     }
-    #[inline(never)]
+    #[inline(always)]
     fn insert<'domain, 'hp>(
         &self,
         handle: &'hp mut Self::Handle<'domain>,
@@ -79,7 +79,7 @@ where
     ) -> bool {
         self.insert(handle, key, value)
     }
-    #[inline(never)]
+    #[inline(always)]
     fn remove<'domain, 'hp>(
         &self,
         handle: &'hp mut Self::Handle<'domain>,

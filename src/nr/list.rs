@@ -320,15 +320,15 @@ where
         HList { inner: List::new() }
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn get(&self, key: &K) -> Option<&'static V> {
         self.inner.harris_get(key)
     }
-    #[inline(never)]
+    #[inline(always)]
     fn insert(&self, key: K, value: V) -> bool {
         self.inner.harris_insert(key, value)
     }
-    #[inline(never)]
+    #[inline(always)]
     fn remove(&self, key: &K) -> Option<&'static V> {
         self.inner.harris_remove(key)
     }
@@ -346,15 +346,15 @@ where
         HMList { inner: List::new() }
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn get(&self, key: &K) -> Option<&'static V> {
         self.inner.harris_michael_get(key)
     }
-    #[inline(never)]
+    #[inline(always)]
     fn insert(&self, key: K, value: V) -> bool {
         self.inner.harris_michael_insert(key, value)
     }
-    #[inline(never)]
+    #[inline(always)]
     fn remove(&self, key: &K) -> Option<&'static V> {
         self.inner.harris_michael_remove(key)
     }
@@ -383,15 +383,15 @@ where
         HHSList { inner: List::new() }
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn get(&self, key: &K) -> Option<&'static V> {
         self.inner.harris_herlihy_shavit_get(key)
     }
-    #[inline(never)]
+    #[inline(always)]
     fn insert(&self, key: K, value: V) -> bool {
         self.inner.harris_insert(key, value)
     }
-    #[inline(never)]
+    #[inline(always)]
     fn remove(&self, key: &K) -> Option<&'static V> {
         self.inner.harris_remove(key)
     }

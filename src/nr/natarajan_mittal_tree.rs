@@ -452,15 +452,15 @@ where
         Self::new()
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn get(&self, key: &K) -> Option<&'static V> {
         self.get(key)
     }
-    #[inline(never)]
+    #[inline(always)]
     fn insert(&self, key: K, value: V) -> bool {
         self.insert(key, value).is_ok()
     }
-    #[inline(never)]
+    #[inline(always)]
     fn remove(&self, key: &K) -> Option<&'static V> {
         self.remove(key)
     }

@@ -380,7 +380,7 @@ where
         Handle::default()
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn get<'domain, 'hp>(&self, handle: &'hp mut Self::Handle<'domain>, key: &K) -> Option<&'hp V> {
         let cursor = self.find(key, handle);
         let node = cursor.found(key)?;
@@ -391,7 +391,7 @@ where
         }
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn insert<'domain, 'hp>(
         &self,
         handle: &'hp mut Self::Handle<'domain>,
@@ -401,7 +401,7 @@ where
         self.insert(key, value, handle)
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn remove<'domain, 'hp>(
         &self,
         handle: &'hp mut Self::Handle<'domain>,

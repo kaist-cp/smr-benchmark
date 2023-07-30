@@ -541,15 +541,15 @@ where
         Self::new()
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn get<'g>(&'g self, key: &'g K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
         self.get(key, handle, guard)
     }
-    #[inline(never)]
+    #[inline(always)]
     fn insert(&self, key: K, value: V, handle: &mut Handle, guard: &Guard) -> bool {
         self.insert(key, value, handle, guard).is_ok()
     }
-    #[inline(never)]
+    #[inline(always)]
     fn remove<'g>(&'g self, key: &K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
         self.remove(key, handle, guard)
     }

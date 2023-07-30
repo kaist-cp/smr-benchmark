@@ -74,11 +74,11 @@ where
         Self::with_capacity(30000)
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn get(&self, key: &K, output: &mut Output<K, V>, thread: &mut hp_sharp::Thread) -> bool {
         self.get(key, output, thread)
     }
-    #[inline(never)]
+    #[inline(always)]
     fn insert(
         &self,
         key: K,
@@ -88,7 +88,7 @@ where
     ) -> bool {
         self.insert(key, value, output, thread)
     }
-    #[inline(never)]
+    #[inline(always)]
     fn remove(&self, key: &K, output: &mut Output<K, V>, thread: &mut hp_sharp::Thread) -> bool {
         self.remove(key, output, thread)
     }

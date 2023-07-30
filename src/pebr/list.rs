@@ -544,7 +544,7 @@ where
         handle.release();
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn get<'g>(
         &'g self,
         handle: &'g mut Self::Handle,
@@ -553,11 +553,11 @@ where
     ) -> Option<&'g V> {
         self.inner.harris_get(key, handle, guard)
     }
-    #[inline(never)]
+    #[inline(always)]
     fn insert(&self, handle: &mut Self::Handle, key: K, value: V, guard: &mut Guard) -> bool {
         self.inner.harris_insert(key, value, handle, guard)
     }
-    #[inline(never)]
+    #[inline(always)]
     fn remove(&self, handle: &mut Self::Handle, key: &K, guard: &mut Guard) -> Option<V> {
         self.inner.harris_remove(key, handle, guard)
     }
@@ -601,7 +601,7 @@ where
         handle.release();
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn get<'g>(
         &'g self,
         handle: &'g mut Self::Handle,
@@ -610,11 +610,11 @@ where
     ) -> Option<&'g V> {
         self.inner.harris_michael_get(key, handle, guard)
     }
-    #[inline(never)]
+    #[inline(always)]
     fn insert(&self, handle: &mut Self::Handle, key: K, value: V, guard: &mut Guard) -> bool {
         self.inner.harris_michael_insert(key, value, handle, guard)
     }
-    #[inline(never)]
+    #[inline(always)]
     fn remove(&self, handle: &mut Self::Handle, key: &K, guard: &mut Guard) -> Option<V> {
         self.inner.harris_michael_remove(key, handle, guard)
     }
@@ -653,7 +653,7 @@ where
         handle.release();
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn get<'g>(
         &'g self,
         handle: &'g mut Self::Handle,
@@ -662,11 +662,11 @@ where
     ) -> Option<&'g V> {
         self.inner.harris_herlihy_shavit_get(key, handle, guard)
     }
-    #[inline(never)]
+    #[inline(always)]
     fn insert(&self, handle: &mut Self::Handle, key: K, value: V, guard: &mut Guard) -> bool {
         self.inner.harris_insert(key, value, handle, guard)
     }
-    #[inline(never)]
+    #[inline(always)]
     fn remove(&self, handle: &mut Self::Handle, key: &K, guard: &mut Guard) -> Option<V> {
         self.inner.harris_remove(key, handle, guard)
     }

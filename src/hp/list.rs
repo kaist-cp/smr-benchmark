@@ -375,11 +375,11 @@ where
         HMList { inner: List::new() }
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn get<'domain, 'hp>(&self, handle: &'hp mut Self::Handle<'domain>, key: &K) -> Option<&'hp V> {
         self.inner.harris_michael_get(key, handle)
     }
-    #[inline(never)]
+    #[inline(always)]
     fn insert<'domain, 'hp>(
         &self,
         handle: &'hp mut Self::Handle<'domain>,
@@ -388,7 +388,7 @@ where
     ) -> bool {
         self.inner.harris_michael_insert(key, value, handle)
     }
-    #[inline(never)]
+    #[inline(always)]
     fn remove<'domain, 'hp>(
         &self,
         handle: &'hp mut Self::Handle<'domain>,

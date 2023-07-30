@@ -867,7 +867,7 @@ where
         Handle::default()
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn get<'domain, 'hp>(&self, handle: &'hp mut Self::Handle<'domain>, key: &K) -> Option<&'hp V> {
         match self.find(key, handle) {
             Some(value) => Some(value),
@@ -875,7 +875,7 @@ where
         }
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn insert<'domain, 'hp>(
         &self,
         handle: &'hp mut Self::Handle<'domain>,
@@ -885,7 +885,7 @@ where
         self.insert(&key, value, handle)
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn remove<'domain, 'hp>(
         &self,
         handle: &'hp mut Self::Handle<'domain>,

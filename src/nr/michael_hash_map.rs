@@ -58,15 +58,15 @@ where
         Self::with_capacity(30000)
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn get(&self, key: &K) -> Option<&'static V> {
         self.get(key)
     }
-    #[inline(never)]
+    #[inline(always)]
     fn insert(&self, key: K, value: V) -> bool {
         self.insert(key, value)
     }
-    #[inline(never)]
+    #[inline(always)]
     fn remove(&self, key: &K) -> Option<&'static V> {
         self.remove(key)
     }

@@ -75,7 +75,7 @@ where
         handle.release();
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn get<'g>(
         &'g self,
         handle: &'g mut Self::Handle,
@@ -84,11 +84,11 @@ where
     ) -> Option<&'g V> {
         self.get(handle, key, guard)
     }
-    #[inline(never)]
+    #[inline(always)]
     fn insert(&self, handle: &mut Self::Handle, key: K, value: V, guard: &mut Guard) -> bool {
         self.insert(handle, key, value, guard)
     }
-    #[inline(never)]
+    #[inline(always)]
     fn remove(&self, handle: &mut Self::Handle, key: &K, guard: &mut Guard) -> Option<V> {
         self.remove(handle, key, guard)
     }

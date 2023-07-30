@@ -777,7 +777,7 @@ where
         debug_assert!(handle.new_nodes.is_empty());
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn get<'g>(
         &'g self,
         handle: &'g mut Self::Handle,
@@ -787,12 +787,12 @@ where
         self.get(key, handle, guard)
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn insert(&self, handle: &mut Self::Handle, key: K, value: V, guard: &mut Guard) -> bool {
         self.insert(key, value, handle, guard)
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn remove(&self, handle: &mut Self::Handle, key: &K, guard: &mut Guard) -> Option<V> {
         self.remove(key, handle, guard)
     }
