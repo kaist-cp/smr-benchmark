@@ -1,7 +1,7 @@
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use hp_sharp::{
-    Atomic, CsGuard, Invalidate, Owned, Pointer, Protector, RaGuard, Retire, Shared, Shield,
-    Thread, TraverseStatus, WriteResult,
+    Atomic, CsGuard, Invalidate, Owned, Pointer, Protector, Retire, Shared, Shield, Thread,
+    TraverseStatus, WriteResult,
 };
 
 use std::cmp::Ordering::{Equal, Greater, Less};
@@ -18,17 +18,12 @@ struct Node<K, V> {
 impl<K, V> Invalidate for Node<K, V> {
     #[inline]
     fn invalidate(&self) {
-        let guard = unsafe { CsGuard::unprotected() };
-        let ptr = self.next.load(Ordering::Acquire, &guard);
-        self.next
-            .store(ptr.with_tag(1 | 2), Ordering::Release, &unsafe {
-                RaGuard::unprotected()
-            });
+        // A logical deletion is equivalent to an invalidation.
     }
 
     #[inline]
     fn is_invalidated(&self, guard: &CsGuard) -> bool {
-        (self.next.load(Ordering::Acquire, guard).tag() & 2) != 0
+        (self.next.load(Ordering::Acquire, guard).tag() & 1) != 0
     }
 }
 

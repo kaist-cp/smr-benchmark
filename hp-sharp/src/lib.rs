@@ -353,10 +353,11 @@ impl Thread {
 
 impl Drop for Thread {
     fn drop(&mut self) {
-        let local = unsafe { &*self.local };
-        local.epoch.store(Epoch::starting(), Ordering::Release);
-        local.using.store(false, Ordering::Release);
-        clear_data();
+        if let Some(local) = unsafe { self.local.as_ref() } {
+            local.epoch.store(Epoch::starting(), Ordering::Release);
+            local.using.store(false, Ordering::Release);
+            clear_data();
+        }
     }
 }
 

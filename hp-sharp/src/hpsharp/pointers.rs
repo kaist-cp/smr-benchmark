@@ -413,6 +413,13 @@ impl<T> Shield<T> {
         self.inner = data_with_tag::<T>(self.inner, tag);
     }
 
+    /// Returns the same pointer, but wrapped with `tag`. `tag` is truncated to be fit into the
+    /// unused bits of the pointer to `T`.
+    #[inline]
+    pub fn with_tag<'s>(&'s self, tag: usize) -> TaggedShield<'s, T> {
+        TaggedShield { inner: self, tag }
+    }
+
     /// Releases the inner hazard pointer.
     #[inline]
     pub fn release(&mut self) {
@@ -437,6 +444,27 @@ impl<T> Shield<T> {
     pub unsafe fn store(&mut self, ptr: Shared<T>) {
         self.inner = ptr.into_usize();
     }
+}
+
+/// A reference of a [`Shield`] with a overwriting tag value.
+///
+/// # Motivation
+///
+/// `with_tag` for [`Rc`] and [`Shared`] can be implemented by taking the ownership of the original
+/// pointer and returning the same one but tagged with the given value. However, for [`Shield`],
+/// taking ownership is not a good option because [`Shield`]s usually live as fields of [`Defender`]
+/// and we cannot take partial ownership in most cases.
+///
+/// Before proposing [`TaggedShield`], we just provided `set_tag` only for a [`Shield`], which changes
+/// a tag value only. Unfortunately, it was not easy to use because there were many circumstances
+/// where we just want to make a temporary tagged operand for atomic operators.
+/// (especially, [`AtomicRc`].)
+///
+/// For this reason, a method to easily produce a tagged [`Shield`] pointer for a temporary use is
+/// needed.
+pub struct TaggedShield<'s, T> {
+    pub(crate) inner: &'s Shield<T>,
+    pub(crate) tag: usize,
 }
 
 /// A trait for either `Owned` or `Shared` pointers.

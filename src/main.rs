@@ -30,7 +30,7 @@ use smr_benchmark::nbr;
 use smr_benchmark::nr;
 use smr_benchmark::pebr;
 use smr_benchmark::{cdrc, ebr};
-use smr_benchmark::{hp, hp_sharp as hp_sharp_bench};
+use smr_benchmark::{cdrc_hp_sharp, hp, hp_sharp as hp_sharp_bench};
 
 const NBR_CAP: NBRConfig = NBRConfig {
     bag_cap_pow2: 256,
@@ -65,6 +65,7 @@ pub enum MM {
     NBR,
     CDRC_EBR,
     HP_SHARP,
+    CDRC_HP_SHARP,
 }
 
 pub enum OpsPerCs {
@@ -446,7 +447,7 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             DS::BonsaiTree => {
                 bench_map_hp::<hp::BonsaiTreeMap<usize, usize>, N>(config, PrefillStrategy::Random)
             }
-            _ => panic!("Unsupported data structure for HP"),
+            _ => panic!("Unsupported(or unimplemented) data structure for HP"),
         },
         MM::HP_PP => match config.ds {
             DS::HList => {
@@ -506,7 +507,7 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 &NBR_CAP,
                 4,
             ),
-            _ => panic!("Unsupported data structure for NBR"),
+            _ => panic!("Unsupported(or unimplemented) data structure for NBR"),
         },
         MM::CDRC_EBR => match config.ds {
             DS::HList => bench_map_cdrc::<cdrc::HList<usize, usize, cdrc_rs::GuardEBR>, N>(
@@ -537,7 +538,7 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 cdrc::BonsaiTreeMap<usize, usize, cdrc_rs::GuardEBR>,
                 N,
             >(config, PrefillStrategy::Random),
-            _ => panic!("Unsupported data structure for CDRC EBR"),
+            _ => panic!("Unsupported(or unimplemented) data structure for CDRC EBR"),
         },
         MM::HP_SHARP => match config.ds {
             DS::HList => bench_map_hp_sharp::<hp_sharp_bench::HList<usize, usize>>(
@@ -564,7 +565,34 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 config,
                 PrefillStrategy::Random,
             ),
-            _ => panic!("Unsupported data structure for HP#"),
+            _ => panic!("Unsupported(or unimplemented) data structure for HP#"),
+        },
+        MM::CDRC_HP_SHARP => match config.ds {
+            DS::HList => bench_map_hp_sharp::<cdrc_hp_sharp::HList<usize, usize>>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::HMList => bench_map_hp_sharp::<cdrc_hp_sharp::HMList<usize, usize>>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::HHSList => bench_map_hp_sharp::<cdrc_hp_sharp::HHSList<usize, usize>>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::HashMap => bench_map_hp_sharp::<cdrc_hp_sharp::HashMap<usize, usize>>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::NMTree => bench_map_hp_sharp::<cdrc_hp_sharp::NMTreeMap<usize, usize>>(
+                config,
+                PrefillStrategy::Random,
+            ),
+            DS::SkipList => bench_map_hp_sharp::<cdrc_hp_sharp::SkipList<usize, usize>>(
+                config,
+                PrefillStrategy::Random,
+            ),
+            _ => panic!("Unsupported(or unimplemented) data structure for CDRC HP#"),
         },
     };
     output

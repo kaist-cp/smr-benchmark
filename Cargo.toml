@@ -3,6 +3,7 @@ name = "smr-benchmark"
 version = "0.1.0"
 authors = ["authors"]
 edition = "2021"
+default-run = "smr-benchmark"
 
 [dependencies]
 bitflags = "2.3"

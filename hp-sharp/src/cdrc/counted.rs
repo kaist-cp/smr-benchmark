@@ -142,12 +142,12 @@ impl<T> Counted<T> {
     }
 
     #[inline(always)]
-    pub(crate) fn data(&self) -> &T {
+    pub fn deref(&self) -> &T {
         unsafe { &*self.storage.get() }
     }
 
     #[inline(always)]
-    pub(crate) fn data_mut(&self) -> &mut T {
+    pub fn deref_mut(&self) -> &mut T {
         unsafe { &mut *self.storage.get() }
     }
 

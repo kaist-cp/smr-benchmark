@@ -6,20 +6,26 @@ use std::{
 use atomic::Ordering;
 
 use crate::{
-    data_with_tag, decompose_data, Atomic, CsGuard, Invalidate, Retire, Shared, Shield, Thread,
+    data_with_tag, decompose_data, Atomic, Retire, Shared, Shield, Thread, Guard, TaggedShield,
 };
 
 use super::{counted::Counted, retire::RetireRc};
 
 /// An reference counting atomic pointer that can be safely shared between threads.
-pub struct AtomicRc<T: Invalidate> {
+pub struct AtomicRc<T> {
     link: Atomic<Counted<T>>,
 }
 
-unsafe impl<T: Invalidate> Send for AtomicRc<T> {}
-unsafe impl<T: Invalidate> Sync for AtomicRc<T> {}
+impl<T> Default for AtomicRc<T> {
+    fn default() -> Self {
+        Self::null()
+    }
+}
 
-impl<T: Invalidate> AtomicRc<T> {
+unsafe impl<T> Send for AtomicRc<T> {}
+unsafe impl<T> Sync for AtomicRc<T> {}
+
+impl<T> AtomicRc<T> {
     /// Allocates `init` on the heap and returns a new atomic pointer pointing to it.
     #[inline]
     pub fn new(init: T) -> Self {
@@ -48,7 +54,7 @@ impl<T: Invalidate> AtomicRc<T> {
 
     /// Loads a [`Shared`] from the atomic pointer. This can be called only in a read phase.
     #[inline]
-    pub fn load<'r>(&self, ord: Ordering, guard: &'r CsGuard) -> Shared<'r, Counted<T>> {
+    pub fn load<'r, G: Guard>(&self, ord: Ordering, guard: &'r G) -> Shared<'r, Counted<T>> {
         self.link.load(ord, guard)
     }
 
@@ -113,7 +119,7 @@ impl<T: Invalidate> AtomicRc<T> {
     }
 }
 
-impl<T: Invalidate> Drop for AtomicRc<T> {
+impl<T> Drop for AtomicRc<T> {
     fn drop(&mut self) {
         let mut thread = unsafe { Thread::internal() };
         let ptr = self.link.load(Ordering::Acquire, &*thread);
@@ -124,7 +130,7 @@ impl<T: Invalidate> Drop for AtomicRc<T> {
 }
 
 /// A pointer to an shared object, which is protected by a reference count.
-pub struct Rc<T: Invalidate> {
+pub struct Rc<T> {
     // Safety: `ptr` is protected by a reference counter.
     // That is, the lifetime of the object is equal to or longer than
     // the lifetime of this object.
@@ -135,10 +141,10 @@ pub struct Rc<T: Invalidate> {
     _marker: PhantomData<T>,
 }
 
-unsafe impl<T: Invalidate> Send for Rc<T> {}
-unsafe impl<T: Invalidate> Sync for Rc<T> {}
+unsafe impl<T> Send for Rc<T> {}
+unsafe impl<T> Sync for Rc<T> {}
 
-impl<T: Invalidate> Rc<T> {
+impl<T> Rc<T> {
     /// Constructs a new [`Rc`] by allocating the given object on the heap.
     #[inline]
     pub fn new<G: Retire>(obj: T, _: &G) -> Self {
@@ -173,7 +179,7 @@ impl<T: Invalidate> Rc<T> {
 
     #[inline]
     fn as_untagged_raw(&self) -> *const Counted<T> {
-        (self.ptr as *const Counted<T>).cast_mut()
+        decompose_data::<Counted<T>>(self.ptr).0
     }
 
     /// Takes ownership of the pointee.
@@ -198,6 +204,19 @@ impl<T: Invalidate> Rc<T> {
         Self { ..*self }
     }
 
+    /// Constructs a new [`Rc`] from [`Shield`].
+    #[inline]
+    pub fn from_shield(shield: &Shield<Counted<T>>) -> Self {
+        if let Some(counted) = shield.as_ref() {
+            counted.add_refs(1);
+        }
+        Self {
+            ptr: shield.as_raw(),
+            delayed_decr: false,
+            _marker: PhantomData,
+        }
+    }
+
     /// Returns `true` if the defended pointer is null.
     #[inline]
     pub fn is_null(&self) -> bool {
@@ -209,7 +228,7 @@ impl<T: Invalidate> Rc<T> {
     /// Returns `None` if the pointer is null, or else a reference to the object wrapped in `Some`.
     #[inline]
     pub fn as_ref<'s>(&'s self) -> Option<&'s T> {
-        unsafe { self.as_untagged_raw().as_ref().map(|cnt| cnt.data()) }
+        unsafe { self.as_untagged_raw().as_ref().map(|cnt| cnt.deref()) }
     }
 
     /// Converts the pointer to a mutable reference.
@@ -221,8 +240,28 @@ impl<T: Invalidate> Rc<T> {
             self.as_untagged_raw()
                 .cast_mut()
                 .as_mut()
-                .map(|cnt| cnt.data_mut())
+                .map(|cnt| cnt.deref_mut())
         }
+    }
+
+    /// Converts the pointer to a reference.
+    ///
+    /// # Safety
+    /// 
+    /// The `self` must be a valid memory location.
+    #[inline]
+    pub unsafe fn deref(&self) -> &T {
+        unsafe { (*self.as_untagged_raw()).deref() }
+    }
+
+    /// Converts the pointer to a mutable reference.
+    ///
+    /// # Safety
+    /// 
+    /// The `self` must be a valid memory location.
+    #[inline]
+    pub unsafe fn deref_mut(&self) -> &mut T {
+        unsafe { (*self.as_untagged_raw()).deref_mut() }
     }
 
     /// Returns the tag stored within the pointer.
@@ -241,12 +280,12 @@ impl<T: Invalidate> Rc<T> {
     /// unused bits of the pointer to `T`.
     #[inline]
     pub fn with_tag(mut self, tag: usize) -> Self {
-        self.ptr = data_with_tag::<Counted<T>>(self.ptr as usize, tag) as _;
+        self.ptr = data_with_tag::<Counted<T>>(self.ptr, tag);
         self
     }
 }
 
-impl<T: Invalidate> Drop for Rc<T> {
+impl<T> Drop for Rc<T> {
     fn drop(&mut self) {
         if let Some(counted) = unsafe { self.as_untagged_raw().as_ref() } {
             let mut thread = unsafe { Thread::internal() };
@@ -316,7 +355,21 @@ impl<T> Acquired<T> for &Shield<Counted<T>> {
     }
 }
 
-impl<T: Invalidate> Acquired<T> for Rc<T> {
+impl<'g, T> Acquired<T> for TaggedShield<'g, Counted<T>> {
+    #[inline]
+    fn shared<'p>(&'p self) -> Shared<'p, Counted<T>> {
+        Shield::shared(self.inner).with_tag(self.tag)
+    }
+
+    #[inline]
+    fn into_ref_count(self) {
+        if let Some(counted) = self.inner.as_ref() {
+            counted.add_refs(1);
+        }
+    }
+}
+
+impl<T> Acquired<T> for Rc<T> {
     #[inline]
     fn shared<'p>(&'p self) -> Shared<'p, Counted<T>> {
         Shared::new(self.ptr)

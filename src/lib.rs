@@ -30,7 +30,7 @@ extern crate typenum;
 mod utils;
 
 pub mod cdrc;
-// pub mod cdrc_hp_sharp;
+pub mod cdrc_hp_sharp;
 pub mod ebr;
 pub mod hp;
 pub mod hp_pp;
