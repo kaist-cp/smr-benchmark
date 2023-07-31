@@ -71,26 +71,26 @@ impl<K, V> Node<K, V> {
 }
 
 pub struct Handle<K, V> {
+    found_h: Shield<Node<K, V>>,
     preds_h: [Shield<Node<K, V>>; MAX_HEIGHT],
     succs_h: [Shield<Node<K, V>>; MAX_HEIGHT],
-    new_node_h: Shield<Node<K, V>>,
 }
 
 impl<K, V> Handle<K, V> {
     fn new(guard: &Guard) -> Self {
         Self {
+            found_h: Shield::null(guard),
             preds_h: array::from_fn(|_| Shield::null(guard)),
             succs_h: array::from_fn(|_| Shield::null(guard)),
-            new_node_h: Shield::null(guard),
         }
     }
 
     fn reset(&mut self) {
+        self.found_h.release();
         for i in 0..MAX_HEIGHT {
             self.preds_h[i].release();
             self.succs_h[i].release();
         }
-        self.new_node_h.release();
     }
 
     // bypass E0499-E0503, etc that are supposed to be fixed by polonius
@@ -101,6 +101,7 @@ impl<K, V> Handle<K, V> {
 }
 
 struct Cursor<'g, K, V> {
+    found: Option<Shared<'g, Node<K, V>>>,
     preds: [Shared<'g, Node<K, V>>; MAX_HEIGHT],
     succs: [Shared<'g, Node<K, V>>; MAX_HEIGHT],
 }
@@ -111,17 +112,9 @@ where
 {
     fn new(head: &'g Tower<K, V>) -> Self {
         Self {
+            found: None,
             preds: [unsafe { Shared::from_usize(head as *const _ as usize) }; MAX_HEIGHT],
             succs: [Shared::null(); MAX_HEIGHT],
-        }
-    }
-
-    fn found(&self, key: &K) -> Option<&Node<K, V>> {
-        let node = unsafe { self.succs[0].as_ref() }?;
-        if node.key.eq(key) {
-            Some(node)
-        } else {
-            None
         }
     }
 }
@@ -187,7 +180,8 @@ where
                     }
                     std::cmp::Ordering::Equal => {
                         if curr_node.next[level].load(Ordering::Acquire, guard).tag() == 0 {
-                            cursor.succs[0] = curr;
+                            cursor.found = Some(curr);
+                            handle.found_h.defend(curr, guard)?;
                             return Ok(Some(cursor));
                         } else {
                             return Ok(None);
@@ -239,7 +233,7 @@ where
             while level >= 1 {
                 level -= 1;
                 handle.preds_h[level].defend(pred, guard)?;
-                let mut curr = unsafe { pred.deref() }.next[level].load_consume(guard);
+                let mut curr = unsafe { pred.deref() }.next[level].load(Ordering::Acquire, guard);
                 // If `curr` is marked, that means `pred` is removed and we have to restart the
                 // search.
                 if curr.tag() == 1 {
@@ -248,7 +242,7 @@ where
 
                 while let Some(curr_ref) = unsafe { curr.as_ref() } {
                     handle.succs_h[level].defend(curr, guard)?;
-                    let succ = curr_ref.next[level].load_consume(guard);
+                    let succ = curr_ref.next[level].load(Ordering::Acquire, guard);
 
                     if succ.tag() == 1 {
                         if self.help_unlink(&unsafe { pred.deref() }.next[level], curr, succ, guard)
@@ -265,7 +259,10 @@ where
                     // If `curr` contains a key that is greater than or equal to `key`, we're
                     // done with this level.
                     match curr_ref.key.cmp(key) {
-                        std::cmp::Ordering::Greater | std::cmp::Ordering::Equal => {
+                        std::cmp::Ordering::Greater => break,
+                        std::cmp::Ordering::Equal => {
+                            cursor.found = Some(curr);
+                            handle.found_h.defend(curr, guard)?;
                             break;
                         }
                         std::cmp::Ordering::Less => {}
@@ -320,7 +317,7 @@ where
 
     pub fn insert(&self, key: K, value: V, handle: &mut Handle<K, V>, guard: &mut Guard) -> bool {
         let mut cursor = self.find(&key, handle, unsafe { &mut *(guard as *mut Guard) });
-        if cursor.found(&key).is_some() {
+        if cursor.found.is_some() {
             return false;
         }
 
@@ -345,7 +342,7 @@ where
             cursor = self.find(&new_node_ref.key, handle, unsafe {
                 &mut *(guard as *mut Guard)
             });
-            if cursor.found(&new_node_ref.key).is_some() {
+            if cursor.found.is_some() {
                 drop(unsafe { new_node.into_owned() });
                 return false;
             }
@@ -420,7 +417,8 @@ where
             let cursor = self.find(key, handle.launder(), unsafe {
                 &mut *(guard as *mut Guard)
             });
-            let node = cursor.found(key)?;
+            let node_ptr = cursor.found?;
+            let node = unsafe { node_ptr.deref() };
             let value = node.value.clone();
 
             // Try removing the node by marking its tower.
@@ -477,7 +475,7 @@ where
         guard: &'g mut Guard,
     ) -> Option<&'g V> {
         let cursor = self.find_optimistic(key, handle, guard)?;
-        let node = unsafe { cursor.succs[0].deref() };
+        let node = unsafe { cursor.found?.deref() };
         if node.key.eq(&key) {
             Some(&node.value)
         } else {

@@ -111,6 +111,7 @@ impl Default for Handle<'static> {
 }
 
 struct Cursor<K, V> {
+    found: Option<*mut Node<K, V>>,
     preds: [*mut Node<K, V>; MAX_HEIGHT],
     succs: [*mut Node<K, V>; MAX_HEIGHT],
 }
@@ -121,17 +122,9 @@ where
 {
     fn new(head: &Tower<K, V>) -> Self {
         Self {
+            found: None,
             preds: [head as *const _ as *mut _; MAX_HEIGHT],
             succs: [ptr::null_mut(); MAX_HEIGHT],
-        }
-    }
-
-    fn found(&self, key: &K) -> Option<&Node<K, V>> {
-        let node = unsafe { self.succs[0].as_ref() }?;
-        if node.key.eq(key) {
-            Some(node)
-        } else {
-            None
         }
     }
 }
@@ -216,7 +209,7 @@ where
                         }
                         std::cmp::Ordering::Equal => {
                             if curr_new_tag == 0 {
-                                cursor.succs[0] = curr;
+                                cursor.found = Some(curr);
                                 return Some(cursor);
                             } else {
                                 return None;
@@ -291,7 +284,11 @@ where
                                 &mut handle.succs_h[level],
                             );
                         }
-                        _ => break,
+                        std::cmp::Ordering::Equal => {
+                            cursor.found = Some(curr);
+                            break;
+                        }
+                        std::cmp::Ordering::Greater => break,
                     }
                 }
 
@@ -305,7 +302,7 @@ where
 
     pub fn insert<'domain, 'hp>(&self, key: K, value: V, handle: &'hp mut Handle<'domain>) -> bool {
         let mut cursor = self.find(&key, handle);
-        if cursor.found(&key).is_some() {
+        if cursor.found.is_some() {
             return false;
         }
 
@@ -333,7 +330,7 @@ where
 
             // We failed. Let's search for the key and try again.
             cursor = self.find(&new_node_ref.key, handle);
-            if cursor.found(&new_node_ref.key).is_some() {
+            if cursor.found.is_some() {
                 drop(unsafe { Box::from_raw(new_node) });
                 return false;
             }
@@ -401,8 +398,8 @@ where
     ) -> Option<&'hp V> {
         loop {
             let cursor = self.find(key, handle);
-            let node = cursor.found(key)?;
-            let node_ptr = node as *const _ as *mut Node<K, V>;
+            let node_ptr = cursor.found?;
+            let node = unsafe { &*node_ptr };
             handle.removed_h.protect_raw(node_ptr);
             light_membarrier();
 
@@ -500,7 +497,7 @@ where
     #[inline(always)]
     fn get<'domain, 'hp>(&self, handle: &'hp mut Self::Handle<'domain>, key: &K) -> Option<&'hp V> {
         let cursor = self.find_optimistic(key, handle)?;
-        let node = unsafe { &*cursor.succs[0] };
+        let node = unsafe { &*cursor.found? };
         if node.key.eq(&key) {
             Some(&node.value)
         } else {
