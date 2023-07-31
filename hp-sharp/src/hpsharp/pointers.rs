@@ -5,7 +5,7 @@ use std::{
     sync::atomic::{compiler_fence, AtomicUsize},
 };
 
-use atomic::{fence, Ordering};
+use atomic::Ordering;
 
 use crate::{
     rrcu::{CsGuardRRCU, RaGuardRRCU, ThreadRRCU},
@@ -554,12 +554,6 @@ pub trait Protector {
                 let result = body(guard);
                 // Store pointers in hazard slots and issue a fence.
                 self.protect_unchecked(&result);
-                if cfg!(any(target_arch = "x86", target_arch = "x86_64")) {
-                    // The store buffer is flushed in `Drop` of `Rollbacker`.
-                    compiler_fence(Ordering::SeqCst);
-                } else {
-                    fence(Ordering::SeqCst);
-                }
 
                 // If we successfully protected pointers without an intermediate crash,
                 // it has the same meaning with a well-known HP validation:
@@ -582,7 +576,6 @@ pub trait Protector {
             let result = {
                 // Store pointers in hazard slots and issue a fence.
                 self.protect_unchecked(&to_deref);
-                fence(Ordering::SeqCst);
 
                 // Restart if the thread is crashed while protecting.
                 if guard.must_rollback() {
@@ -680,7 +673,6 @@ pub trait Protector {
 
                         // Store pointers in hazard slots and issue a fence.
                         defs[next_idx].protect_unchecked(&result);
-                        fence(Ordering::SeqCst);
 
                         // Success! We are not ejected so the protection is valid!
                         // Finalize backup process by storing a new backup index to `backup_idx`
