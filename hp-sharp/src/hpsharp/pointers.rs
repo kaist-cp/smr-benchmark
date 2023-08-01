@@ -5,7 +5,7 @@ use std::{
     sync::atomic::{compiler_fence, AtomicUsize},
 };
 
-use atomic::Ordering;
+use atomic::{Ordering, fence};
 
 use crate::{
     rrcu::{CsGuardRRCU, RaGuardRRCU, ThreadRRCU},
@@ -552,7 +552,7 @@ pub trait Protector {
             |guard| {
                 // Execute the body of this read phase.
                 let result = body(guard);
-                // Store pointers in hazard slots and issue a fence.
+                // Store pointers in hazard slots. (A fence is not necessary.)
                 self.protect_unchecked(&result);
 
                 // If we successfully protected pointers without an intermediate crash,
@@ -576,6 +576,7 @@ pub trait Protector {
             let result = {
                 // Store pointers in hazard slots and issue a fence.
                 self.protect_unchecked(&to_deref);
+                fence(Ordering::SeqCst);
 
                 // Restart if the thread is crashed while protecting.
                 if guard.must_rollback() {
@@ -673,6 +674,7 @@ pub trait Protector {
 
                         // Store pointers in hazard slots and issue a fence.
                         defs[next_idx].protect_unchecked(&result);
+                        fence(Ordering::SeqCst);
 
                         // Success! We are not ejected so the protection is valid!
                         // Finalize backup process by storing a new backup index to `backup_idx`
