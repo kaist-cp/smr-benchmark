@@ -276,13 +276,8 @@ where
                     break 'build;
                 }
 
-                if unsafe { succ.as_ref() }.map(|node| &node.key) == Some(&new_node_ref.key) {
-                    cursor = self.find(&new_node_ref.key, guard);
-                    continue;
-                }
-
                 if new_node_ref.next[level]
-                    .compare_exchange_ss_ss(&next, &succ, guard)
+                    .compare_exchange_ss_ss(&SnapshotPtr::null(guard), &succ, guard)
                     .is_err()
                 {
                     break 'build;
@@ -302,9 +297,6 @@ where
             }
         }
 
-        if new_node_ref.next[height - 1].load_snapshot(guard).mark() == 1 {
-            self.find(&new_node_ref.key, guard);
-        }
         true
     }
 
@@ -317,8 +309,10 @@ where
             // Try removing the node by marking its tower.
             if node_ref.mark_tower(guard) {
                 self.find(key, guard);
+                return Some(&unsafe { node.deref() }.value);
+            } else {
+                return None;
             }
-            return Some(&unsafe { node.deref() }.value);
         }
     }
 }

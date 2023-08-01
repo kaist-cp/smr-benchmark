@@ -23,14 +23,14 @@ struct Node<K, V> {
 }
 
 impl<K, V> Node<K, V> {
-    pub fn new(key: K, value: V, init_refs: usize) -> Self {
+    pub fn new(key: K, value: V) -> Self {
         let height = Self::generate_height();
         Self {
             key,
             value,
             next: Default::default(),
             height,
-            refs: AtomicUsize::new(init_refs),
+            refs: AtomicUsize::new(height + 1),
         }
     }
 
@@ -324,7 +324,7 @@ where
         // The reference count is initially two to account for
         // 1. The link at the level 0 of the tower.
         // 2. The current reference in this function.
-        let new_node = Owned::new(Node::new(key, value, 2)).into_shared(unsafe { unprotected() });
+        let new_node = Owned::new(Node::new(key, value)).into_shared(unsafe { unprotected() });
         let new_node_ref = unsafe { new_node.deref() };
         let height = new_node_ref.height;
 
@@ -360,24 +360,22 @@ where
                 // removing the node we've just inserted. In that case, let's just stop
                 // building the tower.
                 if next.tag() == 1 {
+                    new_node_ref
+                        .refs
+                        .fetch_sub(height - level, Ordering::SeqCst);
                     break 'build;
-                }
-
-                if unsafe { succ.as_ref() }.map(|node| &node.key) == Some(&new_node_ref.key) {
-                    cursor = self.find(&new_node_ref.key, handle, unsafe {
-                        &mut *(guard as *mut Guard)
-                    });
-                    continue;
                 }
 
                 if new_node_ref.next[level]
-                    .compare_and_set(next, succ, Ordering::SeqCst, guard)
+                    .compare_and_set(Shared::null(), succ, Ordering::SeqCst, guard)
                     .is_err()
                 {
+                    new_node_ref
+                        .refs
+                        .fetch_sub(height - level, Ordering::SeqCst);
                     break 'build;
                 }
 
-                new_node_ref.refs.fetch_add(1, Ordering::Relaxed);
                 // Try installing the new node at the current level.
                 if unsafe { pred.deref() }.next[level]
                     .compare_and_set(succ, new_node, Ordering::SeqCst, guard)
@@ -388,19 +386,10 @@ where
                 }
 
                 // Installation failed.
-                new_node_ref.refs.fetch_sub(1, Ordering::Relaxed);
                 cursor = self.find(&new_node_ref.key, handle, unsafe {
                     &mut *(guard as *mut Guard)
                 });
             }
-        }
-
-        if new_node_ref.next[height - 1]
-            .load(Ordering::SeqCst, guard)
-            .tag()
-            == 1
-        {
-            self.find(&new_node_ref.key, handle, guard);
         }
 
         new_node_ref.decrement(guard);

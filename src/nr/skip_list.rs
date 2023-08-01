@@ -243,13 +243,8 @@ where
                     break 'build;
                 }
 
-                if unsafe { succ.as_ref() }.map(|node| &node.key) == Some(&new_node_ref.key) {
-                    cursor = self.find(&new_node_ref.key);
-                    continue;
-                }
-
                 if new_node_ref.next[level]
-                    .compare_exchange(next, succ, Ordering::SeqCst, Ordering::SeqCst)
+                    .compare_exchange(null_mut(), succ, Ordering::SeqCst, Ordering::SeqCst)
                     .is_err()
                 {
                     break 'build;
@@ -269,9 +264,6 @@ where
             }
         }
 
-        if tag(new_node_ref.next[height - 1].load(Ordering::SeqCst)) == 1 {
-            self.find(&new_node_ref.key);
-        }
         true
     }
 

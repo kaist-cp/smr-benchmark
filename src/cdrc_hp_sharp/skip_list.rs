@@ -1,8 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use hp_sharp::{
-    AtomicRc, Counted, CsGuard, Protector, Rc, Shared, Shield, Thread, WriteResult,
-};
+use hp_sharp::{AtomicRc, Counted, CsGuard, Protector, Rc, Shared, Shield, Thread, WriteResult};
 
 use crate::hp_sharp::concurrent_map::{ConcurrentMap, OutputHolder};
 
@@ -376,7 +374,6 @@ where
             // We failed. Let's search for the key and try again.
             self.find(&new_node_ref.key, output, handle);
             if output.0.found(&new_node_ref.key).is_some() {
-                drop(unsafe { new_node.into_owned() });
                 return false;
             }
         }
@@ -397,13 +394,14 @@ where
                     break 'build;
                 }
 
-                if succ.as_ref().map(|node| &node.key) == Some(&new_node_ref.key) {
-                    self.find(&new_node_ref.key, output, handle);
-                    continue;
-                }
-
                 if new_node_ref.next[level]
-                    .compare_exchange(next, succ, Ordering::SeqCst, Ordering::SeqCst, handle)
+                    .compare_exchange(
+                        Shared::null(),
+                        succ,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                        handle,
+                    )
                     .is_err()
                 {
                     break 'build;
@@ -429,13 +427,6 @@ where
             }
         }
 
-        if new_node_ref.next[height - 1]
-            .load(Ordering::SeqCst, guard)
-            .tag()
-            != 0
-        {
-            self.find(&new_node_ref.key, output, handle);
-        }
         true
     }
 
@@ -446,10 +437,11 @@ where
             let node = some_or!(cursor.found(key), return false);
 
             // Try removing the node by marking its tower.
-            if node.mark_tower(handle) {
+            let marked = node.mark_tower(handle);
+            if marked {
                 self.find(key, output, handle);
             }
-            return true;
+            return marked;
         }
     }
 }

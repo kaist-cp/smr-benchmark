@@ -23,14 +23,14 @@ struct Node<K, V> {
 }
 
 impl<K, V> Node<K, V> {
-    pub fn new(key: K, value: V, init_refs: usize) -> Self {
+    pub fn new(key: K, value: V) -> Self {
         let height = Self::generate_height();
         Self {
             next: Default::default(),
             key,
             value,
             height,
-            refs: AtomicUsize::new(init_refs),
+            refs: AtomicUsize::new(height + 1),
         }
     }
 
@@ -242,7 +242,7 @@ where
         // The reference count is initially two to account for
         // 1. The link at the level 0 of the tower.
         // 2. The current reference in this function.
-        let new_node = Box::into_raw(Box::new(Node::new(key, value, 2)));
+        let new_node = Box::into_raw(Box::new(Node::new(key, value)));
         let new_node_ref = unsafe { &*new_node };
         let height = new_node_ref.height;
 
@@ -281,24 +281,22 @@ where
                 // removing the node we've just inserted. In that case, let's just stop
                 // building the tower.
                 if tag(next) == 1 {
+                    new_node_ref
+                        .refs
+                        .fetch_sub(height - level, Ordering::SeqCst);
                     break 'build;
-                }
-
-                if unsafe { untagged(succ).as_ref() }.map(|node| &node.key)
-                    == Some(&new_node_ref.key)
-                {
-                    cursor = self.find(&new_node_ref.key, handle);
-                    continue;
                 }
 
                 if new_node_ref.next[level]
-                    .compare_exchange(next, succ, Ordering::SeqCst, Ordering::SeqCst)
+                    .compare_exchange(ptr::null_mut(), succ, Ordering::SeqCst, Ordering::SeqCst)
                     .is_err()
                 {
+                    new_node_ref
+                        .refs
+                        .fetch_sub(height - level, Ordering::SeqCst);
                     break 'build;
                 }
 
-                new_node_ref.refs.fetch_add(1, Ordering::Relaxed);
                 // Try installing the new node at the current level.
                 if unsafe { &*pred }.next[level]
                     .compare_exchange(succ, new_node, Ordering::SeqCst, Ordering::SeqCst)
@@ -309,13 +307,8 @@ where
                 }
 
                 // Installation failed.
-                new_node_ref.refs.fetch_sub(1, Ordering::Relaxed);
                 cursor = self.find(&new_node_ref.key, handle);
             }
-        }
-
-        if tag(new_node_ref.next[height - 1].load(Ordering::SeqCst)) == 1 {
-            self.find(&new_node_ref.key, handle);
         }
 
         new_node_ref.decrement(handle);
@@ -339,8 +332,10 @@ where
             // Try removing the node by marking its tower.
             if node.mark_tower() {
                 self.find(key, handle);
+                return Some(unsafe { transmute::<&V, &'hp V>(&node.value) });
+            } else {
+                return None;
             }
-            return Some(unsafe { transmute::<&V, &'hp V>(&node.value) });
         }
     }
 }
