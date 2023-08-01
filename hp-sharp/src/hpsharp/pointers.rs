@@ -5,7 +5,7 @@ use std::{
     sync::atomic::{compiler_fence, AtomicUsize},
 };
 
-use atomic::{Ordering, fence};
+use atomic::{fence, Ordering};
 
 use crate::{
     rrcu::{CsGuardRRCU, RaGuardRRCU, ThreadRRCU},

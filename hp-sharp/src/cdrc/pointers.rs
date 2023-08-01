@@ -6,7 +6,7 @@ use std::{
 use atomic::Ordering;
 
 use crate::{
-    data_with_tag, decompose_data, Atomic, Retire, Shared, Shield, Thread, Guard, TaggedShield,
+    data_with_tag, decompose_data, Atomic, Guard, Retire, Shared, Shield, TaggedShield, Thread,
 };
 
 use super::{counted::Counted, retire::RetireRc};
@@ -247,7 +247,7 @@ impl<T> Rc<T> {
     /// Converts the pointer to a reference.
     ///
     /// # Safety
-    /// 
+    ///
     /// The `self` must be a valid memory location.
     #[inline]
     pub unsafe fn deref(&self) -> &T {
@@ -257,7 +257,7 @@ impl<T> Rc<T> {
     /// Converts the pointer to a mutable reference.
     ///
     /// # Safety
-    /// 
+    ///
     /// The `self` must be a valid memory location.
     #[inline]
     pub unsafe fn deref_mut(&self) -> &mut T {
@@ -297,7 +297,6 @@ impl<T> Drop for Rc<T> {
         }
     }
 }
-
 
 /// A result of unsuccessful `compare_exchange`.
 ///

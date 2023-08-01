@@ -1,6 +1,6 @@
 use std::mem::ManuallyDrop;
 
-use crate::{rrcu::Deferrable, Deferred, Thread, RaGuard, Invalidate, CsGuard};
+use crate::{rrcu::Deferrable, CsGuard, Deferred, Invalidate, RaGuard, Thread};
 
 use super::counted::{Counted, EjectAction};
 

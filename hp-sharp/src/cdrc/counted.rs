@@ -2,7 +2,8 @@ use core::mem;
 use std::{
     cell::UnsafeCell,
     mem::ManuallyDrop,
-    sync::atomic::{compiler_fence, AtomicU32, Ordering}, ops::{DerefMut, Deref},
+    ops::{Deref, DerefMut},
+    sync::atomic::{compiler_fence, AtomicU32, Ordering},
 };
 
 /// A wait-free atomic counter that supports increment and decrement,

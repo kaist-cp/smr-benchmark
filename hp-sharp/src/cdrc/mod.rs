@@ -1,6 +1,6 @@
-mod pointers;
 mod counted;
+mod pointers;
 mod retire;
 
-pub use pointers::*;
 pub use counted::*;
+pub use pointers::*;
