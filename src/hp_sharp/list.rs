@@ -213,43 +213,39 @@ where
     fn harris_traverse(&self, key: &K, output: &mut Output<K, V>, thread: &mut Thread) -> bool {
         let cursor = &mut output.0;
         unsafe {
-            cursor.traverse(
-                thread,
-                #[inline]
-                |guard| {
-                    let mut cursor = SharedCursor::new(&self.head, guard);
-                    // Finding phase
-                    // - cursor.curr: first unmarked node w/ key >= search key (4)
-                    // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
-                    // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
-                    cursor.found = loop {
-                        let curr_node = some_or!(cursor.curr.as_ref(guard), break false);
-                        let next = curr_node.next.load(Ordering::Acquire, guard);
+            cursor.traverse(thread, |guard| {
+                let mut cursor = SharedCursor::new(&self.head, guard);
+                // Finding phase
+                // - cursor.curr: first unmarked node w/ key >= search key (4)
+                // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
+                // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
+                cursor.found = loop {
+                    let curr_node = some_or!(cursor.curr.as_ref(guard), break false);
+                    let next = curr_node.next.load(Ordering::Acquire, guard);
 
-                        // - finding stage is done if cursor.curr advancement stops
-                        // - advance cursor.curr if (.next is marked) || (cursor.curr < key)
-                        // - stop cursor.curr if (not marked) && (cursor.curr >= key)
-                        // - advance cursor.prev if not marked
+                    // - finding stage is done if cursor.curr advancement stops
+                    // - advance cursor.curr if (.next is marked) || (cursor.curr < key)
+                    // - stop cursor.curr if (not marked) && (cursor.curr >= key)
+                    // - advance cursor.prev if not marked
 
-                        if next.tag() != 0 {
-                            // We add a 0 tag here so that `self.curr`s tag is always 0.
-                            cursor.curr = next.with_tag(0);
-                            continue;
+                    if next.tag() != 0 {
+                        // We add a 0 tag here so that `self.curr`s tag is always 0.
+                        cursor.curr = next.with_tag(0);
+                        continue;
+                    }
+
+                    match curr_node.key.cmp(key) {
+                        Less => {
+                            cursor.prev = cursor.curr;
+                            cursor.prev_next = next.as_raw();
+                            cursor.curr = next;
                         }
-
-                        match curr_node.key.cmp(key) {
-                            Less => {
-                                cursor.prev = cursor.curr;
-                                cursor.prev_next = next.as_raw();
-                                cursor.curr = next;
-                            }
-                            Equal => break true,
-                            Greater => break false,
-                        }
-                    };
-                    cursor
-                },
-            );
+                        Equal => break true,
+                        Greater => break false,
+                    }
+                };
+                cursor
+            });
         }
 
         // If prev and curr WERE adjacent, no need to clean up
@@ -301,57 +297,65 @@ where
         let aux = &mut output.2;
         let prot = &mut output.0;
         unsafe {
-            prot.traverse(
-                thread,
-                #[inline]
-                |guard| {
-                    let mut cursor = SharedCursor::new(&self.head, guard);
-                    cursor.found = loop {
-                        let curr_node = some_or!(cursor.curr.as_ref(guard), break false);
-                        let mut next = curr_node.next.load(Ordering::Acquire, guard);
+            prot.traverse(thread, |guard| {
+                let mut cursor = SharedCursor::new(&self.head, guard);
+                cursor.found = loop {
+                    let curr_node = some_or!(cursor.curr.as_ref(guard), break false);
+                    let next = curr_node.next.load(Ordering::Acquire, guard);
 
-                        // NOTE: original version aborts here if self.prev is tagged
+                    // NOTE: original version aborts here if self.prev is tagged
 
-                        if next.tag() != 0 {
-                            next = next.with_tag(0);
-                            aux.traverse_mask(guard, cursor.prev, |prev, guard| {
-                                if prev
-                                    .deref_unchecked()
-                                    .next
-                                    .compare_exchange(
-                                        cursor.curr,
-                                        next,
-                                        Ordering::Release,
-                                        Ordering::Relaxed,
-                                        guard,
-                                    )
-                                    .is_err()
-                                {
-                                    WriteResult::RepinEpoch
-                                } else {
-                                    guard.retire(cursor.curr);
-                                    WriteResult::Finished
-                                }
-                            });
+                    if next.tag() != 0 {
+                        self.harris_michael_traverse_unlink(aux, next, &mut cursor, guard);
+                        continue;
+                    }
+
+                    match curr_node.key.cmp(key) {
+                        Less => {
+                            cursor.prev = cursor.curr;
                             cursor.curr = next;
-                            continue;
                         }
-
-                        match curr_node.key.cmp(key) {
-                            Less => {
-                                cursor.prev = cursor.curr;
-                                cursor.curr = next;
-                            }
-                            Equal => break true,
-                            Greater => break false,
-                        }
-                    };
-                    cursor
-                },
-            );
+                        Equal => break true,
+                        Greater => break false,
+                    }
+                };
+                cursor
+            });
         }
         // Always success to traverse.
         true
+    }
+
+    #[inline(never)]
+    #[cold]
+    unsafe fn harris_michael_traverse_unlink<'g>(
+        &self,
+        aux: &mut Shield<Node<K, V>>,
+        mut next: Shared<'g, Node<K, V>>,
+        cursor: &mut SharedCursor<'g, K, V>,
+        guard: &'g CsGuard,
+    ) {
+        next = next.with_tag(0);
+        aux.traverse_mask(guard, cursor.prev, |prev, guard| {
+            if prev
+                .deref_unchecked()
+                .next
+                .compare_exchange(
+                    cursor.curr,
+                    next,
+                    Ordering::Release,
+                    Ordering::Relaxed,
+                    guard,
+                )
+                .is_err()
+            {
+                WriteResult::RepinEpoch
+            } else {
+                guard.retire(cursor.curr);
+                WriteResult::Finished
+            }
+        });
+        cursor.curr = next;
     }
 
     #[inline]
@@ -365,7 +369,6 @@ where
         unsafe {
             cursor.traverse(
                 thread,
-                #[inline(always)]
                 |guard| {
                     let mut cursor = SharedCursor::new(&self.head, guard);
                     cursor.found = loop {
@@ -401,9 +404,7 @@ where
             cursor.traverse_loop(
                 backup,
                 thread,
-                #[inline]
                 |guard| SharedCursor::new(&self.head, guard),
-                #[inline]
                 |cursor, guard| {
                     let curr_node = match cursor.curr.as_ref(guard) {
                         Some(node) => node,
@@ -444,9 +445,7 @@ where
             cursor.traverse_loop(
                 backup,
                 thread,
-                #[inline]
                 |guard| SharedCursor::new(&self.head, guard),
-                #[inline]
                 |cursor, guard| {
                     let curr_node = match cursor.curr.as_ref(guard) {
                         Some(node) => node,

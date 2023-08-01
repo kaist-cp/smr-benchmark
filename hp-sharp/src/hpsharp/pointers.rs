@@ -542,7 +542,7 @@ pub trait Protector {
     /// In a section body, only *rollback-safe* operations are allowed. For example, non-atomic
     /// writes on a global variable and system-calls(File I/O and etc.) are dangerous, as they
     /// may cause an unexpected inconsistency on the whole system after a crash.
-    #[inline(always)]
+    #[inline]
     unsafe fn traverse<F>(&mut self, thread: &mut Thread, mut body: F)
     where
         F: for<'r> FnMut(&'r mut CsGuard) -> Self::Target<'r>,
@@ -567,6 +567,7 @@ pub trait Protector {
     /// In this section, we do not restart immediately when we receive signals from reclaimers.
     /// The whole critical section restarts after this `mask` section ends, if a reclaimer sent
     /// a signal, or we advanced our epoch to reclaim a full local garbage bag.
+    #[inline]
     unsafe fn traverse_mask<'r, F>(&mut self, cs: &CsGuard, to_deref: Self::Target<'r>, body: F)
     where
         F: FnOnce(&Self, &mut RaGuard) -> WriteResult,
@@ -612,7 +613,7 @@ pub trait Protector {
     /// In a section body, only *rollback-safe* operations are allowed. For example, non-atomic
     /// writes on a global variable and system-calls(File I/O and etc.) are dangerous, as they
     /// may cause an unexpected inconsistency on the whole system after a crash.
-    #[inline(always)]
+    #[inline]
     unsafe fn traverse_loop<F1, F2>(
         &mut self,
         backup: &mut Self,
