@@ -553,26 +553,38 @@ where
 
             let curr_node = cursor.curr.as_ref().unwrap();
             let next = &mut output.2[0];
-                let mut next_ptr = curr_node.next.load(Ordering::Relaxed, thread);
-                loop {
-                    next.protect_unchecked(&next_ptr);
-                    fence(Ordering::SeqCst);
-                    let next_new = curr_node.next.load(Ordering::Acquire, thread);
-                    if next_ptr.with_tag(0) != next_new.with_tag(0) {
-                        next_ptr = next_new;
-                        continue;
-                    }
-                    break;
-                }
-                if (next.tag() & 1) != 0 {
+            let mut next_ptr = curr_node.next.load(Ordering::Relaxed, thread);
+            loop {
+                next.protect_unchecked(&next_ptr);
+                fence(Ordering::SeqCst);
+                let next_new = curr_node.next.load(Ordering::Acquire, thread);
+                if next_ptr.with_tag(0) != next_new.with_tag(0) {
+                    next_ptr = next_new;
                     continue;
                 }
+                break;
+            }
+            if (next.tag() & 1) != 0 {
+                continue;
+            }
 
-                if curr_node.next.compare_exchange(next.shared(), next.with_tag(1), Ordering::AcqRel, Ordering::Relaxed, thread).is_err() {
-                    continue;
-                }
+            if curr_node
+                .next
+                .compare_exchange(
+                    next.shared(),
+                    next.with_tag(1),
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
+                    thread,
+                )
+                .is_err()
+            {
+                continue;
+            }
 
-                let _ = unsafe { cursor.prev.deref_unchecked() }.next.compare_exchange(
+            let _ = unsafe { cursor.prev.deref_unchecked() }
+                .next
+                .compare_exchange(
                     cursor.curr.shared(),
                     &*next,
                     Ordering::Release,
@@ -611,7 +623,17 @@ where
                     continue;
                 }
 
-                if curr_node.next.compare_exchange(next.shared(), next.with_tag(1), Ordering::AcqRel, Ordering::Relaxed, thread).is_err() {
+                if curr_node
+                    .next
+                    .compare_exchange(
+                        next.shared(),
+                        next.with_tag(1),
+                        Ordering::AcqRel,
+                        Ordering::Relaxed,
+                        thread,
+                    )
+                    .is_err()
+                {
                     continue;
                 }
 

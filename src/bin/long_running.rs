@@ -23,7 +23,7 @@ use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
 use typenum::{Unsigned, U1};
 
-use smr_benchmark::{cdrc, ebr, cdrc_hp_sharp};
+use smr_benchmark::{cdrc, cdrc_hp_sharp, ebr};
 use smr_benchmark::{hp, hp_pp, hp_sharp as hp_sharp_bench};
 use smr_benchmark::{nbr, pebr};
 
