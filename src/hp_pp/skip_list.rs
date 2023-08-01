@@ -405,31 +405,7 @@ where
 
             // Try removing the node by marking its tower.
             if node.mark_tower() {
-                let frontier = &mut [ptr::null_mut(); MAX_HEIGHT][0..node.height];
-                for level in 0..node.height {
-                    frontier[level] = node.next[level].load(Ordering::Acquire);
-                }
-                let hps = handle.thread.protect_frontier(frontier);
-                for level in (0..node.height).rev() {
-                    let succ = frontier[level];
-
-                    if unsafe { &(*cursor.preds[level]).next[level] }
-                        .compare_exchange(
-                            node_ptr,
-                            untagged(succ),
-                            Ordering::SeqCst,
-                            Ordering::SeqCst,
-                        )
-                        .is_err()
-                    {
-                        drop(hps);
-                        self.find(key, handle);
-                        break;
-                    } else if node.decrement() {
-                        handle.thread.schedule_invalidation(hps, vec![node_ptr]);
-                        break;
-                    }
-                }
+                self.find(key, handle);
             }
             return Some(unsafe { transmute::<&V, &'hp V>(&node.value) });
         }

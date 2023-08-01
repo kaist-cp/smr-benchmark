@@ -1,7 +1,7 @@
-use std::sync::atomic::{fence, Ordering};
+use std::sync::atomic::Ordering;
 
 use hp_sharp::{
-    AtomicRc, Counted, CsGuard, Pointer, Protector, Rc, Shared, Shield, Thread, WriteResult,
+    AtomicRc, Counted, CsGuard, Protector, Rc, Shared, Shield, Thread, WriteResult,
 };
 
 use crate::hp_sharp::concurrent_map::{ConcurrentMap, OutputHolder};
@@ -447,28 +447,7 @@ where
 
             // Try removing the node by marking its tower.
             if node.mark_tower(handle) {
-                for level in (0..node.height).rev() {
-                    let guard = unsafe { &CsGuard::unprotected() };
-                    let succ = node.next[level].load(Ordering::SeqCst, guard);
-                    let succ_sh = &mut output.1[0];
-                    succ_sh.protect_unchecked(&succ.with_tag(0));
-                    fence(Ordering::SeqCst);
-
-                    // Try linking the predecessor and successor at this level.
-                    if unsafe { cursor.preds[level].deref_unchecked() }.next[level]
-                        .compare_exchange(
-                            unsafe { Shared::from_usize(node as *const _ as usize) },
-                            &*succ_sh,
-                            Ordering::SeqCst,
-                            Ordering::SeqCst,
-                            handle,
-                        )
-                        .is_err()
-                    {
-                        self.find(key, output, handle);
-                        break;
-                    }
-                }
+                self.find(key, output, handle);
             }
             return true;
         }

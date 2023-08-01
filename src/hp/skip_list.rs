@@ -338,25 +338,7 @@ where
 
             // Try removing the node by marking its tower.
             if node.mark_tower() {
-                for level in (0..node.height).rev() {
-                    let succ = node.next[level].load(Ordering::SeqCst);
-
-                    // Try linking the predecessor and successor at this level.
-                    if unsafe { &*cursor.preds[level] }.next[level]
-                        .compare_exchange(
-                            node as *const _ as _,
-                            untagged(succ),
-                            Ordering::SeqCst,
-                            Ordering::SeqCst,
-                        )
-                        .is_ok()
-                    {
-                        node.decrement(handle);
-                    } else {
-                        self.find(key, handle);
-                        break;
-                    }
-                }
+                self.find(key, handle);
             }
             return Some(unsafe { transmute::<&V, &'hp V>(&node.value) });
         }

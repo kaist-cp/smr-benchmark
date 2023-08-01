@@ -423,25 +423,7 @@ where
 
             // Try removing the node by marking its tower.
             if node.mark_tower() {
-                for level in (0..node.height).rev() {
-                    let succ = node.next[level].load(Ordering::SeqCst, guard);
-
-                    // Try linking the predecessor and successor at this level.
-                    if unsafe { cursor.preds[level].deref() }.next[level]
-                        .compare_and_set(
-                            Shared::from(node as *const _),
-                            succ.with_tag(0),
-                            Ordering::SeqCst,
-                            guard,
-                        )
-                        .is_ok()
-                    {
-                        node.decrement(guard);
-                    } else {
-                        self.find(key, handle, guard);
-                        break;
-                    }
-                }
+                self.find(key, handle, guard);
             }
             return Some(value);
         }

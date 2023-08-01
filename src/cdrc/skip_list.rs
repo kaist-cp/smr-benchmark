@@ -316,18 +316,7 @@ where
 
             // Try removing the node by marking its tower.
             if node_ref.mark_tower(guard) {
-                for level in (0..node_ref.height).rev() {
-                    let succ = node_ref.next[level].load_snapshot(guard);
-
-                    // Try linking the predecessor and successor at this level.
-                    if unsafe { cursor.preds[level].deref() }.next[level]
-                        .compare_exchange_ss_ss(&node, &succ.with_mark(0), guard)
-                        .is_err()
-                    {
-                        self.find(key, guard);
-                        break;
-                    }
-                }
+                self.find(key, guard);
             }
             return Some(&unsafe { node.deref() }.value);
         }
