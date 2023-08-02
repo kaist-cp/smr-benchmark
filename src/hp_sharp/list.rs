@@ -367,26 +367,23 @@ where
     ) -> bool {
         let cursor = &mut output.0;
         unsafe {
-            cursor.traverse(
-                thread,
-                |guard| {
-                    let mut cursor = SharedCursor::new(&self.head, guard);
-                    cursor.found = loop {
-                        let curr_node = some_or!(cursor.curr.as_ref(guard), break false);
-                        let next = curr_node.next.load(Ordering::Acquire, guard);
-                        match curr_node.key.cmp(key) {
-                            Less => {
-                                cursor.prev = cursor.curr;
-                                cursor.curr = next;
-                                continue;
-                            }
-                            Equal => break next.tag() == 0,
-                            Greater => break false,
+            cursor.traverse(thread, |guard| {
+                let mut cursor = SharedCursor::new(&self.head, guard);
+                cursor.found = loop {
+                    let curr_node = some_or!(cursor.curr.as_ref(guard), break false);
+                    let next = curr_node.next.load(Ordering::Acquire, guard);
+                    match curr_node.key.cmp(key) {
+                        Less => {
+                            cursor.prev = cursor.curr;
+                            cursor.curr = next;
+                            continue;
                         }
-                    };
-                    cursor
-                },
-            );
+                        Equal => break next.tag() == 0,
+                        Greater => break false,
+                    }
+                };
+                cursor
+            });
         }
         true
     }
