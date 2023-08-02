@@ -25,7 +25,12 @@ where
     Guard: AcquireRetire,
 {
     pub fn new(key: K, value: V) -> Self {
+        let guard = unsafe { &Guard::unprotected() };
         let height = Self::generate_height();
+        let next: [AtomicRcPtr<Node<K, V, Guard>, Guard>; MAX_HEIGHT] = Default::default();
+        for link in next.iter().take(height) {
+            link.store(RcPtr::null(guard), Ordering::Relaxed, guard)
+        }
         Self {
             key,
             value,
@@ -60,7 +65,7 @@ where
         for level in (0..self.height).rev() {
             let tag = self.next[level].fetch_or(1, guard).mark();
             // If the level 0 pointer was already marked, somebody else removed the node.
-            if level == 0 && tag == 1 {
+            if level == 0 && (tag & 1) != 0 {
                 return false;
             }
         }
@@ -272,12 +277,12 @@ where
                 // If the current pointer is marked, that means another thread is already
                 // removing the node we've just inserted. In that case, let's just stop
                 // building the tower.
-                if next.mark() == 1 {
+                if (next.mark() & 1) != 0 {
                     break 'build;
                 }
 
                 if new_node_ref.next[level]
-                    .compare_exchange_ss_ss(&SnapshotPtr::null(guard), &succ, guard)
+                    .compare_exchange_ss_ss(&SnapshotPtr::null(guard).with_mark(2), &succ, guard)
                     .is_err()
                 {
                     break 'build;
@@ -308,11 +313,22 @@ where
 
             // Try removing the node by marking its tower.
             if node_ref.mark_tower(guard) {
-                self.find(key, guard);
-                return Some(&unsafe { node.deref() }.value);
-            } else {
-                return None;
+                for level in (0..node_ref.height).rev() {
+                    let succ = node_ref.next[level].load_snapshot(guard);
+                    if (succ.mark() & 2) != 0 {
+                        continue;
+                    }
+                    // Try linking the predecessor and successor at this level.
+                    if unsafe { cursor.preds[level].deref() }.next[level]
+                        .compare_exchange_ss_ss(&node, &succ.with_mark(0), guard)
+                        .is_err()
+                    {
+                        self.find(key, guard);
+                        break;
+                    }
+                }
             }
+            return Some(&unsafe { node.deref() }.value);
         }
     }
 }

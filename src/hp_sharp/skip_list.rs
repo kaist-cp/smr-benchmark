@@ -1,8 +1,8 @@
 use std::sync::atomic::{fence, AtomicUsize, Ordering};
 
 use hp_sharp::{
-    Atomic, CsGuard, Invalidate, Owned, Pointer, Protector, Retire, Shared, Shield, Thread,
-    WriteResult,
+    Atomic, CsGuard, Invalidate, Owned, Pointer, Protector, RaGuard, Retire, Shared, Shield,
+    Thread, WriteResult,
 };
 
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
@@ -25,10 +25,16 @@ struct Node<K, V> {
 impl<K, V> Node<K, V> {
     pub fn new(key: K, value: V) -> Self {
         let height = Self::generate_height();
+        let next: [Atomic<Node<K, V>>; MAX_HEIGHT] = Default::default();
+        for link in next.iter().take(height) {
+            link.store(Shared::null().with_tag(2), Ordering::Relaxed, unsafe {
+                &RaGuard::unprotected()
+            });
+        }
         Self {
             key,
             value,
-            next: Default::default(),
+            next,
             height,
             refs: AtomicUsize::new(height + 1),
         }
@@ -62,7 +68,7 @@ impl<K, V> Node<K, V> {
         for level in (0..self.height).rev() {
             let tag = self.next[level].fetch_or(1, Ordering::SeqCst, handle).tag();
             // If the level 0 pointer was already marked, somebody else removed the node.
-            if level == 0 && tag != 0 {
+            if level == 0 && (tag & 1) != 0 {
                 return false;
             }
         }
@@ -408,7 +414,7 @@ where
                 // If the current pointer is marked, that means another thread is already
                 // removing the node we've just inserted. In that case, let's just stop
                 // building the tower.
-                if next.tag() != 0 {
+                if (next.tag() & 1) != 0 {
                     new_node_ref
                         .refs
                         .fetch_sub(height - level, Ordering::SeqCst);
@@ -417,7 +423,7 @@ where
 
                 if new_node_ref.next[level]
                     .compare_exchange(
-                        Shared::null(),
+                        Shared::null().with_tag(2),
                         succ.shared(),
                         Ordering::SeqCst,
                         Ordering::SeqCst,
@@ -462,11 +468,32 @@ where
             let node: &Node<K, V> = some_or!(cursor.found(key), return false);
 
             // Try removing the node by marking its tower.
-            let marked = node.mark_tower(handle);
-            if marked {
-                self.find(key, output, handle);
+            if node.mark_tower(handle) {
+                for level in (0..node.height).rev() {
+                    let succ =
+                        node.next[level].load(Ordering::SeqCst, unsafe { &CsGuard::unprotected() });
+                    if (succ.tag() & 2) != 0 {
+                        continue;
+                    }
+                    // Try linking the predecessor and successor at this level.
+                    if unsafe { cursor.preds[level].deref_unchecked() }.next[level]
+                        .compare_exchange(
+                            unsafe { Shared::from_usize(node as *const _ as usize) },
+                            succ.with_tag(0),
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                            handle,
+                        )
+                        .is_ok()
+                    {
+                        node.decrement(handle);
+                    } else {
+                        self.find(key, output, handle);
+                        break;
+                    }
+                }
             }
-            return marked;
+            return true;
         }
     }
 }

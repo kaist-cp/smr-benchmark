@@ -26,8 +26,12 @@ struct Node<K, V> {
 impl<K, V> Node<K, V> {
     pub fn new(key: K, value: V) -> Self {
         let height = Self::generate_height();
+        let next: [AtomicPtr<Node<K, V>>; MAX_HEIGHT] = Default::default();
+        for link in next.iter().take(height) {
+            link.store(tagged(ptr::null_mut(), 4), Ordering::Relaxed);
+        }
         Self {
-            next: Default::default(),
+            next,
             key,
             value,
             height,
@@ -355,7 +359,12 @@ where
                 }
 
                 if new_node_ref.next[level]
-                    .compare_exchange(ptr::null_mut(), succ, Ordering::SeqCst, Ordering::SeqCst)
+                    .compare_exchange(
+                        tagged(ptr::null_mut(), 4),
+                        succ,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    )
                     .is_err()
                 {
                     new_node_ref
@@ -397,13 +406,38 @@ where
             light_membarrier();
 
             // Try removing the node by marking its tower.
-            let marked = node.mark_tower();
-            if marked {
-                self.find(key, handle);
-                return Some(unsafe { transmute::<&V, &'hp V>(&node.value) });
-            } else {
-                return None;
+            if node.mark_tower() {
+                let frontier = &mut [ptr::null_mut(); MAX_HEIGHT][0..node.height];
+                for level in 0..node.height {
+                    frontier[level] = node.next[level].load(Ordering::Acquire);
+                }
+                let hps = handle.thread.protect_frontier(frontier);
+                for level in (0..node.height).rev() {
+                    let succ = frontier[level];
+                    if (tag(succ) & 4) != 0 {
+                        continue;
+                    }
+
+                    // Try linking the predecessor and successor at this level.
+                    if unsafe { &(*cursor.preds[level]).next[level] }
+                        .compare_exchange(
+                            node_ptr,
+                            untagged(succ),
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                        )
+                        .is_err()
+                    {
+                        drop(hps);
+                        self.find(key, handle);
+                        break;
+                    } else if node.decrement() {
+                        handle.thread.schedule_invalidation(hps, vec![node_ptr]);
+                        break;
+                    }
+                }
             }
+            return Some(unsafe { transmute::<&V, &'hp V>(&node.value) });
         }
     }
 }

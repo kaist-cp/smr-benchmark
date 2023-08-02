@@ -4,7 +4,7 @@ use std::{
     sync::atomic::{AtomicPtr, Ordering},
 };
 
-use super::{concurrent_map::ConcurrentMap, tag, untagged};
+use super::{compose_tag, concurrent_map::ConcurrentMap, tag, untagged};
 
 const MAX_HEIGHT: usize = 32;
 
@@ -20,10 +20,14 @@ struct Node<K, V> {
 impl<K, V> Node<K, V> {
     pub fn new(key: K, value: V) -> Self {
         let height = Self::generate_height();
+        let next: [AtomicPtr<Node<K, V>>; MAX_HEIGHT] = Default::default();
+        for link in next.iter().take(height) {
+            link.store(compose_tag(null_mut(), 2), Ordering::Relaxed);
+        }
         Self {
             key,
             value,
-            next: Default::default(),
+            next,
             height,
         }
     }
@@ -47,7 +51,7 @@ impl<K, V> Node<K, V> {
             // `epoch::unprotected()` in this situation.
             let tag = tag(self.next[level].fetch_or(1, Ordering::SeqCst));
             // If the level 0 pointer was already marked, somebody else removed the node.
-            if level == 0 && tag == 1 {
+            if level == 0 && (tag & 1) != 0 {
                 return false;
             }
         }
@@ -239,12 +243,17 @@ where
                 // If the current pointer is marked, that means another thread is already
                 // removing the node we've just inserted. In that case, let's just stop
                 // building the tower.
-                if tag(next) == 1 {
+                if (tag(next) & 1) != 0 {
                     break 'build;
                 }
 
                 if new_node_ref.next[level]
-                    .compare_exchange(null_mut(), succ, Ordering::SeqCst, Ordering::SeqCst)
+                    .compare_exchange(
+                        compose_tag(null_mut(), 2),
+                        succ,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    )
                     .is_err()
                 {
                     break 'build;
@@ -274,7 +283,26 @@ where
 
             // Try removing the node by marking its tower.
             if node.mark_tower() {
-                self.find(key);
+                for level in (0..node.height).rev() {
+                    let succ = node.next[level].load(Ordering::SeqCst);
+                    if (tag(succ) & 2) != 0 {
+                        continue;
+                    }
+
+                    // Try linking the predecessor and successor at this level.
+                    if cursor.preds[level][level]
+                        .compare_exchange(
+                            node as *const _ as *mut Node<K, V>,
+                            untagged(succ),
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                        )
+                        .is_err()
+                    {
+                        self.find(key);
+                        break;
+                    }
+                }
             }
             return Some(&node.value);
         }
