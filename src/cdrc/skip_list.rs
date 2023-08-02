@@ -29,12 +29,12 @@ where
         let height = Self::generate_height();
         let next: [AtomicRcPtr<Node<K, V, Guard>, Guard>; MAX_HEIGHT] = Default::default();
         for link in next.iter().take(height) {
-            link.store(RcPtr::null(guard), Ordering::Relaxed, guard)
+            link.store(RcPtr::null(guard).with_mark(2), Ordering::Relaxed, guard)
         }
         Self {
             key,
             value,
-            next: Default::default(),
+            next,
             height,
         }
     }
