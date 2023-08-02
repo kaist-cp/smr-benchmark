@@ -483,12 +483,6 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 &NBR_CAP,
                 2,
             ),
-            DS::HMList => bench_map_nbr::<nbr::HMList<usize, usize>>(
-                config,
-                PrefillStrategy::Decreasing,
-                &NBR_CAP,
-                2,
-            ),
             DS::HHSList => bench_map_nbr::<nbr::HHSList<usize, usize>>(
                 config,
                 PrefillStrategy::Decreasing,

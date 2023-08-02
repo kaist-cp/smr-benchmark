@@ -147,74 +147,6 @@ where
         }
     }
 
-    #[inline]
-    fn find_harris_michael(&self, key: &K, handle: &mut Handle, guard: &Guard) -> Cursor<K, V> {
-        let mut cursor;
-        let mut removed_next;
-
-        loop {
-            read_phase!(guard => {
-                (cursor, removed_next) = {
-                    // Declaring inner cursor is important to let the compiler to conduct register
-                    // optimization.
-                    let mut cursor = Cursor {
-                        prev: &self.head as *const _ as *mut Node<K, V>,
-                        curr: self.head.load(Ordering::Acquire),
-                        found: false,
-                    };
-                    let mut removed_next = ptr::null_mut();
-
-                    cursor.found = loop {
-                        let curr_node = some_or!(unsafe { cursor.curr.as_ref() }, break false);
-                        let next = curr_node.next.load(Ordering::Acquire);
-
-                        // NOTE: original version aborts here if self.prev is tagged
-
-                        if tag(next) != 0 {
-                            // Found a logically removed node.
-                            // As it cannot be physically removed in read phase,
-                            // save it at a local variable and remove it
-                            // in write phase.
-                            removed_next = untagged(next);
-                            break false;
-                        }
-
-                        match curr_node.key.cmp(key) {
-                            Less => {
-                                cursor.prev = cursor.curr;
-                                cursor.curr = next;
-                            }
-                            Equal => break true,
-                            Greater => break false,
-                        }
-                    };
-                    (cursor, removed_next)
-                };
-                handle.prev.protect(cursor.prev);
-                handle.curr.protect(cursor.curr);
-            });
-
-            if !removed_next.is_null() {
-                let prev_ref = unsafe { &*cursor.prev };
-                if prev_ref
-                    .next
-                    .compare_exchange(
-                        cursor.curr,
-                        removed_next,
-                        Ordering::Release,
-                        Ordering::Relaxed,
-                    )
-                    .is_ok()
-                {
-                    unsafe { guard.retire(cursor.curr) };
-                }
-                continue;
-            }
-
-            return cursor;
-        }
-    }
-
     /// Gotta go fast. Doesn't fail.
     #[inline]
     fn find_harris_herlihy_shavit(
@@ -412,40 +344,6 @@ where
 
     /// Omitted
     #[inline]
-    pub fn harris_michael_get<'g>(
-        &'g self,
-        key: &K,
-        handle: &mut Handle,
-        guard: &'g Guard,
-    ) -> Option<&'g V> {
-        self.get(key, Self::find_harris_michael, handle, guard)
-    }
-
-    /// Omitted
-    #[inline]
-    pub fn harris_michael_insert(
-        &self,
-        key: K,
-        value: V,
-        handle: &mut Handle,
-        guard: &Guard,
-    ) -> bool {
-        self.insert(key, value, Self::find_harris_michael, handle, guard)
-    }
-
-    /// Omitted
-    #[inline]
-    pub fn harris_michael_remove<'g>(
-        &'g self,
-        key: &K,
-        handle: &mut Handle,
-        guard: &'g Guard,
-    ) -> Option<&'g V> {
-        self.remove(key, Self::find_harris_michael, handle, guard)
-    }
-
-    /// Omitted
-    #[inline]
     pub fn harris_herlihy_shavit_get<'g>(
         &'g self,
         key: &K,
@@ -477,15 +375,20 @@ where
         HList { inner: List::new() }
     }
 
-    #[inline(always)]
+    // Why `inline(never)` while others have `inline(always)`?
+    //
+    // We observed the higher performance when using `inline(never)` than when using
+    // `inline(always)`. (15M -> 20M)
+
+    #[inline(never)]
     fn get<'g>(&'g self, key: &K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
         self.inner.harris_get(key, handle, guard)
     }
-    #[inline(always)]
+    #[inline(never)]
     fn insert(&self, key: K, value: V, handle: &mut Handle, guard: &Guard) -> bool {
         self.inner.harris_insert(key, value, handle, guard)
     }
-    #[inline(always)]
+    #[inline(never)]
     fn remove<'g>(&'g self, key: &K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
         self.inner.harris_remove(key, handle, guard)
     }
@@ -508,37 +411,6 @@ where
         guard: &'g Guard,
     ) -> Option<&'g V> {
         self.inner.harris_herlihy_shavit_get(key, handle, guard)
-    }
-}
-
-impl<K, V> ConcurrentMap<K, V> for HMList<K, V>
-where
-    K: Ord,
-{
-    type Handle = Handle;
-
-    fn handle(guard: &mut Guard) -> Self::Handle {
-        Self::Handle {
-            prev: guard.acquire_shield().unwrap(),
-            curr: guard.acquire_shield().unwrap(),
-        }
-    }
-
-    fn new() -> Self {
-        HMList { inner: List::new() }
-    }
-
-    #[inline(always)]
-    fn get<'g>(&'g self, key: &K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
-        self.inner.harris_michael_get(key, handle, guard)
-    }
-    #[inline(always)]
-    fn insert(&self, key: K, value: V, handle: &mut Handle, guard: &Guard) -> bool {
-        self.inner.harris_michael_insert(key, value, handle, guard)
-    }
-    #[inline(always)]
-    fn remove<'g>(&'g self, key: &K, handle: &mut Handle, guard: &'g Guard) -> Option<&'g V> {
-        self.inner.harris_michael_remove(key, handle, guard)
     }
 }
 
@@ -588,17 +460,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{HHSList, HList, HMList};
+    use super::{HHSList, HList};
     use crate::nbr::concurrent_map;
 
     #[test]
     fn smoke_h_list() {
         concurrent_map::tests::smoke::<HList<i32, String>>();
-    }
-
-    #[test]
-    fn smoke_hm_list() {
-        concurrent_map::tests::smoke::<HMList<i32, String>>();
     }
 
     #[test]
