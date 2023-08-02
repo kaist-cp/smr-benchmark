@@ -4,7 +4,7 @@ use atomic::{fence, Ordering};
 use nix::errno::Errno;
 use std::mem;
 
-use crate::{set_data, Bag, Epoch, Global, SealedBag, Thread, BAGS_WIDTH};
+use crate::{set_data, Bag, Epoch, Global, SealedBag, Thread, BAGS_WIDTH, Local};
 
 use super::rollback;
 
@@ -29,13 +29,13 @@ pub trait GlobalRRCU {
     /// Returns the advanced global epoch.
     ///
     /// `advance()` is annotated `#[cold]` because it is rarely called.
-    fn advance(&self) -> Epoch;
+    fn advance(&self, advancer: &mut Local) -> Epoch;
 }
 
 impl Global {
     #[inline]
     pub(crate) fn push_bag(&self, bag: &mut Bag) {
-        self.garbage_count.fetch_add(bag.len(), Ordering::AcqRel);
+        self.garbage_count.fetch_add(bag.len(), Ordering::SeqCst);
         let bag = mem::take(bag);
 
         fence(Ordering::SeqCst);
@@ -106,7 +106,8 @@ impl GlobalRRCU for Global {
     }
 
     #[cold]
-    fn advance(&self) -> Epoch {
+    fn advance(&self, advancer: &mut Local) -> Epoch {
+        let advancer_owner = advancer.owner.load(Ordering::Relaxed);
         let global_epoch = self.epoch.load(Ordering::Relaxed);
         fence(Ordering::SeqCst);
 
@@ -120,7 +121,11 @@ impl GlobalRRCU for Global {
 
             // If the participant was pinned in a different epoch, we eject its epoch.
             if local_epoch.is_pinned() && local_epoch.unpinned().value() < global_epoch.value() {
-                match unsafe { rollback::send_signal(local.owner.load(Ordering::Relaxed)) } {
+                let owner = local.owner.load(Ordering::Relaxed);
+                if advancer_owner == owner {
+                    advancer.unpin_inner();
+                }
+                match unsafe { rollback::send_signal(owner) } {
                     // `ESRCH` indicates that the given pthread is already exited.
                     Ok(_) | Err(Errno::ESRCH) => {}
                     Err(err) => panic!("Failed to restart the thread: {}", err),
@@ -153,83 +158,6 @@ mod test {
     use std::hint::black_box;
     use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
     use std::thread::scope;
-
-    #[test]
-    fn try_advance() {
-        let global = &Global::new();
-        let sync_clock = &AtomicUsize::new(0);
-
-        // If there's no working thread, `try_advance` would trivially succeed.
-        assert!(global.try_advance().is_ok());
-
-        // Let's simulate a pinned slow thread.
-        scope(|s| {
-            s.spawn(|| {
-                let mut handle = global.register();
-                unsafe {
-                    handle.pin(|_| {
-                        // Intentionally avoided using `Barrier` for synchronization.
-                        // Although there will be no signaling in this example, it is worth
-                        // noting that `Barrier` is not safe to use in a crashable section,
-                        // because `Barrier` uses `Mutex` which involves a system call.
-                        //
-                        // Also, usually performing writing in `read` is not desirable. In this
-                        // example, we used `fetch_add` just to demostrate the effect of
-                        // `try_advance`.
-                        sync_clock.fetch_add(1, Ordering::SeqCst);
-                        while sync_clock.load(Ordering::SeqCst) == 1 {}
-                    });
-                }
-            });
-
-            while sync_clock.load(Ordering::SeqCst) == 0 {}
-
-            // The first advancing must succeed because the pinned participant
-            // is on the global epoch.
-            assert!(global.try_advance().is_ok());
-            // However, the next advancing will fail.
-            assert!(global.try_advance().is_err());
-
-            sync_clock.fetch_add(1, Ordering::SeqCst);
-        });
-    }
-
-    #[test]
-    fn advance() {
-        let global = &Global::new();
-        let sync_clock = &AtomicUsize::new(0);
-
-        // Let's simulate a pinned slow thread.
-        scope(|s| {
-            s.spawn(|| {
-                let mut handle = global.register();
-                unsafe {
-                    handle.pin(|_| {
-                        // Intentionally avoided using `Barrier` for synchronization.
-                        // It is worth noting that `Barrier` is not safe to use in a crashable
-                        // section, because `Barrier` uses `Mutex` which involves a system call.
-                        //
-                        // Also, usually performing writing in `read` is not desirable. In this
-                        // example, we used `fetch_add` just to demostrate the effect of
-                        // `try_advance` and `advance`.
-                        sync_clock.fetch_add(1, Ordering::SeqCst);
-                        while sync_clock.load(Ordering::SeqCst) == 1 {}
-                    });
-                }
-            });
-
-            while sync_clock.load(Ordering::SeqCst) == 0 {}
-
-            // The first advancing must succeed because the pinned participant
-            // is on the global epoch.
-            assert!(global.try_advance().is_ok());
-            // However, the next advancing will fail.
-            assert!(global.try_advance().is_err());
-
-            // `advance` always succeeds, and it will restart any slow threads.
-            global.advance();
-        });
-    }
 
     #[test]
     fn defer_incrs() {

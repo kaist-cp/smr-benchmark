@@ -432,7 +432,7 @@ impl Clone for Rollbacker {
 
 const_assert!(atomic::Atomic::<Pthread>::is_lock_free());
 
-struct Local {
+pub struct Local {
     /// Represents a thread-local status.
     ///
     /// A thread entering a crashable section sets its `STATUS` by calling `guard!` macro.

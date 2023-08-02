@@ -74,7 +74,7 @@ impl Local {
 
     /// Unpins the [`Local`].
     #[inline]
-    fn unpin_inner(&mut self) {
+    pub(crate) fn unpin_inner(&mut self) {
         self.epoch.store(Epoch::starting(), Ordering::Release);
     }
 }
@@ -192,10 +192,16 @@ impl LocalRRCU for Local {
 
             let collected = if push_count >= Self::COUNTS_BETWEEN_FORCE_ADVANCE {
                 self.push_count.set(0);
-                Some(self.global().collect(self.global().advance()))
+                let epoch = unsafe { &*self.global }.advance(self);
+                Some(self.global().collect(epoch))
             } else {
-                let epoch = self.global().try_advance().ok()?;
-                self.push_count.set(0);
+                let epoch = match self.global().try_advance() {
+                    Ok(epoch) => {
+                        self.push_count.set(0);
+                        epoch
+                    }
+                    Err(epoch) => epoch,
+                };
                 Some(self.global().collect(epoch))
             };
 
