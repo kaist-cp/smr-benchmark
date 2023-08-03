@@ -17,6 +17,7 @@ hp_pp = { path = "./hp_pp" }
 nbr-rs = { path = "./nbr-rs" }
 cdrc-rs = { path = "./cdrc-rs" }
 hp-sharp = { path = "./hp-sharp" }
+vbr-rs = { path = "./vbr-rs" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tikv-jemallocator = "0.5"

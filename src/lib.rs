@@ -7,6 +7,7 @@
 #![feature(strict_provenance_atomic_ptr, strict_provenance)]
 #![feature(core_intrinsics)]
 #![feature(cfg_sanitize)]
+#![feature(optimize_attribute)]
 
 #[macro_use]
 extern crate cfg_if;
@@ -38,6 +39,7 @@ pub mod hp_sharp;
 pub mod nbr;
 pub mod nr;
 pub mod pebr;
+pub mod vbr;
 
 use core::cell::Cell;
 

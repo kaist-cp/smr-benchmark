@@ -609,6 +609,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
+name = "portable-atomic"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f32154ba0af3a075eefa1eda8bb414ee928f62303a54ea85b8d6638ff1a6ee9e"
+
+[[package]]
 name = "ppv-lite86"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -763,6 +769,7 @@ dependencies = [
  "tikv-jemalloc-ctl",
  "tikv-jemallocator",
  "typenum",
+ "vbr-rs",
 ]
 
 [[package]]
@@ -853,6 +860,16 @@ name = "utf8parse"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "711b9620af191e0cdc7468a8d14e709c3dcdb115b36f838e601583af800a370a"
+
+[[package]]
+name = "vbr-rs"
+version = "0.1.0"
+dependencies = [
+ "arrayvec 0.7.4",
+ "atomic",
+ "crossbeam-utils 0.8.16",
+ "portable-atomic",
+]
 
 [[package]]
 name = "wasi"

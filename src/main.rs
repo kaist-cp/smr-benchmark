@@ -25,12 +25,12 @@ use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
 use typenum::{Unsigned, U1, U4};
 
-use smr_benchmark::hp_pp;
 use smr_benchmark::nbr;
 use smr_benchmark::nr;
 use smr_benchmark::pebr;
 use smr_benchmark::{cdrc, ebr};
 use smr_benchmark::{cdrc_hp_sharp, hp, hp_sharp as hp_sharp_bench};
+use smr_benchmark::{hp_pp, vbr};
 
 const NBR_CAP: NBRConfig = NBRConfig {
     bag_cap_pow2: 256,
@@ -66,6 +66,7 @@ pub enum MM {
     CDRC_EBR,
     HP_SHARP,
     CDRC_HP_SHARP,
+    VBR,
 }
 
 pub enum OpsPerCs {
@@ -588,6 +589,21 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             ),
             _ => panic!("Unsupported(or unimplemented) data structure for CDRC HP#"),
         },
+        MM::VBR => match config.ds {
+            DS::HList => {
+                bench_map_vbr::<vbr::HList<usize, usize>>(config, PrefillStrategy::Decreasing)
+            }
+            DS::HMList => {
+                bench_map_vbr::<vbr::HMList<usize, usize>>(config, PrefillStrategy::Decreasing)
+            }
+            DS::HHSList => {
+                bench_map_vbr::<vbr::HHSList<usize, usize>>(config, PrefillStrategy::Decreasing)
+            }
+            DS::HashMap => {
+                bench_map_vbr::<vbr::HashMap<usize, usize>>(config, PrefillStrategy::Decreasing)
+            }
+            _ => panic!("Unsupported(or unimplemented) data structure for VBR"),
+        },
     };
     output
         .write_record(&[
@@ -852,6 +868,37 @@ impl PrefillStrategy {
             print!("prefilled... ");
             stdout().flush().unwrap();
         });
+    }
+
+    fn prefill_vbr<M: vbr::ConcurrentMap<usize, usize> + Send + Sync>(
+        self,
+        config: &Config,
+        map: &M,
+        local: &M::Local,
+    ) {
+        let rng = &mut rand::thread_rng();
+        match self {
+            PrefillStrategy::Random => {
+                for _ in 0..config.prefill {
+                    let key = config.key_dist.sample(rng);
+                    let value = key.clone();
+                    map.insert(key, value, local);
+                }
+            }
+            PrefillStrategy::Decreasing => {
+                let mut keys = Vec::with_capacity(config.prefill);
+                for _ in 0..config.prefill {
+                    keys.push(config.key_dist.sample(rng));
+                }
+                keys.sort_by(|a, b| b.cmp(a));
+                for key in keys.drain(..) {
+                    let value = key.clone();
+                    map.insert(key, value, local);
+                }
+            }
+        }
+        print!("prefilled... ");
+        stdout().flush().unwrap();
     }
 }
 
@@ -1568,6 +1615,107 @@ fn bench_map_hp_sharp<M: hp_sharp_bench::ConcurrentMap<usize, usize> + Send + Sy
                         }
                         Op::Remove => {
                             map.remove(&key, output, handle);
+                        }
+                    }
+                    ops += 1;
+                }
+                ops_sender.send(ops).unwrap();
+            });
+        }
+    })
+    .unwrap();
+    println!("end");
+
+    let mut ops = 0;
+    for _ in 0..config.threads {
+        let local_ops = ops_receiver.recv().unwrap();
+        ops += local_ops;
+    }
+    let ops_per_sec = ops / config.interval;
+    let (peak_mem, avg_mem, garb_peak, garb_avg) = mem_receiver.recv().unwrap();
+    (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
+}
+
+fn bench_map_vbr<M: vbr::ConcurrentMap<usize, usize> + Send + Sync>(
+    config: &Config,
+    strategy: PrefillStrategy,
+) -> (u64, usize, usize, usize, usize) {
+    let global = &M::global(config.prefill * 2);
+    let local = &M::local(global);
+    let map = &M::new(local);
+    strategy.prefill_vbr(config, map, local);
+
+    let collector = &hp_sharp::Global::new();
+
+    let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
+    let (ops_sender, ops_receiver) = mpsc::channel();
+    let (mem_sender, mem_receiver) = mpsc::channel();
+
+    scope(|s| {
+        // sampling & interference thread
+        if config.aux_thread > 0 {
+            let mem_sender = mem_sender.clone();
+            s.spawn(move |_| {
+                let mut samples = 0usize;
+                let mut acc = 0usize;
+                let mut peak = 0usize;
+                let mut garb_acc = 0usize;
+                let mut garb_peak = 0usize;
+                barrier.clone().wait();
+
+                let start = Instant::now();
+                let mut next_sampling = start + config.sampling_period;
+                while start.elapsed() < config.duration {
+                    let now = Instant::now();
+                    if now > next_sampling {
+                        let allocated = config.mem_sampler.sample();
+                        samples += 1;
+
+                        acc += allocated;
+                        peak = max(peak, allocated);
+
+                        let garbages = collector.garbage_count();
+                        garb_acc += garbages;
+                        garb_peak = max(garb_peak, garbages);
+
+                        next_sampling = now + config.sampling_period;
+                    }
+                    std::thread::sleep(config.aux_thread_period);
+                }
+
+                if config.sampling {
+                    mem_sender
+                        .send((peak, acc / samples, garb_peak, garb_acc / samples))
+                        .unwrap();
+                } else {
+                    mem_sender.send((0, 0, 0, 0)).unwrap();
+                }
+            });
+        } else {
+            mem_sender.send((0, 0, 0, 0)).unwrap();
+        }
+
+        for _ in 0..config.threads {
+            let ops_sender = ops_sender.clone();
+            s.spawn(move |_| {
+                let mut ops: u64 = 0;
+                let mut rng = &mut rand::thread_rng();
+                let local = &M::local(global);
+                barrier.clone().wait();
+                let start = Instant::now();
+
+                while start.elapsed() < config.duration {
+                    let key = config.key_dist.sample(rng);
+                    match Op::OPS[config.op_dist.sample(&mut rng)] {
+                        Op::Get => {
+                            map.get(&key, local);
+                        }
+                        Op::Insert => {
+                            let value = key.clone();
+                            map.insert(key, value, local);
+                        }
+                        Op::Remove => {
+                            map.remove(&key, local);
                         }
                     }
                     ops += 1;
