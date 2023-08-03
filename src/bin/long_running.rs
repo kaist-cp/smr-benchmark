@@ -23,7 +23,7 @@ use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
 use typenum::{Unsigned, U1};
 
-use smr_benchmark::{cdrc, cdrc_hp_sharp, ebr};
+use smr_benchmark::{cdrc, cdrc_hp_sharp, ebr, vbr};
 use smr_benchmark::{hp, hp_pp, hp_sharp as hp_sharp_bench};
 use smr_benchmark::{nbr, pebr};
 
@@ -49,6 +49,7 @@ pub enum MM {
     HP_SHARP,
     CDRC_HP_SHARP,
     NBR,
+    VBR,
 }
 
 pub enum OpsPerCs {
@@ -269,6 +270,7 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
         MM::HP_SHARP => bench_map_hp_sharp(config, PrefillStrategy::Decreasing),
         MM::CDRC_HP_SHARP => bench_map_cdrc_hp_sharp(config, PrefillStrategy::Decreasing),
         MM::NBR => bench_map_nbr(config, PrefillStrategy::Decreasing, 2),
+        MM::VBR => bench_map_vbr(config, PrefillStrategy::Decreasing),
     };
     output
         .write_record(&[
@@ -497,6 +499,37 @@ impl PrefillStrategy {
                 for key in keys.drain(..) {
                     let value = key.to_string();
                     map.insert(key, value, &mut handle, &guard);
+                }
+            }
+        }
+        print!("prefilled... ");
+        stdout().flush().unwrap();
+    }
+
+    fn prefill_vbr<M: vbr::ConcurrentMap<usize, usize> + Send + Sync>(
+        self,
+        config: &Config,
+        map: &M,
+        local: &M::Local,
+    ) {
+        let rng = &mut rand::thread_rng();
+        match self {
+            PrefillStrategy::Random => {
+                for _ in 0..config.prefill {
+                    let key = config.key_dist.sample(rng);
+                    let value = key;
+                    map.insert(key, value, local);
+                }
+            }
+            PrefillStrategy::Decreasing => {
+                let mut keys = Vec::with_capacity(config.prefill);
+                for _ in 0..config.prefill {
+                    keys.push(config.key_dist.sample(rng));
+                }
+                keys.sort_by(|a, b| b.cmp(a));
+                for key in keys.drain(..) {
+                    let value = key;
+                    map.insert(key, value, local);
                 }
             }
         }
@@ -1539,6 +1572,115 @@ fn bench_map_nbr(
                 while start.elapsed() < config.duration {
                     let key = generate_key(config, rng);
                     let _ = map.get(&key, &mut handle, &guard);
+                    ops += 1;
+                }
+
+                ops_sender.send(ops).unwrap();
+            });
+        }
+    })
+    .unwrap();
+    println!("end");
+
+    let mut ops = 0;
+    for _ in 0..config.readers {
+        let local_ops = ops_receiver.recv().unwrap();
+        ops += local_ops;
+    }
+    let ops_per_sec = ops / config.interval;
+    let (peak_mem, avg_mem, garb_peak, garb_avg) = mem_receiver.recv().unwrap();
+    (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
+}
+
+fn bench_map_vbr(config: &Config, strategy: PrefillStrategy) -> (u64, usize, usize, usize, usize) {
+    use vbr::ConcurrentMap;
+    let global = &vbr::HHSList::global(config.prefill * 2);
+    let local = &vbr::HHSList::local(global);
+    let map = &vbr::HHSList::new(local);
+    strategy.prefill_vbr(config, map, local);
+
+    let barrier = &Arc::new(Barrier::new(
+        config.writers + config.readers + config.aux_thread,
+    ));
+    let (ops_sender, ops_receiver) = mpsc::channel();
+    let (mem_sender, mem_receiver) = mpsc::channel();
+
+    scope(|s| {
+        // sampling & interference thread
+        if config.aux_thread > 0 {
+            let mem_sender = mem_sender.clone();
+            s.spawn(move |_| {
+                let mut samples = 0usize;
+                let mut acc = 0usize;
+                let mut peak = 0usize;
+                let mut garb_acc = 0usize;
+                let mut garb_peak = 0usize;
+                barrier.clone().wait();
+
+                let start = Instant::now();
+                let mut next_sampling = start + config.sampling_period;
+                while start.elapsed() < config.duration {
+                    let now = Instant::now();
+                    if now > next_sampling {
+                        let allocated = config.mem_sampler.sample();
+                        samples += 1;
+
+                        acc += allocated;
+                        peak = max(peak, allocated);
+
+                        let garbages = nbr_rs::count_garbages();
+                        garb_acc += garbages;
+                        garb_peak = max(garb_peak, garbages);
+
+                        next_sampling = now + config.sampling_period;
+                    }
+                    std::thread::sleep(config.aux_thread_period);
+                }
+
+                if config.sampling {
+                    mem_sender
+                        .send((peak, acc / samples, garb_peak, garb_acc / samples))
+                        .unwrap();
+                } else {
+                    mem_sender.send((0, 0, 0, 0)).unwrap();
+                }
+            });
+        } else {
+            mem_sender.send((0, 0, 0, 0)).unwrap();
+        }
+
+        // Spawn writer threads.
+        for _ in 0..config.writers {
+            s.spawn(move |_| {
+                let local = &vbr::HHSList::local(global);
+                barrier.clone().wait();
+                let start = Instant::now();
+
+                let mut acquired = None;
+                while start.elapsed() < config.duration {
+                    if let Some((key, value)) = acquired.take() {
+                        assert!(map.insert(key, value, local));
+                    } else {
+                        let (key, value) = map.pop(local).unwrap();
+                        acquired = Some((key, value));
+                    }
+                }
+            });
+        }
+
+        // Spawn reader threads.
+        for _ in 0..config.readers {
+            let ops_sender = ops_sender.clone();
+            s.spawn(move |_| {
+                let local = &vbr::HHSList::local(global);
+                let mut ops: u64 = 0;
+                let rng = &mut rand::thread_rng();
+                barrier.clone().wait();
+                let start = Instant::now();
+
+                while start.elapsed() < config.duration {
+                    let key = config.key_dist.sample(rng);
+                    let _ = map.get(&key, local);
                     ops += 1;
                 }
 
