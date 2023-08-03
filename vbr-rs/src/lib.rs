@@ -99,12 +99,12 @@ impl<T> BagStack<T> {
             let (ts, head) = decompose_u128::<Bag<T>>(self.head.load(Ordering::Acquire));
 
             if let Some(head_ref) = unsafe { head.as_ref() } {
-                let next = head_ref.next.load(Ordering::Acquire);
+                let (_, next) = decompose_u128::<Bag<T>>(head_ref.next.load(Ordering::Acquire));
                 if self
                     .head
                     .compare_exchange(
                         compose_u128(ts, head),
-                        next,
+                        compose_u128(ts + 1, next),
                         Ordering::Release,
                         Ordering::Relaxed,
                     )
@@ -285,7 +285,11 @@ impl<T> Guard<T> {
         unsafe { &*self.local }
     }
 
-    pub fn allocate(&self) -> Result<Shared<'_, T>, ()> {
+    pub fn refresh(&mut self) {
+        self.epoch = self.global().epoch();
+    }
+
+    pub fn allocate(&self) -> Result<Shared<T>, ()> {
         let ptr = self.local().pop_avail();
         debug_assert!(!ptr.is_null());
         let slot_ref = unsafe { &*ptr };
@@ -295,16 +299,17 @@ impl<T> Guard<T> {
             return Err(());
         }
 
+        debug_assert!(self.epoch > slot_ref.birth.load(Ordering::SeqCst));
+
         slot_ref.birth.store(self.epoch, Ordering::Release);
         slot_ref.retire.store(NOT_RETIRED, Ordering::Release);
         Ok(Shared {
             ptr,
             birth: self.epoch,
-            _marker: PhantomData,
         })
     }
 
-    pub unsafe fn retire<'g>(&self, ptr: Shared<'g, T>) -> Result<(), ()> {
+    pub unsafe fn retire(&self, ptr: Shared<T>) -> Result<(), ()> {
         let ver = ptr
             .as_versioned()
             .expect("Attempted to retire a null pointer.");
@@ -333,27 +338,33 @@ impl<T> Guard<T> {
     }
 }
 
-pub struct Shared<'g, T> {
+pub struct Shared<T> {
     ptr: *mut Ver<T>,
     birth: u64,
-    _marker: PhantomData<&'g ()>,
 }
 
-impl<'g, T> Shared<'g, T> {
-    pub unsafe fn deref(&self) -> &'g T {
+impl<T> Shared<T> {
+    pub unsafe fn deref(&self) -> &T {
         &unsafe { &*ptr_with_tag(self.ptr, 0) }.data
     }
 
-    pub fn as_ref(&self) -> Option<&'g T> {
+    pub fn as_ref(&self) -> Option<&T> {
         self.as_versioned().map(|ver| &ver.data)
     }
 
-    fn as_versioned(&self) -> Option<&'g Ver<T>> {
+    fn as_versioned(&self) -> Option<&Ver<T>> {
         unsafe { ptr_with_tag(self.ptr, 0).as_ref() }
     }
 
     pub fn is_null(&self) -> bool {
         self.ptr.is_null()
+    }
+
+    pub fn null() -> Self {
+        Self {
+            ptr: null_mut(),
+            birth: 0,
+        }
     }
 
     pub fn tag(&self) -> Result<usize, ()> {
@@ -371,7 +382,6 @@ impl<'g, T> Shared<'g, T> {
         Self {
             ptr: ptr_with_tag(self.ptr, tag),
             birth: self.birth,
-            _marker: PhantomData,
         }
     }
 
@@ -380,15 +390,15 @@ impl<'g, T> Shared<'g, T> {
     }
 }
 
-impl<'g, T> Clone for Shared<'g, T> {
+impl<T> Clone for Shared<T> {
     fn clone(&self) -> Self {
         Self { ..*self }
     }
 }
 
-impl<'g, T> Copy for Shared<'g, T> {}
+impl<T> Copy for Shared<T> {}
 
-impl<'g, T> PartialEq for Shared<'g, T> {
+impl<T> PartialEq for Shared<T> {
     fn eq(&self, other: &Self) -> bool {
         self.ptr == other.ptr && self.birth == other.birth
     }
@@ -410,40 +420,32 @@ impl<T> VerAtomic<T> {
         }
     }
 
-    pub fn load<'g>(&self, order: Ordering, guard: &'g Guard<T>) -> Result<Shared<'g, T>, ()> {
-        let result = unsafe { self.load_unchecked(order, guard) };
+    pub fn load(&self, order: Ordering, guard: &Guard<T>) -> Result<Shared<T>, ()> {
+        let result = unsafe { self.load_unchecked(order) };
         compiler_fence(Ordering::SeqCst);
         guard.validate_epoch()?;
         Ok(result)
     }
 
-    pub unsafe fn load_unchecked<'g>(&self, order: Ordering, _: &'g Guard<T>) -> Shared<'g, T> {
+    pub unsafe fn load_unchecked(&self, order: Ordering) -> Shared<T> {
         let (_, ptr) = decompose_u128::<Ver<T>>(self.link.load(order));
         let birth = if let Some(ver) = unsafe { ptr_with_tag(ptr, 0).as_ref() } {
             ver.birth.load(Ordering::Acquire)
         } else {
             0
         };
-        Shared {
-            ptr,
-            birth,
-            _marker: PhantomData,
-        }
+        Shared { ptr, birth }
     }
 
-    pub fn compare_exchange<'g>(
+    pub fn compare_exchange(
         &self,
-        owner: Shared<'g, T>,
-        current: Shared<'g, T>,
-        new: Shared<'g, T>,
+        owner: Shared<T>,
+        current: Shared<T>,
+        new: Shared<T>,
         success: Ordering,
         failure: Ordering,
-        _: &'g Guard<T>,
+        _: &Guard<T>,
     ) -> Result<*mut Ver<T>, *mut Ver<T>> {
-        // let real = self.link.load(Ordering::SeqCst);
-        // println!("real {} {:p}", decompose_u128::<Ver<T>>(real).0, decompose_u128::<Ver<T>>(real).1);
-        // println!("curr {} {:p}", owner.birth.max(current.birth), current.as_raw());
-        // println!("next {} {:p}", owner.birth.max(new.birth), new.as_raw());
         let curr = compose_u128(owner.birth.max(current.birth), current.as_raw());
         let next = compose_u128(owner.birth.max(new.birth), new.as_raw());
         self.link
@@ -452,17 +454,46 @@ impl<T> VerAtomic<T> {
             .map_err(|comp| decompose_u128(comp).1)
     }
 
-    pub fn nullify<'g>(&self, owner: Shared<'g, T>, tag: usize, _: &'g Guard<T>) -> Shared<'g, T> {
+    pub fn inject_tag(&self, owner: Shared<T>, tag: usize) -> bool {
+        let prev = unsafe { self.load_unchecked(Ordering::Acquire) };
+        let prev_tag = decompose_ptr(prev.ptr).1;
+        if (prev_tag & tag) != 0 {
+            return false;
+        }
+
+        let version = owner.birth.max(
+            prev.as_versioned()
+                .map(|ver| ver.birth.load(Ordering::Acquire))
+                .unwrap_or(0),
+        );
+        if owner.birth
+            != owner
+                .as_versioned()
+                .map(|ver| ver.birth.load(Ordering::Acquire))
+                .unwrap()
+        {
+            return false;
+        }
+        let result = self.link.compare_exchange(
+            compose_u128(version, prev.as_raw()),
+            compose_u128(version, prev.with_tag(prev_tag | tag).as_raw()),
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+        result.is_ok()
+    }
+
+    pub fn nullify(&self, owner: Shared<T>, tag: usize, _: &Guard<T>) -> Shared<T> {
         let prev = self.link.load(Ordering::Acquire);
         let result = Shared {
             ptr: ptr_with_tag(null_mut(), tag),
-            birth: owner.birth,
-            _marker: PhantomData,
+            birth: 0,
         };
+        assert!(owner.birth > decompose_u128::<Ver<T>>(prev).0);
         self.link
             .compare_exchange(
                 prev,
-                compose_u128(result.birth, result.ptr),
+                compose_u128(owner.birth, result.ptr),
                 Ordering::AcqRel,
                 Ordering::Relaxed,
             )
@@ -479,29 +510,21 @@ unsafe impl<T> Sync for Entry<T> {}
 unsafe impl<T> Send for Entry<T> {}
 
 impl<T> Entry<T> {
-    pub fn new(init: Shared<'_, T>) -> Self {
+    pub fn new(init: Shared<T>) -> Self {
         Self {
             link: init.as_raw(),
         }
     }
 
-    pub fn load<'g>(&self, guard: &'g Guard<T>) -> Result<Shared<'g, T>, ()> {
+    pub fn load(&self, guard: &Guard<T>) -> Result<Shared<T>, ()> {
         let ptr = self.link;
         if let Some(ver) = unsafe { ptr_with_tag(ptr, 0).as_ref() } {
             let birth = ver.birth.load(Ordering::Acquire);
             compiler_fence(Ordering::SeqCst);
             guard.validate_epoch()?;
-            Ok(Shared {
-                ptr,
-                birth,
-                _marker: PhantomData,
-            })
+            Ok(Shared { ptr, birth })
         } else {
-            Ok(Shared {
-                ptr,
-                birth: 0,
-                _marker: PhantomData,
-            })
+            Ok(Shared { ptr, birth: 0 })
         }
     }
 }
@@ -562,4 +585,9 @@ pub fn decompose_ptr<T>(ptr: *mut T) -> (*mut T, usize) {
     let raw = ((ptr as usize) & !low_bits::<T>()) as *mut T;
     let tag = (ptr as usize) & low_bits::<T>();
     (raw, tag)
+}
+
+pub enum InjectionResult {
+    AlreadyTagged,
+    Retired,
 }

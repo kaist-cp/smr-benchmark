@@ -23,28 +23,25 @@ where
     head: Entry<Node<K, V>>,
 }
 
-struct Cursor<'g, K, V>
+struct Cursor<K, V>
 where
     K: 'static + Copy,
     V: 'static + Copy,
 {
-    prev: Shared<'g, Node<K, V>>,
+    prev: Shared<Node<K, V>>,
     // Tag of `curr` should always be zero so when `curr` is stored in a `prev`, we don't store a
     // marked pointer and cause cleanup to fail.
-    curr: Shared<'g, Node<K, V>>,
+    curr: Shared<Node<K, V>>,
 }
 
-impl<'g, K, V> Cursor<'g, K, V>
+impl<K, V> Cursor<K, V>
 where
     K: 'static + Ord + Copy,
     V: 'static + Copy,
 {
     /// Creates the head cursor.
     #[inline]
-    pub fn head(
-        head: Shared<'g, Node<K, V>>,
-        guard: &'g Guard<Node<K, V>>,
-    ) -> Result<Cursor<'g, K, V>, ()> {
+    pub fn head(head: Shared<Node<K, V>>, guard: &Guard<Node<K, V>>) -> Result<Cursor<K, V>, ()> {
         Ok(Self {
             prev: head,
             curr: unsafe { head.deref() }
@@ -74,11 +71,7 @@ where
 
     /// Clean up a chain of logically removed nodes in each traversal.
     #[inline]
-    fn find_harris<'g>(
-        &'g self,
-        key: &K,
-        guard: &'g Guard<Node<K, V>>,
-    ) -> Result<(bool, Cursor<'g, K, V>), ()> {
+    fn find_harris(&self, key: &K, guard: &Guard<Node<K, V>>) -> Result<(bool, Cursor<K, V>), ()> {
         // Finding phase
         // - cursor.curr: first unmarked node w/ key >= search key (4)
         // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
@@ -133,24 +126,16 @@ where
                 .map_err(|_| ())?;
         }
 
-        // defer_destroy from cursor.prev.load() to cursor.curr (exclusive)
-        let mut node = prev_next;
-        while node.with_tag(0) != cursor.curr {
-            let next = unsafe { node.deref().next.load_unchecked(Ordering::Acquire, guard) };
-            let _ = unsafe { guard.retire(node) };
-            node = next;
-        }
-
         Ok((found, cursor))
     }
 
     /// Clean up a single logically removed node in each traversal.
     #[inline]
-    fn find_harris_michael<'g>(
-        &'g self,
+    fn find_harris_michael(
+        &self,
         key: &K,
-        guard: &'g Guard<Node<K, V>>,
-    ) -> Result<(bool, Cursor<'g, K, V>), ()> {
+        guard: &Guard<Node<K, V>>,
+    ) -> Result<(bool, Cursor<K, V>), ()> {
         let mut cursor = Cursor::head(self.head.load(guard)?, guard)?;
         loop {
             debug_assert_eq!(cursor.curr.tag()?, 0);
@@ -163,17 +148,20 @@ where
             if next.tag()? != 0 {
                 next = next.with_tag(0);
                 unsafe {
-                    cursor.prev.deref().next.compare_exchange(
-                        cursor.prev,
-                        cursor.curr,
-                        next,
-                        Ordering::Release,
-                        Ordering::Relaxed,
-                        guard,
-                    )
+                    cursor
+                        .prev
+                        .deref()
+                        .next
+                        .compare_exchange(
+                            cursor.prev,
+                            cursor.curr,
+                            next,
+                            Ordering::Release,
+                            Ordering::Relaxed,
+                            guard,
+                        )
+                        .map_err(|_| ())?;
                 }
-                .map_err(|_| ())?;
-                unsafe { guard.retire(cursor.curr)? };
                 cursor.curr = next;
                 continue;
             }
@@ -191,11 +179,11 @@ where
 
     /// Gotta go fast. Doesn't fail.
     #[inline]
-    fn find_harris_herlihy_shavit<'g>(
-        &'g self,
+    fn find_harris_herlihy_shavit(
+        &self,
         key: &K,
-        guard: &'g Guard<Node<K, V>>,
-    ) -> Result<(bool, Cursor<'g, K, V>), ()> {
+        guard: &Guard<Node<K, V>>,
+    ) -> Result<(bool, Cursor<K, V>), ()> {
         let mut cursor = Cursor::head(self.head.load(guard)?, guard)?;
         Ok(loop {
             let curr_node = some_or!(cursor.curr.as_ref(), break (false, cursor));
@@ -212,9 +200,9 @@ where
     }
 
     #[inline]
-    fn get<'g, F>(&'g self, key: &K, find: F, local: &Local<Node<K, V>>) -> Option<V>
+    fn get<F>(&self, key: &K, find: F, local: &Local<Node<K, V>>) -> Option<V>
     where
-        F: for<'h> Fn(&'h Self, &K, &'h Guard<Node<K, V>>) -> Result<(bool, Cursor<'h, K, V>), ()>,
+        F: Fn(&Self, &K, &Guard<Node<K, V>>) -> Result<(bool, Cursor<K, V>), ()>,
     {
         loop {
             let guard = &local.guard();
@@ -232,9 +220,9 @@ where
     }
 
     #[inline]
-    fn insert<'g, F>(&'g self, key: K, value: V, find: F, local: &Local<Node<K, V>>) -> bool
+    fn insert<F>(&self, key: K, value: V, find: F, local: &Local<Node<K, V>>) -> bool
     where
-        F: for<'h> Fn(&'h Self, &K, &'h Guard<Node<K, V>>) -> Result<(bool, Cursor<'h, K, V>), ()>,
+        F: Fn(&Self, &K, &Guard<Node<K, V>>) -> Result<(bool, Cursor<K, V>), ()>,
     {
         loop {
             let guard = &local.guard();
@@ -279,12 +267,13 @@ where
     }
 
     #[inline]
-    fn remove<'g, F>(&'g self, key: &K, find: F, local: &Local<Node<K, V>>) -> Option<V>
+    fn remove<F>(&self, key: &K, find: F, local: &Local<Node<K, V>>) -> Option<V>
     where
-        F: for<'h> Fn(&'h Self, &K, &'h Guard<Node<K, V>>) -> Result<(bool, Cursor<'h, K, V>), ()>,
+        F: Fn(&Self, &K, &Guard<Node<K, V>>) -> Result<(bool, Cursor<K, V>), ()>,
     {
+        // Logical deletion
         loop {
-            let guard = &local.guard();
+            let guard = &mut local.guard();
             let (found, cursor) = ok_or!(find(self, key, guard), continue);
             if !found {
                 return None;
@@ -298,45 +287,39 @@ where
             if tag == 1 {
                 continue;
             }
-            unsafe {
-                if curr_node
-                    .next
-                    .compare_exchange(
-                        cursor.curr,
-                        next,
-                        next.with_tag(1),
-                        Ordering::AcqRel,
-                        Ordering::Relaxed,
-                        guard,
-                    )
-                    .is_err()
-                {
-                    continue;
-                }
-
-                if cursor
-                    .prev
-                    .deref()
-                    .next
-                    .compare_exchange(
-                        cursor.prev,
-                        cursor.curr,
-                        next,
-                        Ordering::Release,
-                        Ordering::Relaxed,
-                        guard,
-                    )
-                    .is_ok()
-                {
-                    let _ = guard.retire(cursor.curr);
-                }
+            if !curr_node.next.inject_tag(cursor.curr, 1) {
+                continue;
             }
-            return Some(value);
+
+            // Physical deletion & Retirement
+            loop {
+                guard.refresh();
+                unsafe {
+                    if cursor
+                        .prev
+                        .deref()
+                        .next
+                        .compare_exchange(
+                            cursor.prev,
+                            cursor.curr,
+                            next,
+                            Ordering::Release,
+                            Ordering::Relaxed,
+                            guard,
+                        )
+                        .is_err()
+                    {
+                        ok_or!(find(self, key, guard), continue);
+                    }
+                    ok_or!(guard.retire(cursor.curr), continue);
+                }
+                return Some(value);
+            }
         }
     }
 
     #[inline]
-    pub fn pop<'g>(&'g self, local: &Local<Node<K, V>>) -> Option<(K, V)> {
+    pub fn pop(&self, local: &Local<Node<K, V>>) -> Option<(K, V)> {
         loop {
             let guard = &local.guard();
             let head = ok_or!(self.head.load(guard), continue);
@@ -354,22 +337,10 @@ where
             if tag == 1 {
                 continue;
             }
+            if !curr_node.next.inject_tag(cursor.curr, 1) {
+                continue;
+            }
             unsafe {
-                if curr_node
-                    .next
-                    .compare_exchange(
-                        cursor.curr,
-                        next,
-                        next.with_tag(1),
-                        Ordering::AcqRel,
-                        Ordering::Relaxed,
-                        guard,
-                    )
-                    .is_err()
-                {
-                    continue;
-                }
-
                 if cursor
                     .prev
                     .deref()
