@@ -49,7 +49,7 @@ impl<T> Global<T> {
         if cfg!(not(any(target_arch = "x86", target_arch = "x86_64"))) {
             core::sync::atomic::fence(Ordering::SeqCst);
         }
-        self.epoch.load(Ordering::SeqCst)
+        self.epoch.load(Ordering::Acquire)
     }
 
     pub fn advance(&self, expected: u64) -> Result<u64, u64> {
