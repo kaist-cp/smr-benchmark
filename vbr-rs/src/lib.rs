@@ -49,15 +49,15 @@ impl<T> Global<T> {
         if cfg!(not(any(target_arch = "x86", target_arch = "x86_64"))) {
             core::sync::atomic::fence(Ordering::SeqCst);
         }
-        self.epoch.load(Ordering::Acquire)
+        self.epoch.load(Ordering::SeqCst)
     }
 
     pub fn advance(&self, expected: u64) -> Result<u64, u64> {
         match self.epoch.compare_exchange(
             expected,
             expected + 1,
-            Ordering::AcqRel,
-            Ordering::Relaxed,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
         ) {
             Ok(_) => Ok(expected + 1),
             Err(_) => Err(expected),
@@ -490,7 +490,6 @@ impl<T> VerAtomic<T> {
             ptr: ptr_with_tag(null_mut(), tag),
             birth: 0,
         };
-        assert!(owner.birth > decompose_u128::<Ver<T>>(prev).0);
         self.link
             .compare_exchange(
                 prev,

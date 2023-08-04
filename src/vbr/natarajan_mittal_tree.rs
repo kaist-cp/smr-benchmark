@@ -294,14 +294,20 @@ where
         // tag (parent, sibling) edge -> all of the parent's edges can't change now
         // TODO: Is Release enough?
         let target_sibling = target_sibling_addr.load(Ordering::Acquire, guard)?;
-        let _ = target_sibling_addr.compare_exchange(
-            record.parent,
-            target_sibling.with_tag(0),
-            target_sibling.with_tag(Marks::TAG.bits()),
-            Ordering::AcqRel,
-            Ordering::Relaxed,
-            guard,
-        );
+        let current_tag = target_sibling.tag()?;
+        if target_sibling_addr
+            .compare_exchange(
+                record.parent,
+                target_sibling.with_tag(current_tag),
+                target_sibling.with_tag(current_tag | Marks::TAG.bits()),
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+                guard,
+            )
+            .is_err()
+        {
+            return Ok(false);
+        }
 
         // Try to replace (ancestor, successor) w/ (ancestor, sibling).
         // Since (parent, sibling) might have been concurrently flagged, copy
@@ -312,7 +318,7 @@ where
             .successor_addr()
             .compare_exchange(
                 record.ancestor,
-                record.successor,
+                record.successor.with_tag(Marks::empty().bits()),
                 target_sibling.with_tag(Marks::new(flag, false).bits()),
                 Ordering::AcqRel,
                 Ordering::Acquire,
@@ -390,15 +396,15 @@ where
             new_internal_node
                 .key
                 .set(unsafe { new_right.deref() }.key.get(guard)?);
-            let left = new_internal_node.left.load(Ordering::Acquire, guard)?;
-            let right = new_internal_node.right.load(Ordering::Acquire, guard)?;
+            let left = new_internal_node.left.nullify(new_internal, 0, guard);
+            let right = new_internal_node.right.nullify(new_internal, 0, guard);
             new_internal_node
                 .left
                 .compare_exchange(
                     new_internal,
                     left,
                     new_left,
-                    Ordering::Relaxed,
+                    Ordering::Release,
                     Ordering::Relaxed,
                     guard,
                 )
@@ -409,7 +415,7 @@ where
                     new_internal,
                     right,
                     new_right,
-                    Ordering::Relaxed,
+                    Ordering::Release,
                     Ordering::Relaxed,
                     guard,
                 )
