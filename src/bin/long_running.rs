@@ -78,7 +78,6 @@ struct Config {
 
     key_dist: Uniform<usize>,
     prefill: usize,
-    key_padding_width: usize,
     interval: u64,
     duration: Duration,
 
@@ -241,7 +240,6 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
         aux_thread_period: Duration::from_millis(1),
         sampling,
         sampling_period: Duration::from_millis(sampling_period),
-        key_padding_width: range.to_string().len(),
 
         key_dist,
         prefill,
@@ -296,12 +294,6 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
     );
 }
 
-#[inline]
-fn generate_key(config: &Config, rng: &mut ThreadRng) -> String {
-    let key = config.key_dist.sample(rng);
-    format!("{:0width$}", key, width = config.key_padding_width)
-}
-
 #[allow(unused)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrefillStrategy {
@@ -310,7 +302,7 @@ enum PrefillStrategy {
 }
 
 impl PrefillStrategy {
-    fn prefill_ebr<M: ebr::ConcurrentMap<String, String> + Send + Sync>(
+    fn prefill_ebr<M: ebr::ConcurrentMap<usize, usize> + Send + Sync>(
         self,
         config: &Config,
         map: &M,
@@ -320,19 +312,19 @@ impl PrefillStrategy {
         match self {
             PrefillStrategy::Random => {
                 for _ in 0..config.prefill {
-                    let key = generate_key(config, rng);
-                    let value = key.to_string();
+                    let key = config.key_dist.sample(rng);
+                    let value = key;
                     map.insert(key, value, guard);
                 }
             }
             PrefillStrategy::Decreasing => {
                 let mut keys = Vec::with_capacity(config.prefill);
                 for _ in 0..config.prefill {
-                    keys.push(generate_key(config, rng));
+                    keys.push(config.key_dist.sample(rng));
                 }
                 keys.sort_by(|a, b| b.cmp(a));
                 for key in keys.drain(..) {
-                    let value = key.to_string();
+                    let value = key;
                     map.insert(key, value, guard);
                 }
             }
@@ -341,7 +333,7 @@ impl PrefillStrategy {
         stdout().flush().unwrap();
     }
 
-    fn prefill_pebr<M: pebr::ConcurrentMap<String, String> + Send + Sync>(
+    fn prefill_pebr<M: pebr::ConcurrentMap<usize, usize> + Send + Sync>(
         self,
         config: &Config,
         map: &M,
@@ -352,19 +344,19 @@ impl PrefillStrategy {
         match self {
             PrefillStrategy::Random => {
                 for _ in 0..config.prefill {
-                    let key = generate_key(config, rng);
-                    let value = key.to_string();
+                    let key = config.key_dist.sample(rng);
+                    let value = key;
                     map.insert(&mut handle, key, value, guard);
                 }
             }
             PrefillStrategy::Decreasing => {
                 let mut keys = Vec::with_capacity(config.prefill);
                 for _ in 0..config.prefill {
-                    keys.push(generate_key(config, rng));
+                    keys.push(config.key_dist.sample(rng));
                 }
                 keys.sort_by(|a, b| b.cmp(a));
                 for key in keys.drain(..) {
-                    let value = key.to_string();
+                    let value = key;
                     map.insert(&mut handle, key, value, guard);
                 }
             }
@@ -373,7 +365,7 @@ impl PrefillStrategy {
         stdout().flush().unwrap();
     }
 
-    fn prefill_hp<M: hp::ConcurrentMap<String, String> + Send + Sync>(
+    fn prefill_hp<M: hp::ConcurrentMap<usize, usize> + Send + Sync>(
         self,
         config: &Config,
         map: &M,
@@ -383,19 +375,19 @@ impl PrefillStrategy {
         match self {
             PrefillStrategy::Random => {
                 for _ in 0..config.prefill {
-                    let key = generate_key(config, rng);
-                    let value = key.to_string();
+                    let key = config.key_dist.sample(rng);
+                    let value = key;
                     map.insert(&mut handle, key, value);
                 }
             }
             PrefillStrategy::Decreasing => {
                 let mut keys = Vec::with_capacity(config.prefill);
                 for _ in 0..config.prefill {
-                    keys.push(generate_key(config, rng));
+                    keys.push(config.key_dist.sample(rng));
                 }
                 keys.sort_by(|a, b| b.cmp(a));
                 for key in keys.drain(..) {
-                    let value = key.to_string();
+                    let value = key;
                     map.insert(&mut handle, key, value);
                 }
             }
@@ -406,7 +398,7 @@ impl PrefillStrategy {
 
     fn prefill_cdrc<
         Guard: cdrc_rs::AcquireRetire,
-        M: cdrc::ConcurrentMap<String, String, Guard> + Send + Sync,
+        M: cdrc::ConcurrentMap<usize, usize, Guard> + Send + Sync,
     >(
         self,
         config: &Config,
@@ -417,19 +409,19 @@ impl PrefillStrategy {
         match self {
             PrefillStrategy::Random => {
                 for _ in 0..config.prefill {
-                    let key = generate_key(config, rng);
-                    let value = key.to_string();
+                    let key = config.key_dist.sample(rng);
+                    let value = key;
                     map.insert(key, value, guard);
                 }
             }
             PrefillStrategy::Decreasing => {
                 let mut keys = Vec::with_capacity(config.prefill);
                 for _ in 0..config.prefill {
-                    keys.push(generate_key(config, rng));
+                    keys.push(config.key_dist.sample(rng));
                 }
                 keys.sort_by(|a, b| b.cmp(a));
                 for key in keys.drain(..) {
-                    let value = key.to_string();
+                    let value = key;
                     map.insert(key, value, guard);
                 }
             }
@@ -438,7 +430,7 @@ impl PrefillStrategy {
         stdout().flush().unwrap();
     }
 
-    fn prefill_hp_sharp<M: hp_sharp_bench::ConcurrentMap<String, String> + Send + Sync>(
+    fn prefill_hp_sharp<M: hp_sharp_bench::ConcurrentMap<usize, usize> + Send + Sync>(
         self,
         config: &Config,
         map: &M,
@@ -450,19 +442,19 @@ impl PrefillStrategy {
             match self {
                 PrefillStrategy::Random => {
                     for _ in 0..config.prefill {
-                        let key = generate_key(config, rng);
-                        let value = key.to_string();
+                        let key = config.key_dist.sample(rng);
+                        let value = key;
                         map.insert(key, value, output, handle);
                     }
                 }
                 PrefillStrategy::Decreasing => {
                     let mut keys = Vec::with_capacity(config.prefill);
                     for _ in 0..config.prefill {
-                        keys.push(generate_key(config, rng));
+                        keys.push(config.key_dist.sample(rng));
                     }
                     keys.sort_by(|a, b| b.cmp(a));
                     for key in keys.drain(..) {
-                        let value = key.to_string();
+                        let value = key;
                         map.insert(key, value, output, handle);
                     }
                 }
@@ -472,7 +464,7 @@ impl PrefillStrategy {
         });
     }
 
-    fn prefill_nbr<M: nbr::ConcurrentMap<String, String> + Send + Sync>(
+    fn prefill_nbr<M: nbr::ConcurrentMap<usize, usize> + Send + Sync>(
         self,
         config: &Config,
         map: &M,
@@ -485,19 +477,19 @@ impl PrefillStrategy {
         match self {
             PrefillStrategy::Random => {
                 for _ in 0..config.prefill {
-                    let key = generate_key(config, rng);
-                    let value = key.to_string();
+                    let key = config.key_dist.sample(rng);
+                    let value = key;
                     map.insert(key, value, &mut handle, &guard);
                 }
             }
             PrefillStrategy::Decreasing => {
                 let mut keys = Vec::with_capacity(config.prefill);
                 for _ in 0..config.prefill {
-                    keys.push(generate_key(config, rng));
+                    keys.push(config.key_dist.sample(rng));
                 }
                 keys.sort_by(|a, b| b.cmp(a));
                 for key in keys.drain(..) {
-                    let value = key.to_string();
+                    let value = key;
                     map.insert(key, value, &mut handle, &guard);
                 }
             }
@@ -616,7 +608,7 @@ fn bench_map_nr(config: &Config, strategy: PrefillStrategy) -> (u64, usize, usiz
                 let start = Instant::now();
 
                 while start.elapsed() < config.duration {
-                    let key = generate_key(config, rng);
+                    let key = config.key_dist.sample(rng);
                     let _ = map.get(&key, unsafe { crossbeam_ebr::leaking() });
                     ops += 1;
                 }
@@ -736,7 +728,7 @@ fn bench_map_ebr<N: Unsigned>(
 
                 let mut guard = handle.pin();
                 while start.elapsed() < config.duration {
-                    let key = generate_key(config, rng);
+                    let key = config.key_dist.sample(rng);
                     let _ = map.get(&key, &guard);
                     ops += 1;
                     if ops % N::to_u64() == 0 {
@@ -862,7 +854,7 @@ fn bench_map_pebr<N: Unsigned>(
 
                 let mut guard = handle.pin();
                 while start.elapsed() < config.duration {
-                    let key = generate_key(config, rng);
+                    let key = config.key_dist.sample(rng);
                     let _ = map.get(&mut map_handle, &key, &mut guard);
                     ops += 1;
                     if ops % N::to_u64() == 0 {
@@ -946,7 +938,7 @@ fn bench_map_hp(config: &Config, strategy: PrefillStrategy) -> (u64, usize, usiz
         // Spawn writer threads.
         for _ in 0..config.writers {
             s.spawn(move |_| {
-                let mut map_handle = hp::HMList::<String, String>::handle();
+                let mut map_handle = hp::HMList::<usize, usize>::handle();
                 barrier.clone().wait();
                 let start = Instant::now();
 
@@ -968,12 +960,12 @@ fn bench_map_hp(config: &Config, strategy: PrefillStrategy) -> (u64, usize, usiz
             s.spawn(move |_| {
                 let mut ops: u64 = 0;
                 let rng = &mut rand::thread_rng();
-                let mut map_handle = hp::HMList::<String, String>::handle();
+                let mut map_handle = hp::HMList::<usize, usize>::handle();
                 barrier.clone().wait();
                 let start = Instant::now();
 
                 while start.elapsed() < config.duration {
-                    let key = generate_key(config, rng);
+                    let key = config.key_dist.sample(rng);
                     let _ = map.get(&mut map_handle, &key);
                     ops += 1;
                 }
@@ -1056,7 +1048,7 @@ fn bench_map_hp_pp(
         // Spawn writer threads.
         for _ in 0..config.writers {
             s.spawn(move |_| {
-                let mut map_handle = hp_pp::HHSList::<String, String>::handle();
+                let mut map_handle = hp_pp::HHSList::<usize, usize>::handle();
                 barrier.clone().wait();
                 let start = Instant::now();
 
@@ -1078,12 +1070,12 @@ fn bench_map_hp_pp(
             s.spawn(move |_| {
                 let mut ops: u64 = 0;
                 let rng = &mut rand::thread_rng();
-                let mut map_handle = hp_pp::HHSList::<String, String>::handle();
+                let mut map_handle = hp_pp::HHSList::<usize, usize>::handle();
                 barrier.clone().wait();
                 let start = Instant::now();
 
                 while start.elapsed() < config.duration {
-                    let key = generate_key(config, rng);
+                    let key = config.key_dist.sample(rng);
                     let _ = map.get(&mut map_handle, &key);
                     ops += 1;
                 }
@@ -1198,7 +1190,7 @@ fn bench_map_cdrc<Guard: cdrc_rs::AcquireRetire, N: Unsigned>(
 
                 let mut guard = Guard::handle();
                 while start.elapsed() < config.duration {
-                    let key = generate_key(config, rng);
+                    let key = config.key_dist.sample(rng);
                     let _ = map.get(&key, &guard);
                     ops += 1;
                     if ops % N::to_u64() == 0 {
@@ -1288,20 +1280,14 @@ fn bench_map_hp_sharp(
             s.spawn(move |_| {
                 hp_sharp::THREAD.with(|handle| {
                     let handle = &mut **handle.borrow_mut();
-                    let output =
-                        &mut hp_sharp_bench::HHSList::<String, String>::empty_output(handle);
+                    let output = &mut hp_sharp_bench::HHSList::<usize, usize>::empty_output(handle);
                     barrier.clone().wait();
                     let start = Instant::now();
 
-                    let mut acquired: Option<String> = None;
+                    let mut acquired: Option<usize> = None;
                     while start.elapsed() < config.duration {
                         if let Some(value) = acquired.take() {
-                            assert!(map.insert(
-                                format!("{:0width$}", value, width = config.key_padding_width),
-                                value,
-                                output,
-                                handle
-                            ))
+                            assert!(map.insert(value, value, output, handle))
                         } else {
                             assert!(map.pop(output, handle));
                             acquired = Some(output.output().clone());
@@ -1317,15 +1303,14 @@ fn bench_map_hp_sharp(
             s.spawn(move |_| {
                 hp_sharp::THREAD.with(|handle| {
                     let handle = &mut **handle.borrow_mut();
-                    let output =
-                        &mut hp_sharp_bench::HHSList::<String, String>::empty_output(handle);
+                    let output = &mut hp_sharp_bench::HHSList::<usize, usize>::empty_output(handle);
                     let mut ops: u64 = 0;
                     let rng = &mut rand::thread_rng();
                     barrier.clone().wait();
                     let start = Instant::now();
 
                     while start.elapsed() < config.duration {
-                        let key = generate_key(config, rng);
+                        let key = config.key_dist.sample(rng);
                         let _ = map.get(&key, output, handle);
                         ops += 1;
                     }
@@ -1412,20 +1397,14 @@ fn bench_map_cdrc_hp_sharp(
             s.spawn(move |_| {
                 hp_sharp::THREAD.with(|handle| {
                     let handle = &mut **handle.borrow_mut();
-                    let output =
-                        &mut cdrc_hp_sharp::HHSList::<String, String>::empty_output(handle);
+                    let output = &mut cdrc_hp_sharp::HHSList::<usize, usize>::empty_output(handle);
                     barrier.clone().wait();
                     let start = Instant::now();
 
-                    let mut acquired: Option<String> = None;
+                    let mut acquired: Option<usize> = None;
                     while start.elapsed() < config.duration {
                         if let Some(value) = acquired.take() {
-                            assert!(map.insert(
-                                format!("{:0width$}", value, width = config.key_padding_width),
-                                value,
-                                output,
-                                handle
-                            ))
+                            assert!(map.insert(value, value, output, handle))
                         } else {
                             assert!(map.pop(output, handle));
                             acquired = Some(output.output().clone());
@@ -1441,15 +1420,14 @@ fn bench_map_cdrc_hp_sharp(
             s.spawn(move |_| {
                 hp_sharp::THREAD.with(|handle| {
                     let handle = &mut **handle.borrow_mut();
-                    let output =
-                        &mut cdrc_hp_sharp::HHSList::<String, String>::empty_output(handle);
+                    let output = &mut cdrc_hp_sharp::HHSList::<usize, usize>::empty_output(handle);
                     let mut ops: u64 = 0;
                     let rng = &mut rand::thread_rng();
                     barrier.clone().wait();
                     let start = Instant::now();
 
                     while start.elapsed() < config.duration {
-                        let key = generate_key(config, rng);
+                        let key = config.key_dist.sample(rng);
                         let _ = map.get(&key, output, handle);
                         ops += 1;
                     }
@@ -1542,7 +1520,7 @@ fn bench_map_nbr(
         for _ in 0..config.writers {
             s.spawn(move |_| {
                 let mut guard = collector.register();
-                let mut handle = nbr::HHSList::<String, String>::handle(&mut guard);
+                let mut handle = nbr::HHSList::<usize, usize>::handle(&mut guard);
                 barrier.clone().wait();
                 let start = Instant::now();
 
@@ -1563,14 +1541,14 @@ fn bench_map_nbr(
             let ops_sender = ops_sender.clone();
             s.spawn(move |_| {
                 let mut guard = collector.register();
-                let mut handle = nbr::HHSList::<String, String>::handle(&mut guard);
+                let mut handle = nbr::HHSList::<usize, usize>::handle(&mut guard);
                 let mut ops: u64 = 0;
                 let rng = &mut rand::thread_rng();
                 barrier.clone().wait();
                 let start = Instant::now();
 
                 while start.elapsed() < config.duration {
-                    let key = generate_key(config, rng);
+                    let key = config.key_dist.sample(rng);
                     let _ = map.get(&key, &mut handle, &guard);
                     ops += 1;
                 }
