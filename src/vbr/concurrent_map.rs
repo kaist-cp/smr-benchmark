@@ -21,7 +21,7 @@ pub mod tests {
     const ELEMENTS_PER_THREADS: i32 = 1000;
 
     pub fn smoke<M: ConcurrentMap<i32, i32> + Send + Sync>() {
-        let global = &M::global(30 * 1000);
+        let global = &M::global((THREADS * ELEMENTS_PER_THREADS) as _);
         let local = &M::local(global);
         let map = &M::new(local);
 

@@ -71,13 +71,28 @@ where
         let node = unsafe { ptr.deref() };
         let height = node.height.get(guard)?;
 
-        // "Marking the top layer successfully" is a linearizable point for VBR SkipList.
-        if !node.next[height - 1].inject_tag(ptr, 1) {
-            return Err(());
-        }
-
-        for level in (0..height - 1).rev() {
-            while !node.next[level].inject_tag(ptr, 1) {}
+        for level in (0..height).rev() {
+            loop {
+                let next = node.next[level].load(Ordering::Acquire, guard)?;
+                if next.tag()? != 0 {
+                    break;
+                }
+                let result = node.next[level].compare_exchange(
+                    ptr,
+                    next,
+                    next.with_tag(1),
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                    guard,
+                );
+                if level == 0 && result.is_err() {
+                    return Ok(false);
+                } else if result.is_err() {
+                    return Err(());
+                } else {
+                    break;
+                }
+            }
         }
         Ok(true)
     }
@@ -395,15 +410,15 @@ where
 
             // Try removing the node by marking its tower.
             let marked = ok_or!(Node::mark_tower(node, guard), return None);
-            if !marked {
-                continue;
-            }
-            loop {
-                guard.refresh();
-                if self.find(key, guard).is_ok() {
-                    return Some(value);
+            if marked {
+                loop {
+                    guard.refresh();
+                    if self.find(key, guard).is_ok() {
+                        break;
+                    }
                 }
             }
+            return Some(value);
         }
     }
 }
@@ -417,7 +432,7 @@ where
     type Local = Local<Node<K, V>>;
 
     fn global(key_range_hint: usize) -> Self::Global {
-        Global::new(key_range_hint * 100)
+        Global::new(key_range_hint * 2)
     }
 
     fn local(global: &Self::Global) -> Self::Local {

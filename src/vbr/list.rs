@@ -287,7 +287,18 @@ where
             if tag == 1 {
                 continue;
             }
-            if !curr_node.next.inject_tag(cursor.curr, 1) {
+            if curr_node
+                .next
+                .compare_exchange(
+                    cursor.curr,
+                    next,
+                    next.with_tag(1),
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
+                    guard,
+                )
+                .is_err()
+            {
                 continue;
             }
 
@@ -337,7 +348,18 @@ where
             if tag == 1 {
                 continue;
             }
-            if !curr_node.next.inject_tag(cursor.curr, 1) {
+            if curr_node
+                .next
+                .compare_exchange(
+                    cursor.curr,
+                    next,
+                    next.with_tag(1),
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
+                    guard,
+                )
+                .is_err()
+            {
                 continue;
             }
             unsafe {
@@ -432,15 +454,15 @@ where
         }
     }
 
-    #[inline(always)]
+    #[inline]
     fn get<'g>(&'g self, key: &K, local: &Self::Local) -> Option<V> {
         self.inner.harris_get(key, local)
     }
-    #[inline(always)]
+    #[inline]
     fn insert(&self, key: K, value: V, local: &Self::Local) -> bool {
         self.inner.harris_insert(key, value, local)
     }
-    #[inline(always)]
+    #[inline]
     fn remove<'g>(&'g self, key: &K, local: &Self::Local) -> Option<V> {
         self.inner.harris_remove(key, local)
     }
@@ -476,15 +498,15 @@ where
         }
     }
 
-    #[inline(always)]
+    #[inline]
     fn get<'g>(&'g self, key: &K, local: &Self::Local) -> Option<V> {
         self.inner.harris_michael_get(key, local)
     }
-    #[inline(always)]
+    #[inline]
     fn insert(&self, key: K, value: V, local: &Self::Local) -> bool {
         self.inner.harris_michael_insert(key, value, local)
     }
-    #[inline(always)]
+    #[inline]
     fn remove<'g>(&'g self, key: &K, local: &Self::Local) -> Option<V> {
         self.inner.harris_michael_remove(key, local)
     }
@@ -532,15 +554,15 @@ where
         }
     }
 
-    #[inline(always)]
+    #[inline]
     fn get<'g>(&'g self, key: &K, local: &Self::Local) -> Option<V> {
         self.inner.harris_herlihy_shavit_get(key, local)
     }
-    #[inline(always)]
+    #[inline]
     fn insert(&self, key: K, value: V, local: &Self::Local) -> bool {
         self.inner.harris_insert(key, value, local)
     }
-    #[inline(always)]
+    #[inline]
     fn remove<'g>(&'g self, key: &K, local: &Self::Local) -> Option<V> {
         self.inner.harris_remove(key, local)
     }

@@ -12,8 +12,8 @@ use atomic::{Atomic, Ordering};
 use crossbeam_utils::CachePadded;
 use portable_atomic::{compiler_fence, AtomicU128};
 
-pub const ENTRIES_PER_BAG: usize = 64;
-pub const INIT_BAGS_PER_LOCAL: usize = 16;
+pub const ENTRIES_PER_BAG: usize = 128;
+pub const INIT_BAGS_PER_LOCAL: usize = 32;
 pub const NOT_RETIRED: u64 = u64::MAX;
 
 pub struct Ver<T> {
@@ -445,15 +445,16 @@ impl<T> VerAtomic<T> {
         success: Ordering,
         failure: Ordering,
         _: &Guard<T>,
-    ) -> Result<*mut Ver<T>, *mut Ver<T>> {
+    ) -> Result<(u64, *mut Ver<T>), (u64, *mut Ver<T>)> {
         let curr = compose_u128(owner.birth.max(current.birth), current.as_raw());
         let next = compose_u128(owner.birth.max(new.birth), new.as_raw());
         self.link
             .compare_exchange(curr, next, success, failure)
-            .map(|comp| decompose_u128(comp).1)
-            .map_err(|comp| decompose_u128(comp).1)
+            .map(|comp| decompose_u128(comp))
+            .map_err(|comp| decompose_u128(comp))
     }
 
+    #[deprecated]
     pub fn inject_tag(&self, owner: Shared<T>, tag: usize) -> bool {
         let prev = unsafe { self.load_unchecked(Ordering::Acquire) };
         let prev_tag = decompose_ptr(prev.ptr).1;
