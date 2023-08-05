@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 echo "======================================================================="
 echo "1. Throughputs & unreclaimed memory blocks on varying ratio of writes"
 echo "======================================================================="
