@@ -1,7 +1,7 @@
 import subprocess
 import os
 
-RESULTS_PATH = "bench-scripts/hp-sharp/results"
+RESULTS_PATH = "results"
 
 mms = ['nr', 'ebr', 'pebr', 'hp', 'hp-pp', 'nbr', 'nbr-large', 'cdrc-ebr', 'hp-sharp', 'cdrc-hp-sharp', 'vbr']
 

@@ -6,7 +6,7 @@ import os
 import matplotlib
 import math
 
-RESULTS_PATH = "bench-scripts/hp-sharp/results"
+RESULTS_PATH = "results"
 
 warnings.filterwarnings("ignore")
 pd.set_option('display.max_rows', None)

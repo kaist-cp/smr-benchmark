@@ -1,9 +1,4 @@
-# `smr-benchmark`: A microbenchmark suite for concurrent memory reclamation schemes
-
-This is the artifact for
-
-* Jaehwang Jung, Janggun Lee, Jeonghyeon Kim and Jeehoon Kang, Applying Hazard Pointers to More Concurrent Data Structures, SPAA 2023.
-* Jeehoon Kang and Jaehwang Jung, A Marriage of Pointer- and Epoch-Based Reclamation, PLDI 2020.
+# A microbenchmark suite for concurrent memory reclamation schemes
 
 ## Summary
 On Ubuntu 22.04,
@@ -13,12 +8,8 @@ sudo apt install build-essential python3-pip clang
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh  # You may need to reload the shell after finishing this to use 'cargo'
 pip3 install --user pandas plotnine
 
-python3 bench.py
-python3 bench-long-running.py
-python3 plot.py
-python3 plot-hhslist-hmlist.py
-python3 plot-nmtree-efrbtree.py
-python3 plot-long-running.py
+# Conducts all experiments and produces raw CSVs and plots in `./results`
+./experiment.sh
 ```
 
 ## Dependencies
@@ -55,22 +46,25 @@ To run a single test,
 where
 
 * Data structure
-  * `HList`: Harris's linked list [1]
-  * `HMList`: Harris-Michael linked list [2]
-  * `HHSList`: Harris’s list [1] with wait-free get() method (HP not applicable) [3]
-  * `HashMap`: Chaining hash table using HMList (for HP) or HHSList (for others) for each bucket [2]
-  * `NMTree`: Natarajan- Mittal tree (HP not applicable) [4]
-  * `BonsaiTree`: A non-blocking variant of Bonsai tree [5]
-  * `SkipList`: lock-free skiplist by Herlihy and Shavit, with wait-free get() for schemes other than HP [3]
-  * `EFRBTree`: Ellen et al. ’s tree [6]
+  * `h-list`: Harris's linked list [1]
+  * `hm-list`: Harris-Michael linked list [2]
+  * `hhs-list`: Harris’s list [1] with wait-free get() method (HP not applicable) [3]
+  * `hash-map`: Chaining hash table using HMList (for HP) or HHSList (for others) for each bucket [2]
+  * `nm-tree`: Natarajan- Mittal tree (HP not applicable) [4]
+  * `bonsai-tree`: A non-blocking variant of Bonsai tree [5]
+  * `skip-list`: lock-free skiplist by Herlihy and Shavit, with wait-free get() for schemes other than HP [3]
 * Reclamation scheme
-  * `NR`: A baseline that does not reclaim memory
-  * `EBR`: Epoch-based RCU [7][8]
-  * `PEBR`: Pointer- and epoch-based reclamation [9]
-  * `HP`: Hazard pointer with asymmetric fence optimization [10][11]
-  * `HP_PP`: An extension to hazard pointers that supports optimistic traversal [12]
-  * `CDRC_EBR`: EBR flavor of CDRC [13]
-  * `NBR`: Neutralization based reclamation with signal optimization (NBR+) [14]
+  * `nr`: A baseline that does not reclaim memory
+  * `ebr`: Epoch-based RCU [7][8]
+  * `pebr`: Pointer- and epoch-based reclamation [9]
+  * `hp`: Hazard pointer with asymmetric fence optimization [10][11]
+  * `hp-pp`: An extension to hazard pointers that supports optimistic traversal [12]
+  * `cdrc-ebr`: EBR flavor of CDRC [13]
+  * `nbr`: Neutralization based reclamation with signal optimization (NBR+) with a moderate reclamation threshold (256) [14]
+  * `nbr-large`: NBR+ with a large reclamation threshold (8192)
+  * `hp-sharp`: An extension of HP scheme with signal-based rollback that overcomes the above limitations
+  * `cdrc-hp-sharp`: HP# flavor of CDRC [13]
+  * `vbr`: Version-based reclamation scheme by Sheffi et al. [15]
 
 For detailed usage information,
 
@@ -81,64 +75,31 @@ For detailed usage information,
 To run the entire benchmark,
 
 ```
-python3 bench.py                # General throughput benchmarks
-python3 bench-long-running.py   # Throughput of long-running read operations
+# Conducts all experiments and produces raw CSVs and plots in `./results`
+./experiment.sh
 ```
 
-This takes several hours and creates raw CSV data under `./results/`.
-
-To generate plots,
-
-```
-python3 plot.py                   # General throughput plots
-python3 plot-hhslist-hmlist.py    # HHSList with HP++ vs. HMList with HP
-python3 plot-nmtree-efrbtree.py   # NMTree with HP++ vs. EFRBTree with HP
-python3 plot-long-running.py      # Throughput of long-running read operations
-```
-
-This creates plots presented in the paper under `./results/`.
+This takes several hours and creates raw CSV data and plots under `./results/`.
 
 
 ## Debug
 
-We used `./sanitize.sh` to debug our implementation. This script runs the
-benchmark with [LLVM address sanitizer for
-Rust](https://github.com/japaric/rust-san) and uses parameters that impose high
-stress on PEBR by triggering more frequent ejection.
-
-Note that sanitizer may report memory leaks when used against `-m EBR`.
-This is because of a minor bug in original Crossbeam but it doesn't affect performance of our benchmark.
+We used `./sanitize.sh` to debug our implementation. This script runs the benchmark with [LLVM address sanitizer for Rust](https://github.com/japaric/rust-san) and uses parameters that impose high stress on HP# by triggering more frequent global epoch advancements.
 
 
 ## Project structure
 
+* `./cdrc-rs` is an implementation of CDRC EBR which exploit the Crossbeam's EBR implementation.
+* `./crossbeam-ebr` is the original Crossbeam source code.
 * `./crossbeam-pebr` is the fork of
   [Crossbeam](https://github.com/crossbeam-rs/crossbeam) that implements PEBR.
   The main implementation of PEBR lies under
   `./crossbeam-pebr/crossbeam-epoch`.
-
-* `./crossbeam-ebr` is the original Crossbeam source code.
-
 * `./hp_pp` is an implementation of the original HP and our HP++.
-
+* `./hp-sharp` is our implementation of HP# scheme and HP# flavor of CDRC.
 * `./nbr-rs` is an implementation of NBR+ with signal optimizing.
-
-* `./cdrc-rs` is an implementation of CDRC with Crossbeam EBR.
-
 * `./src` contains the benchmark driver (`./src/main.rs`) and the
   implementation of data structures based on each SMR.
-  
-  * PEBR (`./src/pebr/`)
-
-  * EBR with original Crossbeam (`./src/ebr/`).
-
-  * HP (`./src/hp/`)
-
-  * HP++ (`./src/hp_pp/`)
-
-  * NBR (`./src/nbr`)
-
-  * CDRC (`./src/cdrc`)
 
 
 ## Note
@@ -146,7 +107,7 @@ This is because of a minor bug in original Crossbeam but it doesn't affect perfo
   jemalloc since [the Rust library for
   jemalloc](https://crates.io/crates/jemallocator) does not support Windows.
 
-* The benchmark run by `./sanitize.sh` will generate inaccurate memory usage
+* The benchmark run by `./sanitize.sh` will not generate memory usage
   report since it uses the default memory allocator instead of jemalloc. The
   memory tracker relies on jemalloc's functionalities which doesn't keep track
   of allocations by the default allocator.
@@ -172,3 +133,4 @@ Lists. In Proceedings of the 15th International Conference on Distributed Comput
 * [12] Jaehwang Jung, Janggun Lee, Jeonghyeon Kim and Jeehoon Kang, Applying Hazard Pointers to More Concurrent Data Structures, SPAA 2023.
 * [13] Daniel Anderson, Guy E. Blelloch, and Yuanhao Wei. 2022. Turning Man- ual Concurrent Memory Reclamation into Automatic Reference Counting. In Proceedings of the 43rd ACM SIGPLAN International Conference on Program- ming Language Design and Implementation (San Diego, CA, USA) (PLDI 2022). Association for Computing Machinery, New York, NY, USA, 61–75. https: //doi.org/10.1145/3519939.3523730
 * [14] Ajay Singh, Trevor Brown, and Ali Mashtizadeh. 2021. NBR: Neutralization Based Reclamation. In Proceedings of the 26th ACM SIGPLAN Symposium on Principles and Practice of Parallel Programming (Virtual Event, Republic of Korea) (PPoPP ’21). Association for Computing Machinery, New York, NY, USA, 175–190. https://doi.org/10.1145/3437801.3441625
+* [15] Gali Sheffi, Maurice Herlihy, and Erez Petrank. 2021. VBR: Version Based Reclamation. In Proceedings of the 33rd ACM Symposium on Parallelism in Algorithms and Architectures (Virtual Event, USA) (SPAA ’21). Association for Computing Machinery, New York, NY, USA, 443–445. https://doi.org/10.1145/3409964.3461817

@@ -30,10 +30,14 @@ NR = "nr"
 HP = "hp"
 HP_PP = "hp-pp"
 NBR = "nbr"
+NBR_LARGE = "nbr-large"
 CDRC_EBR = "cdrc-ebr"
 HP_SHARP = "hp-sharp"
+CDRC_HP_SHARP = "cdrc-hp-sharp"
+VBR = "vbr"
 
-SMR_ONLYs = [NR, EBR, HP, HP_PP, PEBR, CDRC_EBR, NBR, HP_SHARP]
+
+SMR_ONLYs = [NR, EBR, HP, HP_PP, PEBR, CDRC_EBR, NBR, HP_SHARP, CDRC_HP_SHARP, VBR, NBR_LARGE]
 
 # https://matplotlib.org/stable/api/markers_api.html
 line_shapes = {
@@ -44,7 +48,10 @@ line_shapes = {
     PEBR: "x",
     CDRC_EBR: "1",
     NBR: "p",
+    NBR_LARGE: "H",
     HP_SHARP: "s",
+    CDRC_HP_SHARP: "P",
+    VBR: "*",
 }
 
 line_colors = {
@@ -55,7 +62,10 @@ line_colors = {
     PEBR: "y",
     CDRC_EBR: "green",
     NBR: "blue",
+    NBR_LARGE: "indigo",
     HP_SHARP: "r",
+    CDRC_HP_SHARP: "brown",
+    VBR: "orange",
 }
 
 line_types = {
@@ -64,12 +74,15 @@ line_types = {
     HP: 'dashed',
     HP_PP: 'dashdot',
     PEBR: (5, (10, 3)),
-    CDRC_EBR: (0, (3, 1, 1, 1, 1, 1)),
+    CDRC_EBR: (0, (3, 1)),
     NBR: (5, (10, 3)),
+    NBR_LARGE: (5, (10, 3)),
     HP_SHARP: (0, (3, 1, 1, 1)),
+    CDRC_HP_SHARP: (0, (3, 1, 1, 1)),
+    VBR: (0, (2, 1)),
 }
 
-krs = [(2 ** e) for e in range(18, 27, 1)]
+krs = [(2 ** e) for e in range(18, 30, 1)]
 
 # line_name: SMR, SMR_I
 def draw(title, name, data, line_name, y_value, y_label=None, y_max=None, legend=False):
@@ -114,7 +127,7 @@ def draw_throughput(data):
     y_label = 'Throughput ratio to NR'
     legend = False
     y_max = data.throughput.max() * 1.05
-    draw("", f'{RESULTS_PATH}/throughput.pdf',
+    draw("", f'{RESULTS_PATH}/long-running.pdf',
          data, SMR_ONLY, THROUGHPUT, y_label, y_max, legend)
 
 
