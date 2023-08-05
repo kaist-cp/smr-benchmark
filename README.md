@@ -97,6 +97,7 @@ We used `./sanitize.sh` to debug our implementation. This script runs the benchm
 * `./hp_pp` is an implementation of the original HP and our HP++.
 * `./hp-sharp` is our implementation of HP# scheme and HP# flavor of CDRC.
 * `./nbr-rs` is an implementation of NBR+ with signal optimizing.
+* `./vbr-rs` is an implementation of Version Based Reclamation.
 * `./src` contains the benchmark driver (`./src/main.rs`) and the
   implementation of data structures based on each SMR.
 
