@@ -4,7 +4,7 @@ use atomic::{fence, Ordering};
 use nix::errno::Errno;
 use std::mem;
 
-use crate::{set_data, Bag, Epoch, Global, SealedBag, Thread, BAGS_WIDTH, Local};
+use crate::{set_data, Bag, Epoch, Global, Local, SealedBag, Thread, BAGS_WIDTH};
 
 use super::rollback;
 
