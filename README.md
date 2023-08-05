@@ -51,7 +51,6 @@ where
   * `hhs-list`: Harris’s list [1] with wait-free get() method (HP not applicable) [3]
   * `hash-map`: Chaining hash table using HMList (for HP) or HHSList (for others) for each bucket [2]
   * `nm-tree`: Natarajan- Mittal tree (HP not applicable) [4]
-  * `bonsai-tree`: A non-blocking variant of Bonsai tree [5]
   * `skip-list`: lock-free skiplist by Herlihy and Shavit, with wait-free get() for schemes other than HP [3]
 * Reclamation scheme
   * `nr`: A baseline that does not reclaim memory
