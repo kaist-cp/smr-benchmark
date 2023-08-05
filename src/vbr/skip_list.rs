@@ -345,7 +345,9 @@ where
                 let next = match new_node_ref.next[level].load(Ordering::SeqCst, guard) {
                     Ok(next) => next,
                     Err(_) => {
-                        new_node_ref.refs.fetch_sub(height - level, Ordering::SeqCst);
+                        new_node_ref
+                            .refs
+                            .fetch_sub(height - level, Ordering::SeqCst);
                         break 'build;
                     }
                 };
@@ -355,13 +357,17 @@ where
                 // building the tower.
                 let next_tag = match next.tag() {
                     Ok(tag) => tag,
-                    Err(_) =>  {
-                        new_node_ref.refs.fetch_sub(height - level, Ordering::SeqCst);
+                    Err(_) => {
+                        new_node_ref
+                            .refs
+                            .fetch_sub(height - level, Ordering::SeqCst);
                         break 'build;
                     }
                 };
                 if (next_tag & 1) != 0 {
-                    new_node_ref.refs.fetch_sub(height - level, Ordering::SeqCst);
+                    new_node_ref
+                        .refs
+                        .fetch_sub(height - level, Ordering::SeqCst);
                     break 'build;
                 }
 
@@ -376,7 +382,9 @@ where
                     )
                     .is_err()
                 {
-                    new_node_ref.refs.fetch_sub(height - level, Ordering::SeqCst);
+                    new_node_ref
+                        .refs
+                        .fetch_sub(height - level, Ordering::SeqCst);
                     break 'build;
                 }
 
@@ -397,7 +405,9 @@ where
                 }
 
                 // Installation failed.
-                new_node_ref.refs.fetch_sub(height - level, Ordering::SeqCst);
+                new_node_ref
+                    .refs
+                    .fetch_sub(height - level, Ordering::SeqCst);
                 break 'build;
             }
         }
