@@ -32,6 +32,11 @@ const NBR_CAP: NBRConfig = NBRConfig {
     lowatermark: 32,
 };
 
+const NBR_LARGE_CAP: NBRConfig = NBRConfig {
+    bag_cap_pow2: 8192,
+    lowatermark: 1024,
+};
+
 struct NBRConfig {
     bag_cap_pow2: usize,
     lowatermark: usize,
@@ -49,6 +54,7 @@ pub enum MM {
     HP_SHARP,
     CDRC_HP_SHARP,
     NBR,
+    NBR_LARGE,
     VBR,
 }
 
@@ -267,7 +273,8 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
         MM::CDRC_EBR => bench_map_cdrc::<cdrc_rs::GuardEBR, N>(config, PrefillStrategy::Decreasing),
         MM::HP_SHARP => bench_map_hp_sharp(config, PrefillStrategy::Decreasing),
         MM::CDRC_HP_SHARP => bench_map_cdrc_hp_sharp(config, PrefillStrategy::Decreasing),
-        MM::NBR => bench_map_nbr(config, PrefillStrategy::Decreasing, 2),
+        MM::NBR => bench_map_nbr(config, PrefillStrategy::Decreasing, &NBR_CAP, 2),
+        MM::NBR_LARGE => bench_map_nbr(config, PrefillStrategy::Decreasing, &NBR_LARGE_CAP, 2),
         MM::VBR => bench_map_vbr(config, PrefillStrategy::Decreasing),
     };
     output
@@ -1453,6 +1460,7 @@ fn bench_map_cdrc_hp_sharp(
 fn bench_map_nbr(
     config: &Config,
     strategy: PrefillStrategy,
+    nbr_config: &NBRConfig,
     max_hazptrs: usize,
 ) -> (u64, usize, usize, usize, usize) {
     use nbr::ConcurrentMap;
@@ -1461,8 +1469,8 @@ fn bench_map_nbr(
 
     let collector = &nbr_rs::Collector::new(
         config.writers + config.readers,
-        NBR_CAP.bag_cap_pow2,
-        NBR_CAP.lowatermark,
+        nbr_config.bag_cap_pow2,
+        nbr_config.lowatermark,
         max_hazptrs,
     );
 

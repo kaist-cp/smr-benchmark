@@ -37,6 +37,11 @@ const NBR_CAP: NBRConfig = NBRConfig {
     lowatermark: 32,
 };
 
+const NBR_LARGE_CAP: NBRConfig = NBRConfig {
+    bag_cap_pow2: 8192,
+    lowatermark: 1024,
+};
+
 struct NBRConfig {
     bag_cap_pow2: usize,
     lowatermark: usize,
@@ -63,6 +68,7 @@ pub enum MM {
     HP,
     HP_PP,
     NBR,
+    NBR_LARGE,
     CDRC_EBR,
     HP_SHARP,
     CDRC_HP_SHARP,
@@ -500,6 +506,33 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 config,
                 PrefillStrategy::Random,
                 &NBR_CAP,
+                4,
+            ),
+            _ => panic!("Unsupported(or unimplemented) data structure for NBR"),
+        },
+        MM::NBR_LARGE => match config.ds {
+            DS::HList => bench_map_nbr::<nbr::HList<usize, usize>>(
+                config,
+                PrefillStrategy::Decreasing,
+                &NBR_LARGE_CAP,
+                2,
+            ),
+            DS::HHSList => bench_map_nbr::<nbr::HHSList<usize, usize>>(
+                config,
+                PrefillStrategy::Decreasing,
+                &NBR_LARGE_CAP,
+                2,
+            ),
+            DS::HashMap => bench_map_nbr::<nbr::HashMap<usize, usize>>(
+                config,
+                PrefillStrategy::Decreasing,
+                &NBR_LARGE_CAP,
+                2,
+            ),
+            DS::NMTree => bench_map_nbr::<nbr::NMTreeMap<usize, usize>>(
+                config,
+                PrefillStrategy::Random,
+                &NBR_LARGE_CAP,
                 4,
             ),
             _ => panic!("Unsupported(or unimplemented) data structure for NBR"),
