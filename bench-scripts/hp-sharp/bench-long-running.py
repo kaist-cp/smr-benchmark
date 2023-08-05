@@ -3,13 +3,13 @@ import os
 
 RESULTS_PATH = "bench-scripts/hp-sharp/results"
 
-mms = ['nr', 'ebr', 'pebr', 'hp', 'hp-pp', 'nbr', 'cdrc-ebr', 'hp-sharp']
+mms = ['nr', 'ebr', 'pebr', 'hp', 'hp-pp', 'nbr', 'nbr-large', 'cdrc-ebr', 'hp-sharp', 'cdrc-hp-sharp', 'vbr']
 
-krs = [(2 ** e) for e in range(18, 27, 1)]
+krs = [(2 ** e) for e in range(18, 30, 1)]
 cpu_count = os.cpu_count()
 writers = cpu_count // 2
 readers = cpu_count // 2
-runs = 10
+runs = 1
 i = 10
 
 if os.path.exists('.git'):
@@ -33,8 +33,8 @@ for run in range(runs):
     for i, cmd in enumerate(cmds):
         print("run {}/{}, bench {}/{}: '{}'".format(run + 1, runs, i + 1, len(cmds), ' '.join(cmd)))
         try:
-            # NOTE(`timeout=60`): prefilling may take a while...
-            subprocess.run(cmd, timeout=60)
+            # NOTE(`timeout=120`): prefilling may take a while...
+            subprocess.run(cmd, timeout=120)
         except subprocess.TimeoutExpired:
             print("timeout")
             failed.append(' '.join(cmd))

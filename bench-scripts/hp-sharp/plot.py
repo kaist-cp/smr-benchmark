@@ -6,7 +6,7 @@ import os
 import matplotlib
 import math
 
-RESULTS_PATH = "results"
+RESULTS_PATH = "bench-scripts/hp-sharp/results"
 
 warnings.filterwarnings("ignore")
 pd.set_option('display.max_rows', None)
@@ -31,9 +31,16 @@ HMLIST = "hm-list"
 HHSLIST = "hhs-list"
 HASHMAP = "hash-map"
 NMTREE = "nm-tree"
-BONSAITREE = "bonsai-tree"
-EFRBTREE = "efrb-tree"
 SKIPLIST = "skip-list"
+
+FORMAL_NAMES = {
+    HLIST: "HList",
+    HMLIST: "HMList",
+    HHSLIST: "HHSList",
+    HASHMAP: "HashMap",
+    NMTREE: "NMTree",
+    SKIPLIST: "SkipList",
+}
 
 EBR = "ebr"
 PEBR = "pebr"
@@ -41,18 +48,21 @@ NR = "nr"
 HP = "hp"
 HP_PP = "hp-pp"
 NBR = "nbr"
+NBR_LARGE = "nbr-large"
 CDRC_EBR = "cdrc-ebr"
 HP_SHARP = "hp-sharp"
+CDRC_HP_SHARP = "cdrc-hp-sharp"
+VBR = "vbr"
 
 # DS with read-dominated bench & write-only bench
-dss_all   = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, EFRBTREE, SKIPLIST, BONSAITREE]
-dss_read  = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, EFRBTREE, SKIPLIST, BONSAITREE]
-dss_write = [HLIST, HMLIST,          HASHMAP, NMTREE, EFRBTREE, SKIPLIST, BONSAITREE]
+dss_all   = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, SKIPLIST]
+dss_read  = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, SKIPLIST]
+dss_write = [HLIST, HMLIST,          HASHMAP, NMTREE, SKIPLIST]
 
-WRITE, HALF, READ = "write", "half", "read"
+WRITE, HALF, READ, READ_ONLY = "write", "half", "read", "read-only"
 
-SMR_ONLYs = [NR, EBR, NBR, HP_PP, HP, PEBR, CDRC_EBR, HP_SHARP]
-SMR_Is = [NR, EBR, NBR, HP_PP, HP, PEBR, CDRC_EBR, HP_SHARP]
+SMR_ONLYs = [NR, EBR, NBR, HP_PP, HP, PEBR, CDRC_EBR, HP_SHARP, CDRC_HP_SHARP, VBR, NBR_LARGE]
+SMR_Is = [NR, EBR, NBR, HP_PP, HP, PEBR, CDRC_EBR, HP_SHARP, CDRC_HP_SHARP, VBR, NBR_LARGE]
 
 cpu_count = os.cpu_count()
 if not cpu_count or cpu_count <= 24:
@@ -72,7 +82,10 @@ line_shapes = {
     PEBR: "x",
     CDRC_EBR: "1",
     NBR: "p",
+    NBR_LARGE: "H",
     HP_SHARP: "s",
+    CDRC_HP_SHARP: "P",
+    VBR: "*",
 }
 
 line_colors = {
@@ -83,7 +96,10 @@ line_colors = {
     PEBR: "y",
     CDRC_EBR: "green",
     NBR: "blue",
+    NBR_LARGE: "indigo",
     HP_SHARP: "r",
+    CDRC_HP_SHARP: "brown",
+    VBR: "orange",
 }
 
 line_types = {
@@ -92,29 +108,35 @@ line_types = {
     HP: 'dashed',
     HP_PP: 'dashdot',
     PEBR: (5, (10, 3)),
-    CDRC_EBR: (0, (3, 1, 1, 1, 1, 1)),
+    CDRC_EBR: (0, (3, 1)),
     NBR: (5, (10, 3)),
+    NBR_LARGE: (5, (10, 3)),
     HP_SHARP: (0, (3, 1, 1, 1)),
+    CDRC_HP_SHARP: (0, (3, 1, 1, 1)),
+    VBR: (0, (2, 1)),
 }
+
+def filter_invalid_data(data, ds):
+    if ds == NMTREE:
+        data = data[data.mm != HP]
+    if ds == HMLIST:
+        data = data[data.mm != NBR]
+        data = data[data.mm != NBR_LARGE]
+    if ds == SKIPLIST:
+        data = data[data.mm != NBR]
+        data = data[data.mm != NBR_LARGE]
+    return data
 
 def plot_title(ds, bench):
     if bench == WRITE and ds == HLIST:
         return 'HList/HHSList'
-    if ds == BONSAITREE:
-        return 'Bonsai'
-    return ds
+    return FORMAL_NAMES[ds]
 
-def key_range(ds, large):
+def key_range(ds):
     if ds in [HLIST, HMLIST, HHSLIST]:
-        if large:
-            return 10000
-        else:
-            return 16
+        return 10000
     else:
-        if large:
-            return 100000
-        else:
-            return 128
+        return 100000
 
 # line_name: SMR, SMR_I
 def draw(title, name, data, line_name, y_value, y_label=None, y_max=None, legend=False, y_log=False, y_min=None):
@@ -155,17 +177,16 @@ def draw(title, name, data, line_name, y_value, y_label=None, y_max=None, legend
     else:
         p += theme(legend_position='none')
     
-    p += geom_rect(mapping=aes(xmin=cpu_count, xmax=float("inf"), ymin=-float("inf"), ymax=float("inf")), color = "#E0E0E0", alpha = 0.002)
+    p += annotate(geom="rect", xmin=cpu_count, xmax=float("inf"), ymin=-float("inf"), ymax=float("inf"), fill = "#FF00000A")
 
     p.save(name, width=10, height=7, units="in")
 
-def draw_throughput(data, ds, bench):
+def draw_throughput(data, ds, bench, key_range):
     data = data[ds].copy()
-    data = data[data.key_range == key_range(ds, True)]
+    data = data[data.key_range == key_range]
     data = data[data.non_coop == 0]
-    if ds == NMTREE:
-        data = data[data.mm != HP]
-    y_label = 'Throughput (M op/s)' if ds in [HMLIST, NMTREE] else None
+    data = filter_invalid_data(data, ds)
+    y_label = 'Throughput (M op/s)'
     legend = False
     y_max = data.throughput.max() * 1.05
     draw(plot_title(ds, bench), f'{RESULTS_PATH}/{ds}_{bench}_throughput.pdf',
@@ -173,38 +194,32 @@ def draw_throughput(data, ds, bench):
 
 def draw_mem(data, ds, bench):
     data = data[ds].copy()
-    data = data[data.key_range == key_range(ds, True)]
+    data = data[data.key_range == key_range(ds)]
     if ds == NMTREE:
         data = data[data.mm != HP]
-    y_label = 'Peak memory usage (MiB)' if ds in [HMLIST, NMTREE] else None
+    y_label = 'Peak memory usage (MiB)'
     y_max = None
     legend = False
-    if ds == BONSAITREE:
-        _d = data[~data[SMR_I].isin([NR])]  # exclude NR and EBR stalled
-        max_threads = _d.threads.max()
-        y_max = _d[_d.threads == max_threads].peak_mem.max() * 0.80
-    elif ds in [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, EFRBTREE, SKIPLIST]:
-        _d = data[~data[SMR_I].isin([NR])]  # exclude NR and EBR stalled
-        y_max = _d[_d.ds == ds].peak_mem.max() * 1.05
-    else:
-        y_max = data.peak_mem.max() * 1.05
+    _d = data[~data[SMR_I].isin([NR])]  # exclude NR and EBR stalled
+    y_max = _d[_d.ds == ds].peak_mem.max() * 1.05
     draw(plot_title(ds, bench), f'{RESULTS_PATH}/{ds}_{bench}_peak_mem.pdf',
          data, SMR_I, PEAK_MEM, y_label, y_max, legend)
 
 
 def draw_garb(data, ds, bench):
     data = data[ds].copy()
-    data = data[data.key_range == key_range(ds, True)]
+    data = data[data.key_range == key_range(ds)]
     data = data[data.mm != NR]
     data = data[data.mm != CDRC_EBR]
-    if ds == NMTREE:
-        data = data[data.mm != HP]
-    y_label = 'Avg. Unreclaimed memory blocks' if ds in [HMLIST, NMTREE] else None
+    data = data[data.mm != CDRC_HP_SHARP]
+    data = data[data.mm != VBR]
+    data = filter_invalid_data(data, ds)
+    y_label = 'Avg. Unreclaimed memory blocks (×10⁴)'
     legend = False
 
     nbr_max = data[data.mm == NBR].avg_garb.max()
     hp_pp_max = data[data.mm == HP_PP].avg_garb.max()
-    y_max = max(0 if math.isnan(nbr_max) else nbr_max, 0 if math.isnan(hp_pp_max) else hp_pp_max) * 2.5
+    y_max = max(0 if math.isnan(nbr_max) else nbr_max, 0 if math.isnan(hp_pp_max) else hp_pp_max) * 2
 
     draw(plot_title(ds, bench), f'{RESULTS_PATH}/{ds}_{bench}_avg_garb.pdf',
          data, SMR_ONLY, AVG_GARB, y_label, y_max, legend)
@@ -212,17 +227,18 @@ def draw_garb(data, ds, bench):
 
 def draw_peak_garb(data, ds, bench):
     data = data[ds].copy()
-    data = data[data.key_range == key_range(ds, True)]
+    data = data[data.key_range == key_range(ds)]
     data = data[data.mm != NR]
     data = data[data.mm != CDRC_EBR]
-    if ds == NMTREE:
-        data = data[data.mm != HP]
-    y_label = 'Peak unreclaimed memory blocks' if ds in [HMLIST, NMTREE] else None
+    data = data[data.mm != CDRC_HP_SHARP]
+    data = data[data.mm != VBR]
+    data = filter_invalid_data(data, ds)
+    y_label = 'Peak unreclaimed memory blocks (×10⁴)'
     legend = False
 
     nbr_max = data[data.mm == NBR].peak_garb.max()
     hp_pp_max = data[data.mm == HP_PP].peak_garb.max()
-    y_max = max(0 if math.isnan(nbr_max) else nbr_max, 0 if math.isnan(hp_pp_max) else hp_pp_max) * 2.5
+    y_max = max(0 if math.isnan(nbr_max) else nbr_max, 0 if math.isnan(hp_pp_max) else hp_pp_max) * 2
 
     draw(plot_title(ds, bench), f'{RESULTS_PATH}/{ds}_{bench}_peak_garb.pdf',
          data, SMR_ONLY, PEAK_GARB, y_label, y_max, legend)
@@ -230,7 +246,7 @@ def draw_peak_garb(data, ds, bench):
 
 raw_data = {}
 # averaged data for write:read = 100:0, 50:50, 10:90
-avg_data = { WRITE: {}, HALF: {}, READ: {} }
+avg_data = { WRITE: {}, HALF: {}, READ: {}, READ_ONLY: {} }
 
 # preprocess
 for ds in dss_all:
@@ -239,11 +255,8 @@ for ds in dss_all:
     data.throughput = data.throughput.map(lambda x: x / 1000_000)
     data.peak_mem = data.peak_mem.map(lambda x: x / (2 ** 20))
     data.avg_mem = data.avg_mem.map(lambda x: x / (2 ** 20))
-
-    # ignore -c4 data
-    data = data[data.ops_per_cs == 1]
-    # ignore -n1 data
-    data = data[data.non_coop != 1]
+    data.peak_garb = data.peak_garb.map(lambda x: x / 10000)
+    data.avg_garb = data.avg_garb.map(lambda x: x / 10000)
 
     raw_data[ds] = data.copy()
 
@@ -254,15 +267,15 @@ for ds in dss_all:
     avg[SMR_ONLY] = pd.Categorical(avg.mm.map(str), SMR_ONLYs)
     avg[SMR_I] = pd.Categorical(avg.mm.map(str) + avg.non_coop.map(n_map), SMR_Is)
     avg.sort_values(by=SMR_I, inplace=True)
-    for i, bench in enumerate([WRITE, HALF, READ]):
+    for i, bench in enumerate([WRITE, HALF, READ, READ_ONLY]):
         avg_data[bench][ds] = avg[avg.get_rate == i]
 
 # 1. throughput graphs, 3 lines (SMR_ONLY) each.
 for ds in dss_write:
-    draw_throughput(avg_data[WRITE], ds, WRITE)
+    draw_throughput(avg_data[WRITE], ds, WRITE, key_range(ds))
 for ds in dss_read:
-    draw_throughput(avg_data[HALF], ds, HALF)
-    draw_throughput(avg_data[READ], ds, READ)
+    draw_throughput(avg_data[HALF], ds, HALF, key_range(ds))
+    draw_throughput(avg_data[READ], ds, READ, key_range(ds))
 
 # 2. avg garbage graph, 7 lines (SMR_ONLY)
 for ds in dss_write:
@@ -284,3 +297,7 @@ for ds in dss_write:
 for ds in dss_read:
     draw_peak_garb(avg_data[HALF], ds, HALF)
     draw_peak_garb(avg_data[READ], ds, READ)
+
+# 5. Read-only throughput
+for ds in dss_read:
+    draw_throughput(avg_data[READ_ONLY], ds, READ_ONLY, key_range(ds))

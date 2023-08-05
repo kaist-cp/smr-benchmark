@@ -6,7 +6,7 @@ import os
 RESULTS_PATH = "bench-scripts/hp-sharp/results"
 
 dss = ['h-list', 'hm-list', 'hhs-list', 'hash-map', 'nm-tree', 'skip-list']
-mms = ['nr', 'ebr', 'pebr', 'hp', 'hp-pp', 'nbr', 'cdrc-ebr', 'hp-sharp']
+mms = ['nr', 'ebr', 'pebr', 'hp', 'hp-pp', 'nbr', 'nbr-large', 'cdrc-ebr', 'hp-sharp', 'cdrc-hp-sharp', 'vbr']
 i = 10
 cpu_count = os.cpu_count()
 if not cpu_count or cpu_count <= 24:
