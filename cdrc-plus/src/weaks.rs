@@ -111,7 +111,7 @@ impl<T, G: Guard> Drop for AtomicWeak<T, G> {
         let ptr = self.link.load(Ordering::SeqCst);
         unsafe {
             if let Some(cnt) = ptr.untagged().as_mut() {
-                let guard = G::without_epoch();
+                let guard = G::new();
                 guard.delayed_decrement_weak_cnt(cnt);
             }
         }

@@ -152,7 +152,7 @@ impl<T, G: Guard> Drop for AtomicRc<T, G> {
         let ptr = self.link.load(Ordering::Relaxed);
         unsafe {
             if let Some(cnt) = ptr.untagged().as_mut() {
-                let guard = G::without_epoch();
+                let guard = G::new();
                 guard.delayed_decrement_ref_cnt(cnt);
             }
         }
