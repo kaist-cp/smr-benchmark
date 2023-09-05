@@ -2,7 +2,7 @@ use core::mem;
 use std::{
     mem::ManuallyDrop,
     ptr,
-    sync::atomic::{compiler_fence, AtomicU32, Ordering},
+    sync::atomic::{fence, AtomicU32, Ordering},
 };
 
 /// A wait-free atomic counter that supports increment and decrement, such that attempting to
@@ -155,7 +155,7 @@ impl<T> Counted<T> {
         // Alternatively, an acquire-release decrement would work, but might be less efficient
         // since the acquire is only relevant if the decrement zeros the counter.
         if self.ref_cnt.decrement(1, Ordering::Release) {
-            compiler_fence(Ordering::Acquire);
+            fence(Ordering::Acquire);
             // If there are no live weak pointers, we can immediately destroy everything.
             // Otherwise, we have to defer the disposal of the managed object since an
             // atomic_weak_ptr might be about to take a snapshot...
