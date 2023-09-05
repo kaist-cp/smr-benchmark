@@ -1,3 +1,3 @@
 mod ebr;
 
-pub use ebr::GuardEBR;
+pub use ebr::CsEBR;

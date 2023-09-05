@@ -8,8 +8,8 @@ pub use strongs::*;
 pub use weaks::*;
 
 /// AtomicRc using EBR
-pub type AtomicRcEBR<T> = AtomicRc<T, GuardEBR>;
+pub type AtomicRcEBR<T> = AtomicRc<T, CsEBR>;
 /// Rc using EBR
-pub type RcEBR<T> = Rc<T, GuardEBR>;
+pub type RcEBR<T> = Rc<T, CsEBR>;
 /// Snapshot using EBR
-pub type SnapshotEBR<T> = Snapshot<T, GuardEBR>;
+pub type SnapshotEBR<T> = Snapshot<T, CsEBR>;
