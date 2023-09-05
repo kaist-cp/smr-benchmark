@@ -37,7 +37,7 @@ impl<T, G: Guard> AtomicRc<T, G> {
     #[inline(always)]
     pub fn new(obj: T, guard: &G) -> Self {
         Self {
-            link: Atomic::new(Rc::new(obj, guard).into_ptr()),
+            link: Atomic::new(Rc::new(obj, guard).into_raw()),
             _marker: PhantomData,
         }
     }
@@ -55,8 +55,8 @@ impl<T, G: Guard> AtomicRc<T, G> {
     /// (It is equivalent to `exchange` from the original implementation.)
     #[inline(always)]
     pub fn swap(&self, new: Rc<T, G>, order: Ordering, _: &G) -> Rc<T, G> {
-        let new_ptr = new.into_ptr();
-        Rc::new_without_incr(self.link.swap(new_ptr, order))
+        let new_ptr = new.into_raw();
+        Rc::from_raw(self.link.swap(new_ptr, order))
     }
 
     /// Atomically compares the underlying pointer with expected, and if they refer to
@@ -79,7 +79,7 @@ impl<T, G: Guard> AtomicRc<T, G> {
             .compare_exchange(expected, desired.as_ptr(), success, failure)
         {
             Ok(_) => {
-                let rc = Rc::new_without_incr(expected);
+                let rc = Rc::from_raw(expected);
                 // Here, `into_ref_count` increment the reference count of `desired` only if `desired`
                 // is `Snapshot` or its variants.
                 //
@@ -174,11 +174,11 @@ pub struct Rc<T, G: Guard> {
 impl<T, G: Guard> Rc<T, G> {
     #[inline(always)]
     pub fn null() -> Self {
-        Self::new_without_incr(TaggedCnt::null())
+        Self::from_raw(TaggedCnt::null())
     }
 
     #[inline(always)]
-    pub(crate) fn new_without_incr(ptr: TaggedCnt<T>) -> Self {
+    pub(crate) fn from_raw(ptr: TaggedCnt<T>) -> Self {
         Self {
             ptr,
             _marker: PhantomData,
@@ -287,7 +287,7 @@ impl<T, G: Guard> Rc<T, G> {
         self
     }
 
-    pub(crate) fn into_ptr(self) -> TaggedCnt<T> {
+    pub(crate) fn into_raw(self) -> TaggedCnt<T> {
         let new_ptr = self.as_ptr();
         // Skip decrementing the ref count.
         forget(self);

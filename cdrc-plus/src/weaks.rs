@@ -47,8 +47,8 @@ impl<T, G: Guard> AtomicWeak<T, G> {
     /// (It is equivalent to `exchange` from the original implementation.)
     #[inline(always)]
     pub fn swap(&self, new: Weak<T, G>, order: Ordering, _: &G) -> Weak<T, G> {
-        let new_ptr = new.into_ptr();
-        Weak::new_without_incr(self.link.swap(new_ptr, order))
+        let new_ptr = new.into_raw();
+        Weak::from_raw(self.link.swap(new_ptr, order))
     }
 
     /// Atomically compares the underlying pointer with expected, and if they refer to
@@ -71,7 +71,7 @@ impl<T, G: Guard> AtomicWeak<T, G> {
             .compare_exchange(expected, desired.as_ptr(), success, failure)
         {
             Ok(_) => {
-                let weak = Weak::new_without_incr(expected);
+                let weak = Weak::from_raw(expected);
                 // Here, `into_weak_count` increment the reference count of `desired` only if
                 // `desired` is `Snapshot` or its variants.
                 //
@@ -97,7 +97,7 @@ impl<T, G: Guard> AtomicWeak<T, G> {
 
 impl<T, G: Guard> From<Weak<T, G>> for AtomicWeak<T, G> {
     fn from(value: Weak<T, G>) -> Self {
-        let init_ptr = value.into_ptr();
+        let init_ptr = value.into_raw();
         Self {
             link: Atomic::new(init_ptr),
             _marker: PhantomData,
@@ -133,11 +133,11 @@ pub struct Weak<T, G: Guard> {
 impl<T, G: Guard> Weak<T, G> {
     #[inline(always)]
     pub fn null() -> Self {
-        Self::new_without_incr(TaggedCnt::null())
+        Self::from_raw(TaggedCnt::null())
     }
 
     #[inline(always)]
-    pub(crate) fn new_without_incr(ptr: TaggedCnt<T>) -> Self {
+    pub(crate) fn from_raw(ptr: TaggedCnt<T>) -> Self {
         Self {
             ptr,
             _marker: PhantomData,
@@ -224,7 +224,7 @@ impl<T, G: Guard> Weak<T, G> {
         self
     }
 
-    pub(crate) fn into_ptr(self) -> TaggedCnt<T> {
+    pub(crate) fn into_raw(self) -> TaggedCnt<T> {
         let new_ptr = self.as_ptr();
         // Skip decrementing the ref count.
         forget(self);
