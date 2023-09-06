@@ -31,11 +31,11 @@ pub trait Acquired<T> {
     fn eq(&self, other: &Self) -> bool;
 }
 
-/// A SMR-specific guard trait.
+/// A SMR-specific critical section manager trait.
 ///
-/// We construct this `Guard` right before starting an operation,
+/// We construct this `Cs` right before starting an operation,
 /// and drop(or `clear`) it after the operation.
-pub trait Guard {
+pub trait Cs {
     /// A SMR-specific acquired pointer trait
     ///
     /// For more information, read a comment on `Acquired<T>`.

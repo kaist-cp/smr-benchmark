@@ -3,7 +3,7 @@ use std::mem;
 use atomic::Ordering;
 
 use crate::internal::utils::Counted;
-use crate::internal::{Acquired, Guard, RetireType, TaggedCnt};
+use crate::internal::{Acquired, Cs, RetireType, TaggedCnt};
 
 /// A tagged pointer which is pointing a `CountedObjPtr<T>`.
 ///
@@ -53,18 +53,18 @@ impl<T> Acquired<T> for AcquiredEBR<T> {
     }
 }
 
-pub struct GuardEBR {
+pub struct CsEBR {
     guard: Option<crossbeam_epoch::Guard>,
 }
 
-impl From<crossbeam_epoch::Guard> for GuardEBR {
+impl From<crossbeam_epoch::Guard> for CsEBR {
     #[inline(always)]
     fn from(guard: crossbeam_epoch::Guard) -> Self {
         Self { guard: Some(guard) }
     }
 }
 
-impl Guard for GuardEBR {
+impl Cs for CsEBR {
     type Acquired<T> = AcquiredEBR<T>;
 
     #[inline(always)]
