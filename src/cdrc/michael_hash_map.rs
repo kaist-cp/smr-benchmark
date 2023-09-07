@@ -3,7 +3,7 @@ use cdrc_rs::Cs;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use super::list::{HHSList, Cursor};
+use super::list::{Cursor, HHSList};
 
 pub struct HashMap<K, V, C: Cs> {
     buckets: Vec<HHSList<K, V, C>>,

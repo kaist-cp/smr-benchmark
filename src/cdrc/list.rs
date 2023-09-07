@@ -1,5 +1,5 @@
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
-use cdrc_rs::{AtomicRc, Cs, Pointer, Rc, Snapshot, TaggedCnt, StrongPtr};
+use cdrc_rs::{AtomicRc, Cs, Pointer, Rc, Snapshot, StrongPtr, TaggedCnt};
 
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::mem::swap;
@@ -352,7 +352,13 @@ where
     }
 
     /// Omitted
-    pub fn harris_michael_insert(&self, key: K, value: V, cursor: &mut Cursor<K, V, C>, cs: &C) -> bool {
+    pub fn harris_michael_insert(
+        &self,
+        key: K,
+        value: V,
+        cursor: &mut Cursor<K, V, C>,
+        cs: &C,
+    ) -> bool {
         self.insert(key, value, Cursor::find_harris_michael, cursor, cs)
     }
 

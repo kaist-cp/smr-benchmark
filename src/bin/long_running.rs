@@ -404,10 +404,7 @@ impl PrefillStrategy {
         stdout().flush().unwrap();
     }
 
-    fn prefill_cdrc<
-        C: cdrc_rs::Cs,
-        M: cdrc::ConcurrentMap<usize, usize, C> + Send + Sync,
-    >(
+    fn prefill_cdrc<C: cdrc_rs::Cs, M: cdrc::ConcurrentMap<usize, usize, C> + Send + Sync>(
         self,
         config: &Config,
         map: &M,

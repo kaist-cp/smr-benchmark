@@ -1,4 +1,4 @@
-use cdrc_rs::{AtomicRc, Cs, Pointer, Rc, Snapshot, TaggedCnt, StrongPtr};
+use cdrc_rs::{AtomicRc, Cs, Pointer, Rc, Snapshot, StrongPtr, TaggedCnt};
 
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use std::cmp;

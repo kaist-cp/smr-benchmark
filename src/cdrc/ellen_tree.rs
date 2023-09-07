@@ -1,5 +1,5 @@
 use bitflags::bitflags;
-use cdrc_rs::{AtomicRc, AtomicWeak, Cs, Pointer, Rc, Snapshot, Weak, StrongPtr};
+use cdrc_rs::{AtomicRc, AtomicWeak, Cs, Pointer, Rc, Snapshot, StrongPtr, Weak};
 use std::{mem::swap, sync::atomic::Ordering};
 
 use super::{concurrent_map::OutputHolder, ConcurrentMap};
@@ -385,15 +385,13 @@ where
                 let new_update = Rc::new(op, cs).with_tag(UpdateTag::DFLAG.bits());
                 finder.pupdate.protect(&new_update, cs);
 
-                match finder.gp.as_ref().unwrap()
-                    .update
-                    .compare_exchange(
-                        finder.gpupdate.as_ptr(),
-                        new_update,
-                        Ordering::Release,
-                        Ordering::Relaxed,
-                        cs,
-                    ) {
+                match finder.gp.as_ref().unwrap().update.compare_exchange(
+                    finder.gpupdate.as_ptr(),
+                    new_update,
+                    Ordering::Release,
+                    Ordering::Relaxed,
+                    cs,
+                ) {
                     Ok(_) => {
                         if self.help_delete(&finder.pupdate, &mut cursor.1, cs) {
                             return true;

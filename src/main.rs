@@ -537,42 +537,47 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             ),
             _ => panic!("Unsupported(or unimplemented) data structure for NBR"),
         },
-        MM::CDRC_EBR => {
-            match config.ds {
-                DS::HList => bench_map_cdrc::<CsEBR, cdrc::HList<usize, usize, cdrc_rs::CsEBR>, N>(
-                    config,
-                    PrefillStrategy::Decreasing,
-                ),
-                DS::HMList => bench_map_cdrc::<CsEBR, cdrc::HMList<usize, usize, cdrc_rs::CsEBR>, N>(
-                    config,
-                    PrefillStrategy::Decreasing,
-                ),
-                DS::HHSList => bench_map_cdrc::<CsEBR, cdrc::HHSList<usize, usize, cdrc_rs::CsEBR>, N>(
-                    config,
-                    PrefillStrategy::Decreasing,
-                ),
-                DS::HashMap => bench_map_cdrc::<CsEBR, cdrc::HashMap<usize, usize, cdrc_rs::CsEBR>, N>(
-                    config,
-                    PrefillStrategy::Decreasing,
-                ),
-                DS::NMTree => bench_map_cdrc::<CsEBR, cdrc::NMTreeMap<usize, usize, cdrc_rs::CsEBR>, N>(
-                    config,
-                    PrefillStrategy::Random,
-                ),
-                DS::SkipList => bench_map_cdrc::<CsEBR, cdrc::SkipList<usize, usize, cdrc_rs::CsEBR>, N>(
+        MM::CDRC_EBR => match config.ds {
+            DS::HList => bench_map_cdrc::<CsEBR, cdrc::HList<usize, usize, cdrc_rs::CsEBR>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::HMList => bench_map_cdrc::<CsEBR, cdrc::HMList<usize, usize, cdrc_rs::CsEBR>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::HHSList => bench_map_cdrc::<CsEBR, cdrc::HHSList<usize, usize, cdrc_rs::CsEBR>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::HashMap => bench_map_cdrc::<CsEBR, cdrc::HashMap<usize, usize, cdrc_rs::CsEBR>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::NMTree => {
+                bench_map_cdrc::<CsEBR, cdrc::NMTreeMap<usize, usize, cdrc_rs::CsEBR>, N>(
                     config,
                     PrefillStrategy::Random,
-                ),
-                DS::BonsaiTree => bench_map_cdrc::<CsEBR, 
-                    cdrc::BonsaiTreeMap<usize, usize, cdrc_rs::CsEBR>,
-                    N,
-                >(config, PrefillStrategy::Random),
-                DS::EFRBTree => bench_map_cdrc::<CsEBR, cdrc::EFRBTree<usize, usize, cdrc_rs::CsEBR>, N>(
-                    config,
-                    PrefillStrategy::Random,
-                ),
+                )
             }
-        }
+            DS::SkipList => {
+                bench_map_cdrc::<CsEBR, cdrc::SkipList<usize, usize, cdrc_rs::CsEBR>, N>(
+                    config,
+                    PrefillStrategy::Random,
+                )
+            }
+            DS::BonsaiTree => bench_map_cdrc::<
+                CsEBR,
+                cdrc::BonsaiTreeMap<usize, usize, cdrc_rs::CsEBR>,
+                N,
+            >(config, PrefillStrategy::Random),
+            DS::EFRBTree => {
+                bench_map_cdrc::<CsEBR, cdrc::EFRBTree<usize, usize, cdrc_rs::CsEBR>, N>(
+                    config,
+                    PrefillStrategy::Random,
+                )
+            }
+        },
         MM::HP_SHARP => match config.ds {
             DS::HList => bench_map_hp_sharp::<hp_sharp_bench::HList<usize, usize>>(
                 config,
