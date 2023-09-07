@@ -1,22 +1,19 @@
 use super::concurrent_map::ConcurrentMap;
-use cdrc_rs::AcquireRetire;
+use cdrc_rs::Cs;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use super::list::HHSList;
+use super::list::{HHSList, Cursor};
 
-pub struct HashMap<K, V, Guard>
-where
-    Guard: AcquireRetire,
-{
-    buckets: Vec<HHSList<K, V, Guard>>,
+pub struct HashMap<K, V, C: Cs> {
+    buckets: Vec<HHSList<K, V, C>>,
 }
 
-impl<K, V, Guard> HashMap<K, V, Guard>
+impl<K, V, C> HashMap<K, V, C>
 where
     K: Ord + Hash + Default,
     V: Default,
-    Guard: AcquireRetire,
+    C: Cs,
 {
     pub fn with_capacity(n: usize) -> Self {
         let mut buckets = Vec::with_capacity(n);
@@ -28,7 +25,7 @@ where
     }
 
     #[inline]
-    pub fn get_bucket(&self, index: usize) -> &HHSList<K, V, Guard> {
+    pub fn get_bucket(&self, index: usize) -> &HHSList<K, V, C> {
         unsafe { self.buckets.get_unchecked(index % self.buckets.len()) }
     }
 
@@ -40,43 +37,45 @@ where
         s.finish() as usize
     }
 
-    pub fn get<'g>(&'g self, k: &'g K, guard: &'g Guard) -> Option<&'g V> {
+    pub fn get(&self, k: &K, cursor: &mut Cursor<K, V, C>, cs: &C) -> bool {
         let i = Self::hash(k);
-        self.get_bucket(i).get(k, guard)
+        self.get_bucket(i).get(k, cursor, cs)
     }
 
-    pub fn insert(&self, k: K, v: V, guard: &Guard) -> bool {
+    pub fn insert(&self, k: K, v: V, cursor: &mut Cursor<K, V, C>, cs: &C) -> bool {
         let i = Self::hash(&k);
-        self.get_bucket(i).insert(k, v, guard)
+        self.get_bucket(i).insert(k, v, cursor, cs)
     }
 
-    pub fn remove<'g>(&'g self, k: &'g K, guard: &'g Guard) -> Option<&'g V> {
+    pub fn remove(&self, k: &K, cursor: &mut Cursor<K, V, C>, cs: &C) -> bool {
         let i = Self::hash(&k);
-        self.get_bucket(i).remove(k, guard)
+        self.get_bucket(i).remove(k, cursor, cs)
     }
 }
 
-impl<K, V, Guard> ConcurrentMap<K, V, Guard> for HashMap<K, V, Guard>
+impl<K, V, C> ConcurrentMap<K, V, C> for HashMap<K, V, C>
 where
     K: Ord + Hash + Default,
     V: Default,
-    Guard: AcquireRetire,
+    C: Cs,
 {
+    type Output = Cursor<K, V, C>;
+
     fn new() -> Self {
         Self::with_capacity(30000)
     }
 
     #[inline(always)]
-    fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
-        self.get(key, guard)
+    fn get(&self, key: &K, output: &mut Self::Output, cs: &C) -> bool {
+        self.get(key, output, cs)
     }
     #[inline(always)]
-    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
-        self.insert(key, value, guard)
+    fn insert(&self, key: K, value: V, output: &mut Self::Output, cs: &C) -> bool {
+        self.insert(key, value, output, cs)
     }
     #[inline(always)]
-    fn remove<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
-        self.remove(key, guard)
+    fn remove(&self, key: &K, output: &mut Self::Output, cs: &C) -> bool {
+        self.remove(key, output, cs)
     }
 }
 
@@ -84,10 +83,10 @@ where
 mod tests {
     use super::HashMap;
     use crate::cdrc::concurrent_map;
-    use cdrc_rs::GuardEBR;
+    use cdrc_rs::CsEBR;
 
     #[test]
     fn smoke_hashmap() {
-        concurrent_map::tests::smoke::<GuardEBR, HashMap<i32, String, GuardEBR>>();
+        concurrent_map::tests::smoke::<CsEBR, HashMap<i32, String, CsEBR>>();
     }
 }

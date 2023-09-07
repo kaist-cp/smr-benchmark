@@ -167,8 +167,6 @@ where
 
             while level >= 1 {
                 level -= 1;
-                handle.preds_h[level].protect_raw(pred);
-                light_membarrier();
                 loop {
                     let pred_ref = unsafe { &*untagged(pred) };
                     curr = pred_ref.protect_next(level, &mut handle.succs_h[level]);

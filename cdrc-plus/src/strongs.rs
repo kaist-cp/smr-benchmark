@@ -72,7 +72,7 @@ impl<T, C: Cs> AtomicRc<T, C> {
         _: &'g C,
     ) -> Result<Rc<T, C>, CompareExchangeErrorRc<T, P>>
     where
-        P: StrongPtr<T, C> + Pointer<T>,
+        P: StrongPtr<T, C>,
     {
         match self
             .link
@@ -113,7 +113,7 @@ impl<T, C: Cs> AtomicRc<T, C> {
         cs: &'g C,
     ) -> Result<Rc<T, C>, CompareExchangeErrorRc<T, P>>
     where
-        P: StrongPtr<T, C> + Pointer<T>,
+        P: StrongPtr<T, C>,
     {
         loop {
             current_snap.load(self, cs);

@@ -50,7 +50,17 @@ impl<T, C: Cs> AtomicRc<T, C> {
         }
     }
 
-    /// Swap the currently stored shared pointer with the given shared pointer.
+    /// Loads a raw tagged pointer from this atomic pointer.
+    ///
+    /// Note that the returned pointer cannot be dereferenced safely, becuase it is protected by
+    /// neither a SMR nor a reference count. To dereference, use `load` method of [`Snapshot`]
+    /// instead.
+    #[inline]
+    pub fn load(&self, order: Ordering) -> TaggedCnt<T> {
+        self.link.load(order)
+    }
+
+    /// Swaps the currently stored shared pointer with the given shared pointer.
     /// This operation is thread-safe.
     /// (It is equivalent to `exchange` from the original implementation.)
     #[inline(always)]
@@ -72,7 +82,7 @@ impl<T, C: Cs> AtomicRc<T, C> {
         _: &'g C,
     ) -> Result<Rc<T, C>, CompareExchangeErrorRc<T, P>>
     where
-        P: StrongPtr<T, C> + Pointer<T>,
+        P: StrongPtr<T, C>,
     {
         match self
             .link
@@ -81,7 +91,7 @@ impl<T, C: Cs> AtomicRc<T, C> {
             Ok(_) => {
                 let rc = Rc::from_raw(expected);
                 // Here, `into_ref_count` increment the reference count of `desired` only if `desired`
-                // is `Snapshot` or its variants.
+                // doesn't own a reference counter.
                 //
                 // If `desired` is `Rc`, semantically the ownership of the reference count from
                 // `desired` is moved to `self`. Because of this reason, we must skip decrementing
@@ -113,7 +123,7 @@ impl<T, C: Cs> AtomicRc<T, C> {
         cs: &'g C,
     ) -> Result<Rc<T, C>, CompareExchangeErrorRc<T, P>>
     where
-        P: StrongPtr<T, C> + Pointer<T>,
+        P: StrongPtr<T, C>,
     {
         loop {
             current_snap.load(self, cs);
@@ -163,6 +173,17 @@ impl<T, C: Cs> Default for AtomicRc<T, C> {
     #[inline(always)]
     fn default() -> Self {
         Self::null()
+    }
+}
+
+impl<T, C: Cs> From<Rc<T, C>> for AtomicRc<T, C> {
+    #[inline]
+    fn from(value: Rc<T, C>) -> Self {
+        let ptr = value.into_raw();
+        Self {
+            link: Atomic::new(ptr),
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -233,34 +254,6 @@ impl<T, C: Cs> Rc<T, C> {
     }
 
     #[inline(always)]
-    pub fn is_null(&self) -> bool {
-        self.ptr.is_null()
-    }
-
-    #[inline(always)]
-    pub unsafe fn as_ref(&self) -> Option<&T> {
-        if self.is_null() {
-            None
-        } else {
-            Some(unsafe { self.deref() })
-        }
-    }
-
-    /// # Safety
-    /// TODO
-    #[inline(always)]
-    pub unsafe fn deref(&self) -> &T {
-        self.ptr.deref().data()
-    }
-
-    /// # Safety
-    /// TODO
-    #[inline(always)]
-    pub unsafe fn deref_mut(&mut self) -> &mut T {
-        self.ptr.deref_mut().data_mut()
-    }
-
-    #[inline(always)]
     pub fn ref_count(&self) -> u32 {
         unsafe { self.ptr.deref().ref_count() }
     }
@@ -292,6 +285,13 @@ impl<T, C: Cs> Rc<T, C> {
         // Skip decrementing the ref count.
         forget(self);
         new_ptr
+    }
+}
+
+impl<T, C: Cs> Default for Rc<T, C> {
+    #[inline]
+    fn default() -> Self {
+        Self::null()
     }
 }
 
@@ -347,34 +347,6 @@ impl<T, C: Cs> Snapshot<T, C> {
         self.acquired = cs.reserve(ptr.as_ptr());
     }
 
-    /// # Safety
-    /// TODO
-    #[inline(always)]
-    pub unsafe fn deref<'g>(&self) -> &'g T {
-        self.acquired.ptr().deref().data()
-    }
-
-    /// # Safety
-    /// TODO
-    #[inline(always)]
-    pub unsafe fn deref_mut<'g>(&mut self) -> &'g mut T {
-        self.acquired.ptr_mut().deref_mut().data_mut()
-    }
-
-    #[inline(always)]
-    pub unsafe fn as_ref<'g>(&self) -> Option<&'g T> {
-        if self.is_null() {
-            None
-        } else {
-            Some(unsafe { self.deref() })
-        }
-    }
-
-    #[inline(always)]
-    pub fn is_null(&self) -> bool {
-        self.acquired.is_null()
-    }
-
     #[inline(always)]
     pub fn tag(&self) -> usize {
         self.as_ptr().tag()
@@ -393,6 +365,12 @@ impl<T, C: Cs> Snapshot<T, C> {
     #[inline]
     pub fn with_tag<'s>(&'s self, tag: usize) -> TaggedSnapshot<'s, T, C> {
         TaggedSnapshot { inner: self, tag }
+    }
+}
+
+impl<T, C: Cs> Default for Snapshot<T, C> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -422,6 +400,12 @@ impl<T, C: Cs> Pointer<T> for Rc<T, C> {
     }
 }
 
+impl<T, C: Cs> Pointer<T> for &Rc<T, C> {
+    fn as_ptr(&self) -> TaggedCnt<T> {
+        self.ptr
+    }
+}
+
 impl<T, C: Cs> Pointer<T> for Snapshot<T, C> {
     fn as_ptr(&self) -> TaggedCnt<T> {
         self.acquired.as_ptr()
@@ -440,7 +424,9 @@ impl<'s, T, C: Cs> Pointer<T> for TaggedSnapshot<'s, T, C> {
     }
 }
 
-pub trait StrongPtr<T, C> {
+pub trait StrongPtr<T, C: Cs>: Pointer<T> {
+    const OWNS_REF_COUNT: bool;
+
     /// Consumes the aquired pointer, incrementing the reference count if we didn't increment
     /// it before.
     ///
@@ -449,37 +435,80 @@ pub trait StrongPtr<T, C> {
     ///
     /// For example, we do nothing but forget its ownership if the pointer is [`Rc`],
     /// but increment the reference count if the pointer is [`Snapshot`].
-    fn into_ref_count(self);
+    fn into_ref_count(self)
+    where
+        Self: Sized,
+    {
+        if Self::OWNS_REF_COUNT {
+            // As we have a reference count already, we don't have to do anything, but
+            // prevent calling a destructor which decrements it.
+            forget(self);
+        } else {
+            if let Some(cnt) = unsafe { self.as_ptr().untagged().as_ref() } {
+                cnt.add_ref();
+            }
+        }
+    }
+
+    /// Consumes `self` and constructs a [`Rc`] pointing to the same object.
+    ///
+    /// If `self` is already [`Rc`], it will not touch the reference count.
+    fn into_rc(self) -> Rc<T, C>
+    where
+        Self: Sized,
+    {
+        let rc = Rc::from_raw(self.as_ptr());
+        if Self::OWNS_REF_COUNT {
+            self.into_ref_count();
+        } else {
+            if let Some(cnt) = unsafe { self.as_ptr().untagged().as_ref() } {
+                cnt.add_ref();
+            }
+        }
+        rc
+    }
+
+    unsafe fn deref<'g>(&self) -> &'g T {
+        self.as_ptr().deref().data()
+    }
+
+    unsafe fn deref_mut<'g>(&mut self) -> &'g mut T {
+        self.as_ptr().deref_mut().data_mut()
+    }
+
+    fn as_ref(&self) -> Option<&T> {
+        if self.as_ptr().is_null() {
+            None
+        } else {
+            Some(unsafe { self.deref() })
+        }
+    }
+
+    fn as_mut(&mut self) -> Option<&mut T> {
+        if self.as_ptr().is_null() {
+            None
+        } else {
+            Some(unsafe { self.deref_mut() })
+        }
+    }
 }
 
 impl<T, C: Cs> StrongPtr<T, C> for Rc<T, C> {
-    fn into_ref_count(self) {
-        // As we have a reference count already, we don't have to do anything, but
-        // prevent calling a destructor which decrements it.
-        forget(self);
-    }
+    const OWNS_REF_COUNT: bool = true;
+}
+
+impl<T, C: Cs> StrongPtr<T, C> for &Rc<T, C> {
+    const OWNS_REF_COUNT: bool = false;
 }
 
 impl<T, C: Cs> StrongPtr<T, C> for Snapshot<T, C> {
-    fn into_ref_count(self) {
-        if let Some(cnt) = unsafe { self.as_ptr().untagged().as_ref() } {
-            cnt.add_ref();
-        }
-    }
+    const OWNS_REF_COUNT: bool = false;
 }
 
 impl<T, C: Cs> StrongPtr<T, C> for &Snapshot<T, C> {
-    fn into_ref_count(self) {
-        if let Some(cnt) = unsafe { self.as_ptr().untagged().as_ref() } {
-            cnt.add_ref();
-        }
-    }
+    const OWNS_REF_COUNT: bool = false;
 }
 
 impl<'s, T, C: Cs> StrongPtr<T, C> for TaggedSnapshot<'s, T, C> {
-    fn into_ref_count(self) {
-        if let Some(cnt) = unsafe { self.as_ptr().untagged().as_ref() } {
-            cnt.add_ref();
-        }
-    }
+    const OWNS_REF_COUNT: bool = false;
 }

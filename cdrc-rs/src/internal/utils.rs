@@ -275,4 +275,7 @@ pub type TaggedCnt<T> = Tagged<Counted<T>>;
 
 pub trait Pointer<T> {
     fn as_ptr(&self) -> TaggedCnt<T>;
+    fn is_null(&self) -> bool {
+        self.as_ptr().is_null()
+    }
 }

@@ -1,6 +1,8 @@
 use bitflags::bitflags;
-use cdrc_rs::{AtomicRc, AtomicWeak, Cs, Pointer, Rc, Snapshot, StrongPtr, Weak};
+use cdrc_rs::{AtomicRc, AtomicWeak, Cs, Pointer, Rc, Snapshot, Weak, StrongPtr};
 use std::{mem::swap, sync::atomic::Ordering};
+
+use super::{concurrent_map::OutputHolder, ConcurrentMap};
 
 bitflags! {
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -144,12 +146,7 @@ pub struct Finder<K, V, C: Cs> {
     new_update: Snapshot<Update<K, V, C>, C>,
 }
 
-impl<K, V, C> Finder<K, V, C>
-where
-    K: Ord + Clone,
-    V: Clone,
-    C: Cs,
-{
+impl<K, V, C: Cs> Finder<K, V, C> {
     fn new() -> Self {
         Self {
             gp: Snapshot::new(),
@@ -163,7 +160,14 @@ where
             new_update: Snapshot::new(),
         }
     }
+}
 
+impl<K, V, C> Finder<K, V, C>
+where
+    K: Ord + Clone,
+    V: Clone,
+    C: Cs,
+{
     /// Used by Insert, Delete and Find to traverse a branch of the BST.
     ///
     /// # Safety
@@ -239,16 +243,21 @@ impl<K, V, C: Cs> Helper<K, V, C> {
 
 pub struct Cursor<K, V, C: Cs>(Finder<K, V, C>, Helper<K, V, C>);
 
+impl<K, V, C: Cs> OutputHolder<V> for Cursor<K, V, C> {
+    fn default() -> Self {
+        Self(Finder::new(), Helper::new())
+    }
+
+    fn output(&self) -> &V {
+        unsafe { self.0.l.deref() }.value.as_ref().unwrap()
+    }
+}
+
 pub struct EFRBTree<K, V, C: Cs> {
     root: AtomicRc<Node<K, V, C>, C>,
 }
 
-impl<K, V, C> EFRBTree<K, V, C>
-where
-    K: Ord + Clone,
-    V: Clone,
-    C: Cs,
-{
+impl<K, V, C: Cs> EFRBTree<K, V, C> {
     pub fn new(cs: &C) -> Self {
         Self {
             root: AtomicRc::new(
@@ -263,7 +272,14 @@ where
             ),
         }
     }
+}
 
+impl<K, V, C> EFRBTree<K, V, C>
+where
+    K: Ord + Clone,
+    V: Clone,
+    C: Cs,
+{
     pub fn find(&self, key: &K, cursor: &mut Cursor<K, V, C>, cs: &C) -> bool {
         cursor.0.search(&self.root, key, cs);
         let l_node = cursor.0.l.as_ref().unwrap();
@@ -369,13 +385,15 @@ where
                 let new_update = Rc::new(op, cs).with_tag(UpdateTag::DFLAG.bits());
                 finder.pupdate.protect(&new_update, cs);
 
-                match finder.gp.as_ref().unwrap().update.compare_exchange(
-                    finder.gpupdate.as_ptr(),
-                    new_update,
-                    Ordering::Release,
-                    Ordering::Relaxed,
-                    cs,
-                ) {
+                match finder.gp.as_ref().unwrap()
+                    .update
+                    .compare_exchange(
+                        finder.gpupdate.as_ptr(),
+                        new_update,
+                        Ordering::Release,
+                        Ordering::Relaxed,
+                        cs,
+                    ) {
                     Ok(_) => {
                         if self.help_delete(&finder.pupdate, &mut cursor.1, cs) {
                             return true;
@@ -501,82 +519,42 @@ where
     }
 }
 
-#[cfg(test)]
-fn smoke<C: Cs>() {
-    extern crate rand;
-    use crossbeam_utils::thread;
-    use rand::prelude::*;
+impl<K, V, C> ConcurrentMap<K, V, C> for EFRBTree<K, V, C>
+where
+    K: Ord + Clone,
+    V: Clone,
+    C: Cs,
+{
+    type Output = Cursor<K, V, C>;
 
-    const THREADS: i32 = 30;
-    const ELEMENTS_PER_THREADS: i32 = 1000;
+    fn new() -> Self {
+        EFRBTree::new(unsafe { &C::without_epoch() })
+    }
 
-    let map = &{
-        let cs = &C::new();
-        EFRBTree::new(cs)
-    };
+    #[inline(always)]
+    fn get(&self, key: &K, output: &mut Self::Output, cs: &C) -> bool {
+        self.find(key, output, cs)
+    }
 
-    thread::scope(|s| {
-        for t in 0..THREADS {
-            s.spawn(move |_| {
-                let cursor = &mut Cursor(Finder::new(), Helper::new());
-                let rng = &mut rand::thread_rng();
-                let mut keys: Vec<i32> =
-                    (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
-                keys.shuffle(rng);
-                for i in keys {
-                    assert!(map.insert(i, i.to_string(), cursor, &C::new()));
-                }
-            });
-        }
-    })
-    .unwrap();
+    #[inline(always)]
+    fn insert(&self, key: K, value: V, output: &mut Self::Output, cs: &C) -> bool {
+        self.insert(key, value, output, cs)
+    }
 
-    thread::scope(|s| {
-        for t in 0..(THREADS / 2) {
-            s.spawn(move |_| {
-                let cursor = &mut Cursor(Finder::new(), Helper::new());
-                let rng = &mut rand::thread_rng();
-                let mut keys: Vec<i32> =
-                    (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
-                keys.shuffle(rng);
-                let cs = &mut C::new();
-                for i in keys {
-                    assert!(map.delete(&i, cursor, cs));
-                    assert_eq!(
-                        i.to_string(),
-                        *unsafe { cursor.0.l.deref() }.value.as_ref().unwrap()
-                    );
-                    cs.clear();
-                }
-            });
-        }
-    })
-    .unwrap();
-
-    thread::scope(|s| {
-        for t in (THREADS / 2)..THREADS {
-            s.spawn(move |_| {
-                let cursor = &mut Cursor(Finder::new(), Helper::new());
-                let rng = &mut rand::thread_rng();
-                let mut keys: Vec<i32> =
-                    (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
-                keys.shuffle(rng);
-                let cs = &mut C::new();
-                for i in keys {
-                    assert!(map.find(&i, cursor, cs));
-                    assert_eq!(
-                        i.to_string(),
-                        *unsafe { cursor.0.l.deref() }.value.as_ref().unwrap()
-                    );
-                    cs.clear();
-                }
-            });
-        }
-    })
-    .unwrap();
+    #[inline(always)]
+    fn remove(&self, key: &K, output: &mut Self::Output, cs: &C) -> bool {
+        self.delete(key, output, cs)
+    }
 }
 
-#[test]
-fn smoke_ebr() {
-    smoke::<cdrc_rs::CsEBR>();
+#[cfg(test)]
+mod tests {
+    use super::EFRBTree;
+    use crate::cdrc::concurrent_map;
+    use cdrc_rs::CsEBR;
+
+    #[test]
+    fn smoke_efrb_tree() {
+        concurrent_map::tests::smoke::<CsEBR, EFRBTree<i32, String, CsEBR>>();
+    }
 }

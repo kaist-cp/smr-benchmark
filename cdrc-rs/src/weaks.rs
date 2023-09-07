@@ -64,7 +64,7 @@ impl<T, C: Cs> AtomicWeak<T, C> {
         _: &'g C,
     ) -> Result<Weak<T, C>, CompareExchangeErrorWeak<T, P>>
     where
-        P: WeakPtr<T, C> + Pointer<T>,
+        P: WeakPtr<T, C>,
     {
         match self
             .link
@@ -147,7 +147,7 @@ impl<T, C: Cs> Weak<T, C> {
     #[inline(always)]
     pub fn from_strong<'g, P>(ptr: &P, cs: &'g C) -> Self
     where
-        P: StrongPtr<T, C> + Pointer<T>,
+        P: StrongPtr<T, C>,
     {
         unsafe {
             if let Some(cnt) = ptr.as_ptr().untagged().as_ref() {
@@ -254,7 +254,7 @@ impl<T, C: Cs> Pointer<T> for Weak<T, C> {
     }
 }
 
-pub trait WeakPtr<T, G> {
+pub trait WeakPtr<T, G>: Pointer<T> {
     /// Consumes the aquired pointer, incrementing the reference count if we didn't increment
     /// it before.
     ///

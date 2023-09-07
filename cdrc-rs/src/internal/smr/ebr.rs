@@ -54,12 +54,12 @@ impl<T> Acquired<T> for AcquiredEBR<T> {
 }
 
 pub struct CsEBR {
-    guard: Option<crossbeam_epoch::Guard>,
+    guard: Option<crossbeam::epoch::Guard>,
 }
 
-impl From<crossbeam_epoch::Guard> for CsEBR {
+impl From<crossbeam::epoch::Guard> for CsEBR {
     #[inline(always)]
-    fn from(guard: crossbeam_epoch::Guard) -> Self {
+    fn from(guard: crossbeam::epoch::Guard) -> Self {
         Self { guard: Some(guard) }
     }
 }
@@ -69,7 +69,7 @@ impl Cs for CsEBR {
 
     #[inline(always)]
     fn new() -> Self {
-        Self::from(crossbeam_epoch::pin())
+        Self::from(crossbeam::epoch::pin())
     }
 
     #[inline(always)]
@@ -121,7 +121,7 @@ impl Cs for CsEBR {
 
     fn clear(&mut self) {
         if let Some(guard) = &mut self.guard {
-            guard.repin();
+            guard.repin_after(|| {});
         }
     }
 }

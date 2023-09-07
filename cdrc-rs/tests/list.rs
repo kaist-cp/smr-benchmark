@@ -1,5 +1,5 @@
 use atomic::Ordering;
-use cdrc_rs::{AtomicRc, Cs, Pointer, Rc, Snapshot, TaggedCnt};
+use cdrc_rs::{AtomicRc, Cs, Pointer, Rc, Snapshot, StrongPtr, TaggedCnt};
 
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::mem::swap;
@@ -97,7 +97,7 @@ impl<K: Ord, V, C: Cs> Cursor<K, V, C> {
         // - cursor.prev: the ref of .next in previous untagged node (1 -> 2)
         // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
         let found = loop {
-            let curr_node = some_or!(unsafe { self.curr.as_ref() }, break false);
+            let curr_node = some_or!(self.curr.as_ref(), break false);
             self.next.load(&curr_node.next, cs);
 
             // - finding stage is done if cursor.curr advancement stops

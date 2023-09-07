@@ -8,7 +8,7 @@ extern crate crossbeam_pebr;
 extern crate smr_benchmark;
 
 use ::hp_pp::DEFAULT_DOMAIN;
-use cdrc_rs::{AcquireRetire, GuardEBR};
+use cdrc_rs::{Cs, CsEBR};
 use clap::{value_parser, Arg, ArgMatches, Command, ValueEnum};
 use crossbeam_utils::thread::scope;
 use csv::Writer;
@@ -537,37 +537,42 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             ),
             _ => panic!("Unsupported(or unimplemented) data structure for NBR"),
         },
-        MM::CDRC_EBR => match config.ds {
-            DS::HList => bench_map_cdrc::<cdrc::HList<usize, usize, cdrc_rs::GuardEBR>, N>(
-                config,
-                PrefillStrategy::Decreasing,
-            ),
-            DS::HMList => bench_map_cdrc::<cdrc::HMList<usize, usize, cdrc_rs::GuardEBR>, N>(
-                config,
-                PrefillStrategy::Decreasing,
-            ),
-            DS::HHSList => bench_map_cdrc::<cdrc::HHSList<usize, usize, cdrc_rs::GuardEBR>, N>(
-                config,
-                PrefillStrategy::Decreasing,
-            ),
-            DS::HashMap => bench_map_cdrc::<cdrc::HashMap<usize, usize, cdrc_rs::GuardEBR>, N>(
-                config,
-                PrefillStrategy::Decreasing,
-            ),
-            DS::NMTree => bench_map_cdrc::<cdrc::NMTreeMap<usize, usize, cdrc_rs::GuardEBR>, N>(
-                config,
-                PrefillStrategy::Random,
-            ),
-            DS::SkipList => bench_map_cdrc::<cdrc::SkipList<usize, usize, cdrc_rs::GuardEBR>, N>(
-                config,
-                PrefillStrategy::Random,
-            ),
-            DS::BonsaiTree => bench_map_cdrc::<
-                cdrc::BonsaiTreeMap<usize, usize, cdrc_rs::GuardEBR>,
-                N,
-            >(config, PrefillStrategy::Random),
-            _ => panic!("Unsupported(or unimplemented) data structure for CDRC EBR"),
-        },
+        MM::CDRC_EBR => {
+            match config.ds {
+                DS::HList => bench_map_cdrc::<CsEBR, cdrc::HList<usize, usize, cdrc_rs::CsEBR>, N>(
+                    config,
+                    PrefillStrategy::Decreasing,
+                ),
+                DS::HMList => bench_map_cdrc::<CsEBR, cdrc::HMList<usize, usize, cdrc_rs::CsEBR>, N>(
+                    config,
+                    PrefillStrategy::Decreasing,
+                ),
+                DS::HHSList => bench_map_cdrc::<CsEBR, cdrc::HHSList<usize, usize, cdrc_rs::CsEBR>, N>(
+                    config,
+                    PrefillStrategy::Decreasing,
+                ),
+                DS::HashMap => bench_map_cdrc::<CsEBR, cdrc::HashMap<usize, usize, cdrc_rs::CsEBR>, N>(
+                    config,
+                    PrefillStrategy::Decreasing,
+                ),
+                DS::NMTree => bench_map_cdrc::<CsEBR, cdrc::NMTreeMap<usize, usize, cdrc_rs::CsEBR>, N>(
+                    config,
+                    PrefillStrategy::Random,
+                ),
+                DS::SkipList => bench_map_cdrc::<CsEBR, cdrc::SkipList<usize, usize, cdrc_rs::CsEBR>, N>(
+                    config,
+                    PrefillStrategy::Random,
+                ),
+                DS::BonsaiTree => bench_map_cdrc::<CsEBR, 
+                    cdrc::BonsaiTreeMap<usize, usize, cdrc_rs::CsEBR>,
+                    N,
+                >(config, PrefillStrategy::Random),
+                DS::EFRBTree => bench_map_cdrc::<CsEBR, cdrc::EFRBTree<usize, usize, cdrc_rs::CsEBR>, N>(
+                    config,
+                    PrefillStrategy::Random,
+                ),
+            }
+        }
         MM::HP_SHARP => match config.ds {
             DS::HList => bench_map_hp_sharp::<hp_sharp_bench::HList<usize, usize>>(
                 config,
@@ -844,19 +849,20 @@ impl PrefillStrategy {
         stdout().flush().unwrap();
     }
 
-    fn prefill_cdrc<M: cdrc::ConcurrentMap<usize, usize, GuardEBR> + Send + Sync>(
+    fn prefill_cdrc<C: Cs, M: cdrc::ConcurrentMap<usize, usize, C> + Send + Sync>(
         self,
         config: &Config,
         map: &M,
     ) {
-        let guard = unsafe { &GuardEBR::unprotected() };
+        let output = &mut M::empty_output();
+        let cs = unsafe { &C::without_epoch() };
         let rng = &mut rand::thread_rng();
         match self {
             PrefillStrategy::Random => {
                 for _ in 0..config.prefill {
                     let key = config.key_dist.sample(rng);
                     let value = key.clone();
-                    map.insert(key, value, guard);
+                    map.insert(key, value, output, cs);
                 }
             }
             PrefillStrategy::Decreasing => {
@@ -867,7 +873,7 @@ impl PrefillStrategy {
                 keys.sort_by(|a, b| b.cmp(a));
                 for key in keys.drain(..) {
                     let value = key.clone();
-                    map.insert(key, value, guard);
+                    map.insert(key, value, output, cs);
                 }
             }
         }
@@ -1472,14 +1478,12 @@ fn bench_map_nbr<M: nbr::ConcurrentMap<usize, usize> + Send + Sync>(
     (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
 }
 
-fn bench_map_cdrc<M: cdrc::ConcurrentMap<usize, usize, GuardEBR> + Send + Sync, N: Unsigned>(
+fn bench_map_cdrc<C: Cs, M: cdrc::ConcurrentMap<usize, usize, C> + Send + Sync, N: Unsigned>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
     let map = &M::new();
     strategy.prefill_cdrc(config, map);
-
-    let collector = &cdrc_rs::ebr::Collector::new();
 
     let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
     let (ops_sender, ops_receiver) = mpsc::channel();
@@ -1533,28 +1537,28 @@ fn bench_map_cdrc<M: cdrc::ConcurrentMap<usize, usize, GuardEBR> + Send + Sync, 
             s.spawn(move |_| {
                 let mut ops: u64 = 0;
                 let mut rng = &mut rand::thread_rng();
-                let handle = collector.register();
                 barrier.clone().wait();
                 let start = Instant::now();
 
-                let mut guard = GuardEBR::handle_with(&handle);
+                let output = &mut M::empty_output();
+                let mut cs = C::new();
                 while start.elapsed() < config.duration {
                     let key = config.key_dist.sample(rng);
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
                         Op::Get => {
-                            map.get(&key, &guard);
+                            map.get(&key, output, &cs);
                         }
                         Op::Insert => {
                             let value = key.clone();
-                            map.insert(key, value, &guard);
+                            map.insert(key, value, output, &cs);
                         }
                         Op::Remove => {
-                            map.remove(&key, &guard);
+                            map.remove(&key, output, &cs);
                         }
                     }
                     ops += 1;
                     if ops % N::to_u64() == 0 {
-                        guard.release_with(&handle);
+                        cs.clear();
                     }
                 }
 
