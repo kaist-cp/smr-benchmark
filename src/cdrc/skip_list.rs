@@ -103,14 +103,14 @@ impl<K, V, C: Cs> OutputHolder<V> for Cursor<K, V, C> {
 impl<K, V, C: Cs> Cursor<K, V, C> {
     fn initialize(&mut self, head: &AtomicRc<Node<K, V, C>, C>, cs: &C) {
         self.preds[MAX_HEIGHT].load(head, cs);
+        self.pred_offset.fill(0);
         for i in 0..MAX_HEIGHT + 1 {
             self.pred_offset[MAX_HEIGHT - i] = i;
         }
+        for succ in &mut self.succs {
+            succ.clear();
+        }
         self.found_level = None;
-    }
-
-    fn head(&self) -> &Snapshot<Node<K, V, C>, C> {
-        &self.preds[MAX_HEIGHT]
     }
 
     fn pred(&self, level: usize) -> &Snapshot<Node<K, V, C>, C> {
@@ -143,7 +143,7 @@ where
 
         let mut level = MAX_HEIGHT;
         while level >= 1
-            && unsafe { cursor.head().deref() }.next[level - 1]
+            && unsafe { cursor.pred(level - 1).deref() }.next[level - 1]
                 .load(Ordering::Relaxed)
                 .is_null()
         {
@@ -183,7 +183,7 @@ where
 
             let mut level = MAX_HEIGHT;
             while level >= 1
-                && unsafe { cursor.head().deref() }.next[level - 1]
+                && unsafe { cursor.pred(level - 1).deref() }.next[level - 1]
                     .load(Ordering::Relaxed)
                     .is_null()
             {
