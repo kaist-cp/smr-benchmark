@@ -14,16 +14,6 @@ pub struct AcquiredEBR<T>(TaggedCnt<T>);
 
 impl<T> Acquired<T> for AcquiredEBR<T> {
     #[inline(always)]
-    fn ptr(&self) -> &TaggedCnt<T> {
-        &self.0
-    }
-
-    #[inline(always)]
-    fn ptr_mut(&mut self) -> &mut TaggedCnt<T> {
-        &mut self.0
-    }
-
-    #[inline(always)]
     fn as_ptr(&self) -> TaggedCnt<T> {
         self.0
     }
@@ -48,8 +38,14 @@ impl<T> Acquired<T> for AcquiredEBR<T> {
         self.0 == other.0
     }
 
-    fn clear_protection(&mut self) {
-        // No operation for EBR.
+    #[inline]
+    fn clear(&mut self) {
+        self.0 = TaggedCnt::null();
+    }
+
+    #[inline]
+    fn set_tag(&mut self, tag: usize) {
+        self.0 = self.0.with_tag(tag);
     }
 }
 
@@ -65,7 +61,7 @@ impl From<crossbeam::epoch::Guard> for CsEBR {
 }
 
 impl Cs for CsEBR {
-    type Acquired<T> = AcquiredEBR<T>;
+    type RawShield<T> = AcquiredEBR<T>;
 
     #[inline(always)]
     fn new() -> Self {
@@ -79,7 +75,7 @@ impl Cs for CsEBR {
     }
 
     #[inline(always)]
-    fn reserve<T>(&self, ptr: TaggedCnt<T>) -> Self::Acquired<T> {
+    fn reserve<T>(&self, ptr: TaggedCnt<T>) -> Self::RawShield<T> {
         AcquiredEBR(ptr)
     }
 
@@ -87,7 +83,7 @@ impl Cs for CsEBR {
     fn protect_snapshot<T>(
         &self,
         link: &atomic::Atomic<TaggedCnt<T>>,
-    ) -> Option<Self::Acquired<T>> {
+    ) -> Option<Self::RawShield<T>> {
         let ptr = link.load(Ordering::Acquire);
         if !ptr.is_null() && unsafe { ptr.deref() }.ref_count() == 0 {
             None

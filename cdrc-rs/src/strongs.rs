@@ -161,7 +161,7 @@ impl<T, C: Cs> Drop for AtomicRc<T, C> {
     fn drop(&mut self) {
         let ptr = self.link.load(Ordering::Relaxed);
         unsafe {
-            if let Some(cnt) = ptr.untagged().as_mut() {
+            if let Some(cnt) = ptr.as_raw().as_mut() {
                 let cs = C::new();
                 cs.delayed_decrement_ref_cnt(cnt);
             }
@@ -213,7 +213,7 @@ impl<T, C: Cs> Rc<T, C> {
             _marker: PhantomData,
         };
         unsafe {
-            if let Some(cnt) = rc.ptr.untagged().as_ref() {
+            if let Some(cnt) = rc.ptr.as_raw().as_ref() {
                 cs.increment_ref_cnt(cnt);
             }
         }
@@ -236,7 +236,7 @@ impl<T, C: Cs> Rc<T, C> {
             _marker: PhantomData,
         };
         unsafe {
-            if let Some(cnt) = rc.ptr.untagged().as_ref() {
+            if let Some(cnt) = rc.ptr.as_raw().as_ref() {
                 cs.increment_ref_cnt(cnt);
             }
         }
@@ -245,7 +245,7 @@ impl<T, C: Cs> Rc<T, C> {
 
     pub fn finalize(self, cs: &C) {
         unsafe {
-            if let Some(cnt) = self.ptr.untagged().as_mut() {
+            if let Some(cnt) = self.ptr.as_raw().as_mut() {
                 cs.delayed_decrement_ref_cnt(cnt);
             }
         }
@@ -269,14 +269,8 @@ impl<T, C: Cs> Rc<T, C> {
     }
 
     #[inline(always)]
-    pub fn untagged(mut self) -> Self {
-        self.ptr = TaggedCnt::new(self.ptr.untagged());
-        self
-    }
-
-    #[inline(always)]
     pub fn with_tag(mut self, tag: usize) -> Self {
-        self.ptr.set_tag(tag);
+        self.ptr = self.ptr.with_tag(tag);
         self
     }
 
@@ -313,14 +307,14 @@ impl<T, C: Cs> PartialEq for Rc<T, C> {
 
 pub struct Snapshot<T, C: Cs> {
     // Hint: `C::Acquired` is usually a wrapper struct containing `TaggedCnt`.
-    acquired: C::Acquired<T>,
+    acquired: C::RawShield<T>,
 }
 
 impl<T, C: Cs> Snapshot<T, C> {
     #[inline(always)]
     pub fn new() -> Self {
         Self {
-            acquired: <C as Cs>::Acquired::null(),
+            acquired: <C as Cs>::RawShield::null(),
         }
     }
 
@@ -352,19 +346,19 @@ impl<T, C: Cs> Snapshot<T, C> {
         self.as_ptr().tag()
     }
 
-    #[inline(always)]
-    pub fn untagged(mut self) -> Self {
-        self.acquired.ptr_mut().set_tag(0);
-        self
-    }
-
+    #[inline]
     pub fn set_tag(&mut self, tag: usize) {
-        self.acquired.ptr_mut().set_tag(tag);
+        self.acquired.set_tag(tag);
     }
 
     #[inline]
     pub fn with_tag<'s>(&'s self, tag: usize) -> TaggedSnapshot<'s, T, C> {
         TaggedSnapshot { inner: self, tag }
+    }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.acquired.clear();
     }
 }
 
@@ -377,7 +371,7 @@ impl<T, C: Cs> Default for Snapshot<T, C> {
 impl<T, C: Cs> Drop for Snapshot<T, C> {
     #[inline(always)]
     fn drop(&mut self) {
-        self.acquired.clear_protection();
+        self.acquired.clear();
     }
 }
 
@@ -444,7 +438,7 @@ pub trait StrongPtr<T, C: Cs>: Pointer<T> {
             // prevent calling a destructor which decrements it.
             forget(self);
         } else {
-            if let Some(cnt) = unsafe { self.as_ptr().untagged().as_ref() } {
+            if let Some(cnt) = unsafe { self.as_ptr().as_raw().as_ref() } {
                 cnt.add_ref();
             }
         }
@@ -461,7 +455,7 @@ pub trait StrongPtr<T, C: Cs>: Pointer<T> {
         if Self::OWNS_REF_COUNT {
             self.into_ref_count();
         } else {
-            if let Some(cnt) = unsafe { self.as_ptr().untagged().as_ref() } {
+            if let Some(cnt) = unsafe { self.as_ptr().as_raw().as_ref() } {
                 cnt.add_ref();
             }
         }

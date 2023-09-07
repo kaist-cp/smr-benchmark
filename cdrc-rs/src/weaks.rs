@@ -110,7 +110,7 @@ impl<T, C: Cs> Drop for AtomicWeak<T, C> {
     fn drop(&mut self) {
         let ptr = self.link.load(Ordering::SeqCst);
         unsafe {
-            if let Some(cnt) = ptr.untagged().as_mut() {
+            if let Some(cnt) = ptr.as_raw().as_mut() {
                 let cs = C::new();
                 cs.delayed_decrement_weak_cnt(cnt);
             }
@@ -150,7 +150,7 @@ impl<T, C: Cs> Weak<T, C> {
         P: StrongPtr<T, C>,
     {
         unsafe {
-            if let Some(cnt) = ptr.as_ptr().untagged().as_ref() {
+            if let Some(cnt) = ptr.as_ptr().as_raw().as_ref() {
                 if cs.increment_weak_cnt(cnt) {
                     return Self {
                         ptr: ptr.as_ptr(),
@@ -169,7 +169,7 @@ impl<T, C: Cs> Weak<T, C> {
             _marker: PhantomData,
         };
         unsafe {
-            if let Some(cnt) = weak.ptr.untagged().as_ref() {
+            if let Some(cnt) = weak.ptr.as_raw().as_ref() {
                 cs.increment_weak_cnt(cnt);
             }
         }
@@ -179,7 +179,7 @@ impl<T, C: Cs> Weak<T, C> {
     #[inline]
     pub fn finalize(self, cs: &C) {
         unsafe {
-            if let Some(cnt) = self.ptr.untagged().as_mut() {
+            if let Some(cnt) = self.ptr.as_raw().as_mut() {
                 cs.delayed_decrement_weak_cnt(cnt);
             }
         }
@@ -214,13 +214,13 @@ impl<T, C: Cs> Weak<T, C> {
 
     #[inline(always)]
     pub fn untagged(mut self) -> Self {
-        self.ptr = TaggedCnt::new(self.ptr.untagged());
+        self.ptr = TaggedCnt::new(self.ptr.as_raw());
         self
     }
 
     #[inline(always)]
     pub fn with_tag(mut self, tag: usize) -> Self {
-        self.ptr.set_tag(tag);
+        self.ptr = self.ptr.with_tag(tag);
         self
     }
 
@@ -276,7 +276,7 @@ impl<T, C: Cs> WeakPtr<T, C> for Weak<T, C> {
 
 impl<T, C: Cs> WeakPtr<T, C> for Snapshot<T, C> {
     fn into_weak_count(self) {
-        if let Some(cnt) = unsafe { self.as_ptr().untagged().as_ref() } {
+        if let Some(cnt) = unsafe { self.as_ptr().as_raw().as_ref() } {
             cnt.add_ref();
         }
     }
@@ -284,7 +284,7 @@ impl<T, C: Cs> WeakPtr<T, C> for Snapshot<T, C> {
 
 impl<T, C: Cs> WeakPtr<T, C> for &Snapshot<T, C> {
     fn into_weak_count(self) {
-        if let Some(cnt) = unsafe { self.as_ptr().untagged().as_ref() } {
+        if let Some(cnt) = unsafe { self.as_ptr().as_raw().as_ref() } {
             cnt.add_ref();
         }
     }
@@ -292,7 +292,7 @@ impl<T, C: Cs> WeakPtr<T, C> for &Snapshot<T, C> {
 
 impl<'s, T, C: Cs> WeakPtr<T, C> for TaggedSnapshot<'s, T, C> {
     fn into_weak_count(self) {
-        if let Some(cnt) = unsafe { self.as_ptr().untagged().as_ref() } {
+        if let Some(cnt) = unsafe { self.as_ptr().as_raw().as_ref() } {
             cnt.add_ref();
         }
     }
