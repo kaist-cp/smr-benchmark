@@ -76,6 +76,7 @@ pub struct Cursor<K, V, C: Cs> {
     pred_offset: [usize; MAX_HEIGHT + 1],
     succs: [Snapshot<Node<K, V, C>, C>; MAX_HEIGHT],
     next: Snapshot<Node<K, V, C>, C>,
+    new_node: Snapshot<Node<K, V, C>, C>,
     found_level: Option<usize>,
 
     /// `found_value` is not set by a traversal function.
@@ -90,6 +91,7 @@ impl<K, V, C: Cs> OutputHolder<V> for Cursor<K, V, C> {
             pred_offset: core::array::from_fn(|_| Default::default()),
             succs: Default::default(),
             next: Default::default(),
+            new_node: Default::default(),
             found_level: None,
             found_value: None,
         }
@@ -269,6 +271,7 @@ where
         let new_node = Rc::new(Node::new(key, value), cs);
         let new_node_ref = unsafe { new_node.deref() };
         let height = new_node_ref.height;
+        cursor.new_node.protect(&new_node, cs);
 
         loop {
             new_node_ref.next[0].swap(
@@ -280,7 +283,7 @@ where
             if unsafe { cursor.pred(0).deref() }.next[0]
                 .compare_exchange(
                     cursor.succs[0].as_ptr(),
-                    &new_node,
+                    &cursor.new_node,
                     Ordering::Relaxed,
                     Ordering::Relaxed,
                     cs,
@@ -326,7 +329,7 @@ where
                 if unsafe { cursor.pred(level).deref() }.next[level]
                     .compare_exchange(
                         cursor.succs[level].as_ptr(),
-                        &new_node,
+                        &cursor.new_node,
                         Ordering::SeqCst,
                         Ordering::SeqCst,
                         cs,

@@ -408,11 +408,11 @@ where
         match node_ref.key.cmp(key) {
             cmp::Ordering::Equal => (node.into_rc(), false),
             cmp::Ordering::Less => {
-                let (new_right, inserted) = self.do_insert(&right, key, value, cs);
+                let (new_right, inserted) = self.do_insert(right, key, value, cs);
                 (self.mk_balanced(&node, left, new_right, cs), inserted)
             }
             cmp::Ordering::Greater => {
-                let (new_left, inserted) = self.do_insert(&left, key, value, cs);
+                let (new_left, inserted) = self.do_insert(left, key, value, cs);
                 (self.mk_balanced(&node, new_left, right, cs), inserted)
             }
         }
@@ -457,7 +457,7 @@ where
                 (self.mk_balanced(&node, left, new_right, cs), found)
             }
             cmp::Ordering::Greater => {
-                let (new_left, found) = self.do_remove(&left, key, cs);
+                let (new_left, found) = self.do_remove(left, key, cs);
                 (self.mk_balanced(&node, new_left, right, cs), found)
             }
         }
@@ -479,7 +479,7 @@ where
         }
 
         if !left.is_null() {
-            let (new_left, succ) = self.pull_leftmost(&left, cs);
+            let (new_left, succ) = self.pull_leftmost(left, cs);
             return (self.mk_balanced(&node, new_left, right, cs), succ);
         }
         // node is the leftmost

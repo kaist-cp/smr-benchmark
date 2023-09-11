@@ -392,12 +392,6 @@ impl<T, C: Cs> Pointer<T> for Rc<T, C> {
     }
 }
 
-impl<T, C: Cs> Pointer<T> for &Rc<T, C> {
-    fn as_ptr(&self) -> TaggedCnt<T> {
-        self.ptr
-    }
-}
-
 impl<T, C: Cs> Pointer<T> for Snapshot<T, C> {
     fn as_ptr(&self) -> TaggedCnt<T> {
         self.acquired.as_ptr()
@@ -487,10 +481,6 @@ pub trait StrongPtr<T, C: Cs>: Pointer<T> {
 
 impl<T, C: Cs> StrongPtr<T, C> for Rc<T, C> {
     const OWNS_REF_COUNT: bool = true;
-}
-
-impl<T, C: Cs> StrongPtr<T, C> for &Rc<T, C> {
-    const OWNS_REF_COUNT: bool = false;
 }
 
 impl<T, C: Cs> StrongPtr<T, C> for Snapshot<T, C> {
