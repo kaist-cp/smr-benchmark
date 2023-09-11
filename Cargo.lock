@@ -229,33 +229,33 @@ checksum = "acbf1af155f9b9ef647e42cdc158db4b64a1b61f743629225fde6f3e0be2a7c7"
 [[package]]
 name = "crossbeam"
 version = "0.8.2"
-source = "git+https://github.com/kaist-cp/crossbeam.git?rev=f5d4a046#f5d4a04699d4bf30b3a50db4d143885c780cb359"
+source = "git+https://github.com/kaist-cp/crossbeam.git?branch=cdrc-exp#39d1554caadafaa7dd82d28fc401a2a83b8265c0"
 dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-channel",
  "crossbeam-deque",
- "crossbeam-epoch 0.9.13 (git+https://github.com/kaist-cp/crossbeam.git?rev=f5d4a046)",
+ "crossbeam-epoch 0.9.13 (git+https://github.com/kaist-cp/crossbeam.git?branch=cdrc-exp)",
  "crossbeam-queue",
- "crossbeam-utils 0.8.14 (git+https://github.com/kaist-cp/crossbeam.git?rev=f5d4a046)",
+ "crossbeam-utils 0.8.14 (git+https://github.com/kaist-cp/crossbeam.git?branch=cdrc-exp)",
 ]
 
 [[package]]
 name = "crossbeam-channel"
 version = "0.5.6"
-source = "git+https://github.com/kaist-cp/crossbeam.git?rev=f5d4a046#f5d4a04699d4bf30b3a50db4d143885c780cb359"
+source = "git+https://github.com/kaist-cp/crossbeam.git?branch=cdrc-exp#39d1554caadafaa7dd82d28fc401a2a83b8265c0"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-utils 0.8.14 (git+https://github.com/kaist-cp/crossbeam.git?rev=f5d4a046)",
+ "crossbeam-utils 0.8.14 (git+https://github.com/kaist-cp/crossbeam.git?branch=cdrc-exp)",
 ]
 
 [[package]]
 name = "crossbeam-deque"
 version = "0.8.2"
-source = "git+https://github.com/kaist-cp/crossbeam.git?rev=f5d4a046#f5d4a04699d4bf30b3a50db4d143885c780cb359"
+source = "git+https://github.com/kaist-cp/crossbeam.git?branch=cdrc-exp#39d1554caadafaa7dd82d28fc401a2a83b8265c0"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-epoch 0.9.13 (git+https://github.com/kaist-cp/crossbeam.git?rev=f5d4a046)",
- "crossbeam-utils 0.8.14 (git+https://github.com/kaist-cp/crossbeam.git?rev=f5d4a046)",
+ "crossbeam-epoch 0.9.13 (git+https://github.com/kaist-cp/crossbeam.git?branch=cdrc-exp)",
+ "crossbeam-utils 0.8.14 (git+https://github.com/kaist-cp/crossbeam.git?branch=cdrc-exp)",
 ]
 
 [[package]]
@@ -272,11 +272,11 @@ dependencies = [
 [[package]]
 name = "crossbeam-epoch"
 version = "0.9.13"
-source = "git+https://github.com/kaist-cp/crossbeam.git?rev=f5d4a046#f5d4a04699d4bf30b3a50db4d143885c780cb359"
+source = "git+https://github.com/kaist-cp/crossbeam.git?branch=cdrc-exp#39d1554caadafaa7dd82d28fc401a2a83b8265c0"
 dependencies = [
  "autocfg",
  "cfg-if 1.0.0",
- "crossbeam-utils 0.8.14 (git+https://github.com/kaist-cp/crossbeam.git?rev=f5d4a046)",
+ "crossbeam-utils 0.8.14 (git+https://github.com/kaist-cp/crossbeam.git?branch=cdrc-exp)",
  "memoffset",
  "scopeguard",
 ]
@@ -308,10 +308,10 @@ dependencies = [
 [[package]]
 name = "crossbeam-queue"
 version = "0.3.8"
-source = "git+https://github.com/kaist-cp/crossbeam.git?rev=f5d4a046#f5d4a04699d4bf30b3a50db4d143885c780cb359"
+source = "git+https://github.com/kaist-cp/crossbeam.git?branch=cdrc-exp#39d1554caadafaa7dd82d28fc401a2a83b8265c0"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-utils 0.8.14 (git+https://github.com/kaist-cp/crossbeam.git?rev=f5d4a046)",
+ "crossbeam-utils 0.8.14 (git+https://github.com/kaist-cp/crossbeam.git?branch=cdrc-exp)",
 ]
 
 [[package]]
@@ -324,7 +324,7 @@ dependencies = [
 [[package]]
 name = "crossbeam-utils"
 version = "0.8.14"
-source = "git+https://github.com/kaist-cp/crossbeam.git?rev=f5d4a046#f5d4a04699d4bf30b3a50db4d143885c780cb359"
+source = "git+https://github.com/kaist-cp/crossbeam.git?branch=cdrc-exp#39d1554caadafaa7dd82d28fc401a2a83b8265c0"
 dependencies = [
  "cfg-if 1.0.0",
 ]
