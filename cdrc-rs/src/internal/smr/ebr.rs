@@ -75,20 +75,22 @@ impl Cs for CsEBR {
     }
 
     #[inline(always)]
-    fn reserve<T>(&self, ptr: TaggedCnt<T>) -> Self::RawShield<T> {
-        AcquiredEBR(ptr)
+    fn reserve<T>(&self, ptr: TaggedCnt<T>, shield: &mut Self::RawShield<T>) {
+        *shield = AcquiredEBR(ptr);
     }
 
     #[inline(always)]
     fn protect_snapshot<T>(
         &self,
         link: &atomic::Atomic<TaggedCnt<T>>,
-    ) -> Option<Self::RawShield<T>> {
+        shield: &mut Self::RawShield<T>,
+    ) -> bool {
         let ptr = link.load(Ordering::Acquire);
         if !ptr.is_null() && unsafe { ptr.deref() }.ref_count() == 0 {
-            None
+            false
         } else {
-            Some(AcquiredEBR(ptr))
+            *shield = AcquiredEBR(ptr);
+            true
         }
     }
 

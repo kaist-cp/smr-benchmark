@@ -510,10 +510,15 @@ where
 mod tests {
     use super::NMTreeMap;
     use crate::cdrc::concurrent_map;
-    use cdrc_rs::CsEBR;
+    use cdrc_rs::{CsEBR, CsHP};
 
     #[test]
-    fn smoke_nm_tree() {
+    fn smoke_nm_tree_ebr() {
         concurrent_map::tests::smoke::<CsEBR, NMTreeMap<i32, String, CsEBR>>();
+    }
+
+    #[test]
+    fn smoke_nm_tree_hp() {
+        concurrent_map::tests::smoke::<CsHP, NMTreeMap<i32, String, CsHP>>();
     }
 }

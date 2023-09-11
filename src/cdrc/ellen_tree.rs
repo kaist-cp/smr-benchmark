@@ -549,10 +549,15 @@ where
 mod tests {
     use super::EFRBTree;
     use crate::cdrc::concurrent_map;
-    use cdrc_rs::CsEBR;
+    use cdrc_rs::{CsEBR, CsHP};
 
     #[test]
-    fn smoke_efrb_tree() {
+    fn smoke_efrb_tree_ebr() {
         concurrent_map::tests::smoke::<CsEBR, EFRBTree<i32, String, CsEBR>>();
+    }
+
+    #[test]
+    fn smoke_efrb_tree_hp() {
+        concurrent_map::tests::smoke::<CsHP, EFRBTree<i32, String, CsHP>>();
     }
 }

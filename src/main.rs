@@ -8,7 +8,7 @@ extern crate crossbeam_pebr;
 extern crate smr_benchmark;
 
 use ::hp_pp::DEFAULT_DOMAIN;
-use cdrc_rs::{Cs, CsEBR};
+use cdrc_rs::{Cs, CsEBR, CsHP};
 use clap::{value_parser, Arg, ArgMatches, Command, ValueEnum};
 use crossbeam_utils::thread::scope;
 use csv::Writer;
@@ -70,6 +70,7 @@ pub enum MM {
     NBR,
     NBR_LARGE,
     CDRC_EBR,
+    CDRC_HP,
     HP_SHARP,
     CDRC_HP_SHARP,
     VBR,
@@ -577,6 +578,41 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                     PrefillStrategy::Random,
                 )
             }
+        },
+        MM::CDRC_HP => match config.ds {
+            DS::HList => bench_map_cdrc::<CsHP, cdrc::HList<usize, usize, cdrc_rs::CsHP>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::HMList => bench_map_cdrc::<CsHP, cdrc::HMList<usize, usize, cdrc_rs::CsHP>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::HHSList => bench_map_cdrc::<CsHP, cdrc::HHSList<usize, usize, cdrc_rs::CsHP>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::HashMap => bench_map_cdrc::<CsHP, cdrc::HashMap<usize, usize, cdrc_rs::CsHP>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::NMTree => bench_map_cdrc::<CsHP, cdrc::NMTreeMap<usize, usize, cdrc_rs::CsHP>, N>(
+                config,
+                PrefillStrategy::Random,
+            ),
+            DS::SkipList => bench_map_cdrc::<CsHP, cdrc::SkipList<usize, usize, cdrc_rs::CsHP>, N>(
+                config,
+                PrefillStrategy::Random,
+            ),
+            DS::BonsaiTree => bench_map_cdrc::<
+                CsHP,
+                cdrc::BonsaiTreeMap<usize, usize, cdrc_rs::CsHP>,
+                N,
+            >(config, PrefillStrategy::Random),
+            DS::EFRBTree => bench_map_cdrc::<CsHP, cdrc::EFRBTree<usize, usize, cdrc_rs::CsHP>, N>(
+                config,
+                PrefillStrategy::Random,
+            ),
         },
         MM::HP_SHARP => match config.ds {
             DS::HList => bench_map_hp_sharp::<hp_sharp_bench::HList<usize, usize>>(

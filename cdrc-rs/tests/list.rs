@@ -347,3 +347,8 @@ fn smoke<C: Cs>() {
 fn smoke_ebr() {
     smoke::<cdrc_rs::CsEBR>();
 }
+
+#[test]
+fn smoke_hp() {
+    smoke::<cdrc_rs::CsHP>();
+}

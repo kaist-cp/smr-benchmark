@@ -657,10 +657,15 @@ where
 mod tests {
     use super::BonsaiTreeMap;
     use crate::cdrc::concurrent_map;
-    use cdrc_rs::CsEBR;
+    use cdrc_rs::{CsEBR, CsHP};
 
     #[test]
-    fn smoke_bonsai_tree() {
+    fn smoke_bonsai_tree_ebr() {
         concurrent_map::tests::smoke::<CsEBR, BonsaiTreeMap<i32, String, CsEBR>>();
+    }
+
+    #[test]
+    fn smoke_bonsai_tree_hp() {
+        concurrent_map::tests::smoke::<CsHP, BonsaiTreeMap<i32, String, CsHP>>();
     }
 }

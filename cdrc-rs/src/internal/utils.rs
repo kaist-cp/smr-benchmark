@@ -248,10 +248,6 @@ impl<T> Tagged<T> {
     pub unsafe fn deref_mut<'g>(&mut self) -> &'g mut T {
         &mut *self.as_raw()
     }
-
-    pub fn as_usize(&self) -> usize {
-        self.ptr as usize
-    }
 }
 
 /// Returns a bitmask containing the unused least significant bits of an aligned pointer to `T`.

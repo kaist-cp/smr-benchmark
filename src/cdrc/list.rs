@@ -493,21 +493,36 @@ where
 mod tests {
     use super::{HHSList, HList, HMList};
     use crate::cdrc::concurrent_map;
-    use cdrc_rs::CsEBR;
+    use cdrc_rs::{CsEBR, CsHP};
 
     #[test]
-    fn smoke_ebr_h_list() {
+    fn smoke_ebr_h_list_ebr() {
         concurrent_map::tests::smoke::<CsEBR, HList<i32, String, CsEBR>>();
     }
 
     #[test]
-    fn smoke_ebr_hm_list() {
+    fn smoke_ebr_hm_list_ebr() {
         concurrent_map::tests::smoke::<CsEBR, HMList<i32, String, CsEBR>>();
     }
 
     #[test]
-    fn smoke_ebr_hhs_list() {
+    fn smoke_ebr_hhs_list_ebr() {
         concurrent_map::tests::smoke::<CsEBR, HHSList<i32, String, CsEBR>>();
+    }
+
+    #[test]
+    fn smoke_ebr_h_list_hp() {
+        concurrent_map::tests::smoke::<CsHP, HList<i32, String, CsHP>>();
+    }
+
+    #[test]
+    fn smoke_ebr_hm_list_hp() {
+        concurrent_map::tests::smoke::<CsHP, HMList<i32, String, CsHP>>();
+    }
+
+    #[test]
+    fn smoke_ebr_hhs_list_hp() {
+        concurrent_map::tests::smoke::<CsHP, HHSList<i32, String, CsHP>>();
     }
 
     #[test]

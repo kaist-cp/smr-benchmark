@@ -43,8 +43,12 @@ pub trait Cs {
     fn create_object<T>(&self, obj: T) -> *mut Counted<T>;
     /// Creates a shield for the given pointer, assuming that `ptr` is already protected by a
     /// reference count.
-    fn reserve<T>(&self, ptr: TaggedCnt<T>) -> Self::RawShield<T>;
-    fn protect_snapshot<T>(&self, link: &Atomic<TaggedCnt<T>>) -> Option<Self::RawShield<T>>;
+    fn reserve<T>(&self, ptr: TaggedCnt<T>, shield: &mut Self::RawShield<T>);
+    fn protect_snapshot<T>(
+        &self,
+        link: &Atomic<TaggedCnt<T>>,
+        shield: &mut Self::RawShield<T>,
+    ) -> bool;
     unsafe fn delete_object<T>(&self, ptr: *mut Counted<T>);
     unsafe fn retire<T>(&self, ptr: *mut Counted<T>, ret_type: RetireType);
     fn clear(&mut self);

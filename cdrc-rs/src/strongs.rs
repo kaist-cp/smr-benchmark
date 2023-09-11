@@ -320,25 +320,23 @@ impl<T, C: Cs> Snapshot<T, C> {
 
     #[inline]
     pub fn load(&mut self, from: &AtomicRc<T, C>, cs: &C) {
-        self.acquired = cs
-            .protect_snapshot(&from.link)
-            .expect("The reference count cannot be 0, when we are loading from `AtomicRc`");
+        let ok = cs.protect_snapshot(&from.link, &mut self.acquired);
+        debug_assert!(
+            ok,
+            "The reference count cannot be 0, when we are loading from `AtomicRc`"
+        );
     }
 
     #[inline]
     pub fn load_from_weak(&mut self, from: &AtomicWeak<T, C>, cs: &C) -> bool {
-        // TODO: Referencing weak variants from strong one is ugly... Find a better
+        // TODO: Referencing AtomicWeak from strong snapshot is awkward... Find a better
         // project/API structure.
-        self.acquired = match cs.protect_snapshot(&from.link) {
-            Some(acquired) => acquired,
-            None => return false,
-        };
-        true
+        cs.protect_snapshot(&from.link, &mut self.acquired)
     }
 
     #[inline]
     pub fn protect(&mut self, ptr: &Rc<T, C>, cs: &C) {
-        self.acquired = cs.reserve(ptr.as_ptr());
+        cs.reserve(ptr.as_ptr(), &mut self.acquired);
     }
 
     #[inline(always)]

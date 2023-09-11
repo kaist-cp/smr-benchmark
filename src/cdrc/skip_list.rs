@@ -417,10 +417,15 @@ where
 mod tests {
     use super::SkipList;
     use crate::cdrc::concurrent_map;
-    use cdrc_rs::CsEBR;
+    use cdrc_rs::{CsEBR, CsHP};
 
     #[test]
-    fn smoke_skip_list() {
+    fn smoke_skip_list_ebr() {
         concurrent_map::tests::smoke::<CsEBR, SkipList<i32, String, CsEBR>>();
+    }
+
+    #[test]
+    fn smoke_skip_list_hp() {
+        concurrent_map::tests::smoke::<CsHP, SkipList<i32, String, CsHP>>();
     }
 }

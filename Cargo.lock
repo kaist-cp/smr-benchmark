@@ -143,6 +143,8 @@ dependencies = [
  "atomic",
  "cfg-if 1.0.0",
  "crossbeam",
+ "membarrier 0.2.3 (git+https://github.com/jeehoonkang/membarrier-rs.git?branch=smr-benchmark)",
+ "rustc-hash",
  "scopeguard",
  "static_assertions 1.1.0",
 ]

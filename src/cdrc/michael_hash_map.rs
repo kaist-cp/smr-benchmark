@@ -83,10 +83,15 @@ where
 mod tests {
     use super::HashMap;
     use crate::cdrc::concurrent_map;
-    use cdrc_rs::CsEBR;
+    use cdrc_rs::{CsEBR, CsHP};
 
     #[test]
-    fn smoke_hashmap() {
+    fn smoke_hashmap_ebr() {
         concurrent_map::tests::smoke::<CsEBR, HashMap<i32, String, CsEBR>>();
+    }
+
+    #[test]
+    fn smoke_hashmap_hp() {
+        concurrent_map::tests::smoke::<CsHP, HashMap<i32, String, CsHP>>();
     }
 }
