@@ -73,31 +73,25 @@ where
         let height = node.height.get(guard)?;
 
         for level in (0..height).rev() {
-            loop {
-                let next = node.next[level].load(Ordering::Acquire, guard)?;
-                let next_tag = next.tag()?;
-                if level == 0 && (next_tag & 1) != 0 {
-                    return Ok(false);
-                } else if (next_tag & 1) != 0 {
-                    break;
-                }
+            let next = node.next[level].load(Ordering::Acquire, guard)?;
+            let next_tag = next.tag()?;
+            if level == 0 && (next_tag & 1) != 0 {
+                return Ok(false);
+            } else if (next_tag & 1) != 0 {
+                continue;
+            }
 
-                let result = node.next[level].compare_exchange(
-                    ptr,
-                    next,
-                    next.with_tag(1),
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                    guard,
-                );
+            let result = node.next[level].compare_exchange(
+                ptr,
+                next,
+                next.with_tag(next_tag | 1),
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+                guard,
+            );
 
-                if level == 0 && result.is_err() {
-                    return Ok(false);
-                } else if result.is_err() {
-                    return Err(());
-                } else {
-                    break;
-                }
+            if level == 0 && result.is_err() {
+                return Ok(false);
             }
         }
         Ok(true)
@@ -338,82 +332,63 @@ where
 
         // The new node was successfully installed.
         // Build the rest of the tower above level 0.
-        'build: for level in 1..height {
-            loop {
-                let pred = cursor.preds[level];
-                let succ = cursor.succs[level];
-                let next = match new_node_ref.next[level].load(Ordering::SeqCst, guard) {
-                    Ok(next) => next,
-                    Err(_) => {
-                        new_node_ref
-                            .refs
-                            .fetch_sub(height - level, Ordering::SeqCst);
-                        break 'build;
-                    }
-                };
-
-                // If the current pointer is marked, that means another thread is already
-                // removing the node we've just inserted. In that case, let's just stop
-                // building the tower.
-                let next_tag = match next.tag() {
-                    Ok(tag) => tag,
-                    Err(_) => {
-                        new_node_ref
-                            .refs
-                            .fetch_sub(height - level, Ordering::SeqCst);
-                        break 'build;
-                    }
-                };
-                if (next_tag & 1) != 0 {
-                    new_node_ref
-                        .refs
-                        .fetch_sub(height - level, Ordering::SeqCst);
-                    break 'build;
-                }
-
-                if new_node_ref.next[level]
-                    .compare_exchange(
-                        new_node,
-                        next,
-                        succ,
-                        Ordering::SeqCst,
-                        Ordering::SeqCst,
-                        guard,
-                    )
-                    .is_err()
-                {
-                    new_node_ref
-                        .refs
-                        .fetch_sub(height - level, Ordering::SeqCst);
-                    break 'build;
-                }
-
-                // Try installing the new node at the current level.
-                if unsafe { pred.deref() }.next[level]
-                    .compare_exchange(
-                        pred,
-                        succ,
-                        new_node,
-                        Ordering::SeqCst,
-                        Ordering::SeqCst,
-                        guard,
-                    )
-                    .is_ok()
-                {
-                    // Success! Continue on the next level.
-                    break;
-                }
-
-                // Installation failed.
+        for level in 1..height {
+            if self.insert_level(&cursor, level, new_node, guard).is_err() {
                 new_node_ref
                     .refs
                     .fetch_sub(height - level, Ordering::SeqCst);
-                break 'build;
+                break;
             }
         }
 
         let _ = Node::decrement(new_node, guard);
         Ok(true)
+    }
+
+    fn insert_level(
+        &self,
+        cursor: &Cursor<K, V>,
+        level: usize,
+        new_node: Shared<Node<K, V>>,
+        guard: &Guard<Node<K, V>>,
+    ) -> Result<(), ()> {
+        let new_node_ref = unsafe { new_node.deref() };
+
+        let pred = cursor.preds[level];
+        let succ = cursor.succs[level];
+        let next = new_node_ref.next[level].load(Ordering::SeqCst, guard)?;
+
+        // If the current pointer is marked, that means another thread is already
+        // removing the node we've just inserted. In that case, let's just stop
+        // building the tower.
+        let next_tag = next.tag()?;
+        if (next_tag & 1) != 0 {
+            return Err(());
+        }
+
+        new_node_ref.next[level]
+            .compare_exchange(
+                new_node,
+                next,
+                succ,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+                guard,
+            )
+            .map_err(|_| ())?;
+
+        // Try installing the new node at the current level.
+        unsafe { pred.deref() }.next[level]
+            .compare_exchange(
+                pred,
+                succ,
+                new_node,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+                guard,
+            )
+            .map(|_| ())
+            .map_err(|_| ())
     }
 
     fn insert(&self, key: K, value: V, local: &Local<Node<K, V>>) -> bool {
@@ -441,7 +416,7 @@ where
     }
 
     pub fn remove(&self, key: &K, local: &Local<Node<K, V>>) -> Option<V> {
-        loop {
+        'outer: loop {
             let guard = &mut local.guard();
             let cursor = match self.find(key, guard) {
                 Ok(cursor) => cursor,
@@ -452,25 +427,14 @@ where
             let value = ok_or!(unsafe { node.deref() }.value.get(guard), continue);
 
             // Try removing the node by marking its tower.
-            let marked = ok_or!(Node::mark_tower(node, guard), return None);
+            let marked = ok_or!(Node::mark_tower(node, guard), continue);
             if marked {
-                let mut fallback = false;
                 for level in (0..height).rev() {
-                    let succ =
-                        match unsafe { node.deref() }.next[level].load(Ordering::SeqCst, guard) {
-                            Ok(succ) => succ,
-                            Err(_) => {
-                                fallback = true;
-                                break;
-                            }
-                        };
-                    let succ_tag = match succ.tag() {
-                        Ok(tag) => tag,
-                        Err(_) => {
-                            fallback = true;
-                            break;
-                        }
-                    };
+                    let succ = ok_or!(
+                        unsafe { node.deref() }.next[level].load(Ordering::SeqCst, guard),
+                        continue 'outer
+                    );
+                    let succ_tag = ok_or!(succ.tag(), continue 'outer);
                     if (succ_tag & 2) != 0 {
                         continue;
                     }
@@ -489,16 +453,9 @@ where
                     {
                         let _ = Node::decrement(node, guard);
                     } else {
-                        fallback = true;
-                        break;
-                    }
-                }
-                if fallback {
-                    loop {
                         guard.refresh();
-                        if self.find(key, guard).is_ok() {
-                            break;
-                        }
+                        let _ = self.find(key, guard);
+                        break;
                     }
                 }
             }

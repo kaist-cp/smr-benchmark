@@ -454,36 +454,6 @@ impl<T> VerAtomic<T> {
             .map_err(|comp| decompose_u128(comp))
     }
 
-    #[deprecated]
-    pub fn inject_tag(&self, owner: Shared<T>, tag: usize) -> bool {
-        let prev = unsafe { self.load_unchecked(Ordering::Acquire) };
-        let prev_tag = decompose_ptr(prev.ptr).1;
-        if (prev_tag & tag) != 0 {
-            return false;
-        }
-
-        let version = owner.birth.max(
-            prev.as_versioned()
-                .map(|ver| ver.birth.load(Ordering::Acquire))
-                .unwrap_or(0),
-        );
-        if owner.birth
-            != owner
-                .as_versioned()
-                .map(|ver| ver.birth.load(Ordering::Acquire))
-                .unwrap()
-        {
-            return false;
-        }
-        let result = self.link.compare_exchange(
-            compose_u128(version, prev.as_raw()),
-            compose_u128(version, prev.with_tag(prev_tag | tag).as_raw()),
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        );
-        result.is_ok()
-    }
-
     pub fn nullify(&self, owner: Shared<T>, tag: usize, _: &Guard<T>) -> Shared<T> {
         let prev = self.link.load(Ordering::Acquire);
         let result = Shared {
@@ -544,14 +514,14 @@ impl<T: Copy> ImmAtomic<T> {
     }
 
     pub fn get<G>(&self, guard: &Guard<G>) -> Result<T, ()> {
-        let value = self.data.load(Ordering::Acquire);
+        let value = self.data.load(Ordering::SeqCst);
         compiler_fence(Ordering::SeqCst);
         guard.validate_epoch()?;
         Ok(value)
     }
 
     pub fn set(&self, v: T) {
-        self.data.store(v, Ordering::Release);
+        self.data.store(v, Ordering::SeqCst);
     }
 }
 
@@ -585,9 +555,4 @@ pub fn decompose_ptr<T>(ptr: *mut T) -> (*mut T, usize) {
     let raw = ((ptr as usize) & !low_bits::<T>()) as *mut T;
     let tag = (ptr as usize) & low_bits::<T>();
     (raw, tag)
-}
-
-pub enum InjectionResult {
-    AlreadyTagged,
-    Retired,
 }

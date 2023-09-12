@@ -157,10 +157,7 @@ where
     fn find_harris_herlihy_shavit(&self, key: &K) -> Result<(bool, Cursor<K, V>), ()> {
         let mut cursor = Cursor::head(&self.head);
         Ok(loop {
-            let curr_node = some_or!(
-                unsafe { cursor.curr.as_ref() },
-                break (false, cursor)
-            );
+            let curr_node = some_or!(unsafe { cursor.curr.as_ref() }, break (false, cursor));
             let next = curr_node.next.load(Ordering::Acquire);
             match curr_node.key.cmp(key) {
                 Less => {
