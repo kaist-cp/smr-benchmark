@@ -21,11 +21,11 @@ pub struct CompareExchangeErrorWeak<T, P> {
 
 pub struct AtomicWeak<T, C: Cs> {
     pub(crate) link: Atomic<TaggedCnt<T>>,
-    _marker: PhantomData<C>,
+    _marker: PhantomData<*const C>,
 }
 
-unsafe impl<T, C: Cs> Send for AtomicWeak<T, C> {}
-unsafe impl<T, C: Cs> Sync for AtomicWeak<T, C> {}
+unsafe impl<T: Send + Sync, C: Cs> Send for AtomicWeak<T, C> {}
+unsafe impl<T: Send + Sync, C: Cs> Sync for AtomicWeak<T, C> {}
 
 // Ensure that TaggedPtr<T> is 8-byte long,
 // so that lock-free atomic operations are possible.
@@ -127,8 +127,11 @@ impl<T, C: Cs> Default for AtomicWeak<T, C> {
 
 pub struct Weak<T, C: Cs> {
     ptr: TaggedCnt<T>,
-    _marker: PhantomData<C>,
+    _marker: PhantomData<*const C>,
 }
+
+unsafe impl<T: Send + Sync, C: Cs> Send for Weak<T, C> {}
+unsafe impl<T: Send + Sync, C: Cs> Sync for Weak<T, C> {}
 
 impl<T, C: Cs> Weak<T, C> {
     #[inline(always)]

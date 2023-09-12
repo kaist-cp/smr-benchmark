@@ -21,11 +21,11 @@ pub struct CompareExchangeErrorRc<T, P> {
 
 pub struct AtomicRc<T, C: Cs> {
     link: Atomic<TaggedCnt<T>>,
-    _marker: PhantomData<C>,
+    _marker: PhantomData<(T, *const C)>,
 }
 
-unsafe impl<T, C: Cs> Send for AtomicRc<T, C> {}
-unsafe impl<T, C: Cs> Sync for AtomicRc<T, C> {}
+unsafe impl<T: Send + Sync, C: Cs> Send for AtomicRc<T, C> {}
+unsafe impl<T: Send + Sync, C: Cs> Sync for AtomicRc<T, C> {}
 
 // Ensure that TaggedPtr<T> is 8-byte long,
 // so that lock-free atomic operations are possible.
@@ -189,8 +189,11 @@ impl<T, C: Cs> From<Rc<T, C>> for AtomicRc<T, C> {
 
 pub struct Rc<T, C: Cs> {
     ptr: TaggedCnt<T>,
-    _marker: PhantomData<C>,
+    _marker: PhantomData<(T, *const C)>,
 }
+
+unsafe impl<T: Send + Sync, C: Cs> Send for Rc<T, C> {}
+unsafe impl<T: Send + Sync, C: Cs> Sync for Rc<T, C> {}
 
 impl<T, C: Cs> Rc<T, C> {
     #[inline(always)]
