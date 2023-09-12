@@ -23,7 +23,7 @@ impl Domain {
         }
     }
 
-    pub fn collect_guarded_ptrs<'domain>(&self, reclaimer: &Thread) -> FxHashSet<*mut u8> {
+    pub fn collect_guarded_ptrs(&self, reclaimer: &Thread) -> FxHashSet<*mut u8> {
         self.threads
             .iter()
             .flat_map(|thread| thread.iter(reclaimer))

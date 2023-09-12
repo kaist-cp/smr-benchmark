@@ -199,7 +199,7 @@ impl<T> Default for Tagged<T> {
 
 impl<T> Clone for Tagged<T> {
     fn clone(&self) -> Self {
-        Self { ptr: self.ptr }
+        *self
     }
 }
 

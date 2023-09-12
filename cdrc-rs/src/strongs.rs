@@ -432,10 +432,8 @@ pub trait StrongPtr<T, C: Cs>: Pointer<T> {
             // As we have a reference count already, we don't have to do anything, but
             // prevent calling a destructor which decrements it.
             forget(self);
-        } else {
-            if let Some(cnt) = unsafe { self.as_ptr().as_raw().as_ref() } {
-                cnt.add_ref();
-            }
+        } else if let Some(cnt) = unsafe { self.as_ptr().as_raw().as_ref() } {
+            cnt.add_ref();
         }
     }
 
@@ -449,10 +447,8 @@ pub trait StrongPtr<T, C: Cs>: Pointer<T> {
         let rc = Rc::from_raw(self.as_ptr());
         if Self::OWNS_REF_COUNT {
             self.into_ref_count();
-        } else {
-            if let Some(cnt) = unsafe { self.as_ptr().as_raw().as_ref() } {
-                cnt.add_ref();
-            }
+        } else if let Some(cnt) = unsafe { self.as_ptr().as_raw().as_ref() } {
+            cnt.add_ref();
         }
         rc
     }

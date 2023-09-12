@@ -13,7 +13,7 @@ pub struct HazardPointer {
 
 impl Default for HazardPointer {
     fn default() -> Self {
-        DEFAULT_THREAD.with(|t| HazardPointer::new(&*t))
+        DEFAULT_THREAD.with(|t| HazardPointer::new(t))
     }
 }
 
@@ -27,14 +27,14 @@ impl HazardPointer {
 
     #[inline]
     unsafe fn hazard_array(&self) -> &HazardArray {
-        &*(&*(*self.thread).hazards).hazptrs.load(Ordering::Acquire)
+        &*(*(*self.thread).hazards).hazptrs.load(Ordering::Acquire)
     }
 
     #[inline]
     fn slot(&self) -> &AtomicPtr<u8> {
         unsafe {
             let array = self.hazard_array();
-            &array.get_unchecked(self.idx)
+            array.get_unchecked(self.idx)
         }
     }
 
