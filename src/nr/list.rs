@@ -158,13 +158,13 @@ where
         let mut cursor = Cursor::head(&self.head);
         Ok(loop {
             let curr_node = some_or!(
-                unsafe { untagged(cursor.curr).as_ref() },
+                unsafe { cursor.curr.as_ref() },
                 break (false, cursor)
             );
             let next = curr_node.next.load(Ordering::Acquire);
             match curr_node.key.cmp(key) {
                 Less => {
-                    cursor.curr = next;
+                    cursor.curr = untagged(next);
                     continue;
                 }
                 Equal => break (tag(next) == 0, cursor),
