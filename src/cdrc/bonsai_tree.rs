@@ -2,7 +2,7 @@ use cdrc_rs::{AtomicRc, Cs, Pointer, Rc, Snapshot, StrongPtr, TaggedCnt};
 
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 
-use std::{cmp, mem::swap, sync::atomic::Ordering};
+use std::{cmp, sync::atomic::Ordering};
 
 static WEIGHT: usize = 2;
 
@@ -557,7 +557,7 @@ where
                     cmp::Ordering::Greater => &curr_node.right,
                 };
                 holder.temp.load(next_link, cs);
-                swap(&mut holder.curr, &mut holder.temp);
+                Snapshot::swap(&mut holder.curr, &mut holder.temp);
             }
 
             if Node::is_retired_spot(&holder.curr) {

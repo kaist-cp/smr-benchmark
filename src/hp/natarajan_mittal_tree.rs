@@ -324,7 +324,7 @@ where
 
             // advance parent and leaf pointers
             mem::swap(&mut record.parent, &mut record.leaf);
-            mem::swap(&mut record.handle.parent_h, &mut record.handle.leaf_h);
+            HazardPointer::swap(&mut record.handle.parent_h, &mut record.handle.leaf_h);
             let mut curr_base = untagged(curr);
             loop {
                 record.handle.leaf_h.protect_raw(curr_base);

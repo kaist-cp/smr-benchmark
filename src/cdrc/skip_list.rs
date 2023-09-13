@@ -1,7 +1,6 @@
 use std::{fmt::Display, sync::atomic::Ordering};
 
 use cdrc_rs::{AtomicRc, Cs, Pointer, Rc, Snapshot, StrongPtr, TaggedCnt};
-use core::mem::swap;
 
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 
@@ -162,7 +161,7 @@ where
                 match curr_node.key.cmp(key) {
                     std::cmp::Ordering::Less => {
                         cursor.pred_offset[level] = 0;
-                        swap(&mut cursor.preds[level], &mut cursor.succs[level]);
+                        Snapshot::swap(&mut cursor.preds[level], &mut cursor.succs[level]);
                     }
                     std::cmp::Ordering::Equal => {
                         let clean = curr_node.next[level].load(Ordering::Acquire).tag() == 0;
@@ -214,7 +213,7 @@ where
                             &cursor.next,
                             cs,
                         ) {
-                            swap(&mut cursor.succs[level], &mut cursor.next);
+                            Snapshot::swap(&mut cursor.succs[level], &mut cursor.next);
                             cursor.succs[level].set_tag(0);
                             continue;
                         } else {
@@ -237,8 +236,8 @@ where
 
                     // Move one step forward.
                     cursor.pred_offset[level] = 0;
-                    swap(&mut cursor.preds[level], &mut cursor.succs[level]);
-                    swap(&mut cursor.succs[level], &mut cursor.next);
+                    Snapshot::swap(&mut cursor.preds[level], &mut cursor.succs[level]);
+                    Snapshot::swap(&mut cursor.succs[level], &mut cursor.next);
                 }
             }
 

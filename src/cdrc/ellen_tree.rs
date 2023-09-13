@@ -188,10 +188,10 @@ where
             if l_node.is_leaf {
                 break;
             }
-            swap(&mut self.gp, &mut self.p);
+            Snapshot::swap(&mut self.gp, &mut self.p);
             swap(&mut self.gp_p_dir, &mut self.p_l_dir);
-            swap(&mut self.p, &mut self.l);
-            swap(&mut self.gpupdate, &mut self.pupdate);
+            Snapshot::swap(&mut self.p, &mut self.l);
+            Snapshot::swap(&mut self.gpupdate, &mut self.pupdate);
             self.pupdate.load(&l_node.update, cs);
             let (l, l_other, dir) = match l_node.key.cmp(key) {
                 std::cmp::Ordering::Greater => (&l_node.left, &l_node.right, Direction::L),

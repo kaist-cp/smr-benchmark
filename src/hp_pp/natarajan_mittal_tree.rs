@@ -386,7 +386,7 @@ where
                 //   / \            / \
                 //  O   O          O   O
                 record.parent = record.leaf;
-                mem::swap(&mut record.handle.parent_h, &mut record.handle.leaf_h);
+                HazardPointer::swap(&mut record.handle.parent_h, &mut record.handle.leaf_h);
             } else {
                 // advance parent, ancestor, successor
                 //   p  O             a  O

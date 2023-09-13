@@ -2,7 +2,6 @@ use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use cdrc_rs::{AtomicRc, Cs, Pointer, Rc, Snapshot, StrongPtr, TaggedCnt};
 
 use std::cmp::Ordering::{Equal, Greater, Less};
-use std::mem::swap;
 use std::sync::atomic::Ordering;
 
 pub struct Node<K, V, C: Cs> {
@@ -111,14 +110,14 @@ impl<K: Ord, V, C: Cs> Cursor<K, V, C> {
             if self.next.tag() != 0 {
                 // We add a 0 tag here so that `self.curr`s tag is always 0.
                 self.next.set_tag(0);
-                swap(&mut self.next, &mut self.curr);
+                Snapshot::swap(&mut self.next, &mut self.curr);
                 continue;
             }
 
             match curr_node.key.cmp(key) {
                 Less => {
-                    swap(&mut self.prev, &mut self.curr);
-                    swap(&mut self.curr, &mut self.next);
+                    Snapshot::swap(&mut self.prev, &mut self.curr);
+                    Snapshot::swap(&mut self.curr, &mut self.next);
                     self.prev_next = self.curr.as_ptr();
                 }
                 Equal => break true,
@@ -169,14 +168,14 @@ impl<K: Ord, V, C: Cs> Cursor<K, V, C> {
                         cs,
                     )
                     .map_err(|_| ())?;
-                swap(&mut self.curr, &mut self.next);
+                Snapshot::swap(&mut self.curr, &mut self.next);
                 continue;
             }
 
             match curr_node.key.cmp(key) {
                 Less => {
-                    swap(&mut self.prev, &mut self.curr);
-                    swap(&mut self.curr, &mut self.next);
+                    Snapshot::swap(&mut self.prev, &mut self.curr);
+                    Snapshot::swap(&mut self.curr, &mut self.next);
                 }
                 Equal => return Ok(true),
                 Greater => return Ok(false),
@@ -191,7 +190,7 @@ impl<K: Ord, V, C: Cs> Cursor<K, V, C> {
             let curr_node = some_or!(self.curr.as_ref(), break false);
             self.next.load(&curr_node.next, cs);
             match curr_node.key.cmp(key) {
-                Less => swap(&mut self.curr, &mut self.next),
+                Less => Snapshot::swap(&mut self.curr, &mut self.next),
                 Equal => break self.next.tag() == 0,
                 Greater => break false,
             }

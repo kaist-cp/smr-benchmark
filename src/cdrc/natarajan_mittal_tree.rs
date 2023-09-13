@@ -2,7 +2,6 @@ use cdrc_rs::{AtomicRc, Cs, Pointer, Rc, Snapshot, StrongPtr, TaggedCnt};
 
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use std::cmp;
-use std::mem::swap;
 use std::sync::atomic::Ordering;
 
 bitflags! {
@@ -257,7 +256,7 @@ where
             let curr_node = unsafe { record.curr.deref() };
             if !prev_tag {
                 // untagged edge: advance ancestor and successor pointers
-                swap(&mut record.ancestor, &mut record.parent);
+                Snapshot::swap(&mut record.ancestor, &mut record.parent);
                 record.successor = record.leaf.as_ptr();
                 record.successor_dir = record.leaf_dir;
             }
@@ -265,9 +264,9 @@ where
             let curr_tag = record.curr.tag();
 
             // advance parent and leaf pointers
-            swap(&mut record.parent, &mut record.leaf);
-            swap(&mut record.leaf, &mut record.curr);
-            swap(&mut record.leaf_dir, &mut record.curr_dir);
+            Snapshot::swap(&mut record.parent, &mut record.leaf);
+            Snapshot::swap(&mut record.leaf, &mut record.curr);
+            (&mut record.leaf_dir, &mut record.curr_dir);
             record.leaf.set_tag(Marks::empty().bits());
 
             // update other variables
@@ -296,7 +295,7 @@ where
             // Safety of deref: Even if `record.curr` is mutated by `swap`, `curr_node` is
             // protected by `record.leaf`.
             let curr_node = unsafe { record.curr.deref() };
-            swap(&mut record.leaf, &mut record.curr);
+            Snapshot::swap(&mut record.leaf, &mut record.curr);
 
             if curr_node.key.cmp(key) == cmp::Ordering::Greater {
                 record.curr.load(&curr_node.left, cs);
@@ -350,7 +349,7 @@ where
 
     pub fn get(&self, key: &K, record: &mut SeekRecord<K, V, C>, cs: &C) -> bool {
         self.seek_leaf(key, record, cs);
-        swap(&mut record.leaf, &mut record.found);
+        Snapshot::swap(&mut record.leaf, &mut record.found);
         let leaf_node = unsafe { record.found.deref() };
         leaf_node.key.cmp(key) == cmp::Ordering::Equal
     }
@@ -444,12 +443,12 @@ where
                 Ok(_) => {
                     // Finalize the node to be removed
                     if self.cleanup(record, cs) {
-                        swap(&mut record.leaf, &mut record.found);
+                        Snapshot::swap(&mut record.leaf, &mut record.found);
                         return true;
                     }
                     // In-place cleanup failed. Enter the cleanup phase.
                     let leaf = record.leaf.as_ptr();
-                    swap(&mut record.leaf, &mut record.found);
+                    Snapshot::swap(&mut record.leaf, &mut record.found);
                     break leaf;
                 }
                 Err(e) => {
