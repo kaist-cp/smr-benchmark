@@ -196,8 +196,15 @@ impl<T, C: Cs> Weak<T, C> {
     }
 
     #[inline]
-    pub fn upgrade(&self) -> Rc<T, C> {
-        todo!()
+    pub fn upgrade(&self, cs: &C) -> Rc<T, C> {
+        unsafe {
+            if let Some(cnt) = self.ptr.as_raw().as_ref() {
+                if cs.increment_ref_cnt(cnt) {
+                    return Rc::from_raw(self.ptr);
+                }
+            }
+        }
+        Rc::null()
     }
 
     #[inline(always)]

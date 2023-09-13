@@ -78,12 +78,14 @@ impl Cs for CsHP {
         Box::into_raw(Box::new(obj))
     }
 
+    #[inline]
     fn reserve<T>(&self, ptr: TaggedCnt<T>, shield: &mut Self::RawShield<T>) {
         shield.ptr = ptr;
         shield.hazptr.protect_raw(ptr.as_raw());
         membarrier::light();
     }
 
+    #[inline]
     fn protect_snapshot<T>(
         &self,
         link: &atomic::Atomic<TaggedCnt<T>>,
@@ -110,10 +112,12 @@ impl Cs for CsHP {
         }
     }
 
+    #[inline]
     unsafe fn delete_object<T>(&self, ptr: *mut Counted<T>) {
         drop(Box::from_raw(ptr));
     }
 
+    #[inline]
     unsafe fn retire<T>(&self, ptr: *mut Counted<T>, ret_type: crate::RetireType) {
         debug_assert!(!ptr.is_null());
         let cnt = &mut *ptr;
@@ -123,6 +127,7 @@ impl Cs for CsHP {
         });
     }
 
+    #[inline]
     fn clear(&mut self) {
         // No-op for HP.
     }

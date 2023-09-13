@@ -113,10 +113,12 @@ impl Cs for CsEBR {
         }
     }
 
+    #[inline]
     unsafe fn without_epoch() -> Self {
         Self { guard: None }
     }
 
+    #[inline]
     fn clear(&mut self) {
         if let Some(guard) = &mut self.guard {
             guard.repin_after(|| {});

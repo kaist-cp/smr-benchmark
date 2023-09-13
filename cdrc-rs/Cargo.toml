@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-crossbeam = { git = "https://github.com/kaist-cp/crossbeam.git", branch = "cdrc-exp" }
+crossbeam = { git = "https://github.com/powergee/crossbeam.git", branch = "kaist-no-nested" }
 membarrier = { git = "https://github.com/jeehoonkang/membarrier-rs.git", branch = "smr-benchmark" }
 scopeguard = "1.1.0"
 static_assertions = "1.1.0"
