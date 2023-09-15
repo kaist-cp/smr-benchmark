@@ -422,7 +422,19 @@ where
         cs: &C,
     ) -> bool {
         // Precondition: op points to a DInfo record (i.e., it is not ⊥)
-        if !helper.load_delete(unsafe { op.deref() }, cs) {
+        let op_ref = unsafe { op.deref() };
+        if !helper.load_delete(op_ref, cs) {
+            // Unflag to preserve lock-freedom.
+            if helper.gp.load_from_weak(&op_ref.gp, cs) {
+                let gp_ref = helper.gp.as_ref().unwrap();
+                let _ = gp_ref.update.compare_exchange_tag(
+                    op.with_tag(UpdateTag::DFLAG.bits()),
+                    UpdateTag::CLEAN.bits(),
+                    Ordering::Release,
+                    Ordering::Relaxed,
+                    cs,
+                );
+            }
             return false;
         }
 
@@ -464,6 +476,17 @@ where
         // Precondition: op points to a DInfo record (i.e., it is not ⊥)
         let op_ref = unsafe { op.deref() };
         if !helper.load_delete(op_ref, cs) {
+            // Unflag to preserve lock-freedom.
+            if helper.gp.load_from_weak(&op_ref.gp, cs) {
+                let gp_ref = helper.gp.as_ref().unwrap();
+                let _ = gp_ref.update.compare_exchange_tag(
+                    op.with_tag(UpdateTag::DFLAG.bits()),
+                    UpdateTag::CLEAN.bits(),
+                    Ordering::Release,
+                    Ordering::Relaxed,
+                    cs,
+                );
+            }
             return;
         }
 
@@ -492,6 +515,17 @@ where
         // Precondition: op points to a IInfo record (i.e., it is not ⊥)
         let op_ref = unsafe { op.deref() };
         if !helper.load_insert(op_ref, cs) {
+            // Unflag to preserve lock-freedom.
+            if helper.p.load_from_weak(&op_ref.p, cs) {
+                let p_ref = helper.p.as_ref().unwrap();
+                let _ = p_ref.update.compare_exchange_tag(
+                    op.with_tag(UpdateTag::IFLAG.bits()),
+                    UpdateTag::CLEAN.bits(),
+                    Ordering::Release,
+                    Ordering::Relaxed,
+                    cs,
+                );
+            }
             return;
         }
 
