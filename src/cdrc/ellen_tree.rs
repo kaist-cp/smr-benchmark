@@ -1,5 +1,5 @@
 use bitflags::bitflags;
-use cdrc_rs::{AtomicRc, AtomicWeak, Cs, Pointer, Rc, Snapshot, StrongPtr, Weak};
+use cdrc_rs::{AtomicRc, Cs, Pointer, Rc, Snapshot, StrongPtr, Weak};
 use std::{mem::swap, sync::atomic::Ordering};
 
 use super::{concurrent_map::OutputHolder, ConcurrentMap};
@@ -93,13 +93,13 @@ pub struct Node<K, V, C: Cs> {
 }
 
 pub struct Update<K, V, C: Cs> {
-    gp: AtomicWeak<Node<K, V, C>, C>,
+    gp: Weak<Node<K, V, C>, C>,
     gp_p_dir: Direction,
-    p: AtomicWeak<Node<K, V, C>, C>,
+    p: Weak<Node<K, V, C>, C>,
     p_l_dir: Direction,
-    l: AtomicWeak<Node<K, V, C>, C>,
-    l_other: AtomicWeak<Node<K, V, C>, C>,
-    pupdate: AtomicWeak<Update<K, V, C>, C>,
+    l: Weak<Node<K, V, C>, C>,
+    l_other: Weak<Node<K, V, C>, C>,
+    pupdate: Weak<Update<K, V, C>, C>,
     new_internal: AtomicRc<Node<K, V, C>, C>,
 }
 
@@ -227,17 +227,17 @@ impl<K, V, C: Cs> Helper<K, V, C> {
 
     fn load_insert<'g>(&'g mut self, op: &'g Update<K, V, C>, cs: &C) -> bool {
         self.new_internal.load(&op.new_internal, cs);
-        self.p.load_from_weak(&op.p, cs)
-            && self.l.load_from_weak(&op.l, cs)
-            && self.l_other.load_from_weak(&op.l_other, cs)
+        self.p.protect_weak(&op.p, cs)
+            && self.l.protect_weak(&op.l, cs)
+            && self.l_other.protect_weak(&op.l_other, cs)
     }
 
     fn load_delete<'g>(&'g mut self, op: &'g Update<K, V, C>, cs: &C) -> bool {
-        self.gp.load_from_weak(&op.gp, cs)
-            && self.p.load_from_weak(&op.p, cs)
-            && self.l.load_from_weak(&op.l, cs)
-            && self.l_other.load_from_weak(&op.l_other, cs)
-            && self.pupdate.load_from_weak(&op.pupdate, cs)
+        self.gp.protect_weak(&op.gp, cs)
+            && self.p.protect_weak(&op.p, cs)
+            && self.l.protect_weak(&op.l, cs)
+            && self.l_other.protect_weak(&op.l_other, cs)
+            && self.pupdate.protect_weak(&op.pupdate, cs)
     }
 }
 
@@ -321,14 +321,14 @@ where
                 );
 
                 let op = Update {
-                    p: AtomicWeak::from(Weak::from_strong(&finder.p, cs)),
+                    p: Weak::from_strong(&finder.p, cs),
                     p_l_dir: finder.p_l_dir,
-                    l: AtomicWeak::from(Weak::from_strong(&finder.l, cs)),
-                    l_other: AtomicWeak::from(Weak::from_strong(&finder.l_other, cs)),
+                    l: Weak::from_strong(&finder.l, cs),
+                    l_other: Weak::from_strong(&finder.l_other, cs),
                     new_internal: AtomicRc::from(new_internal),
-                    gp: AtomicWeak::null(),
+                    gp: Weak::null(),
                     gp_p_dir: Direction::L,
-                    pupdate: AtomicWeak::null(),
+                    pupdate: Weak::null(),
                 };
 
                 let new_pupdate = Rc::new(op, cs).with_tag(UpdateTag::IFLAG.bits());
@@ -372,13 +372,13 @@ where
                 self.help(&finder.pupdate, &mut cursor.1, cs);
             } else {
                 let op = Update {
-                    gp: AtomicWeak::from(Weak::from_strong(&finder.gp, cs)),
+                    gp: Weak::from_strong(&finder.gp, cs),
                     gp_p_dir: finder.gp_p_dir,
-                    p: AtomicWeak::from(Weak::from_strong(&finder.p, cs)),
+                    p: Weak::from_strong(&finder.p, cs),
                     p_l_dir: finder.p_l_dir,
-                    l: AtomicWeak::from(Weak::from_strong(&finder.l, cs)),
-                    l_other: AtomicWeak::from(Weak::from_strong(&finder.l_other, cs)),
-                    pupdate: AtomicWeak::from(Weak::from_strong(&finder.pupdate, cs)),
+                    l: Weak::from_strong(&finder.l, cs),
+                    l_other: Weak::from_strong(&finder.l_other, cs),
+                    pupdate: Weak::from_strong(&finder.pupdate, cs),
                     new_internal: AtomicRc::null(),
                 };
 
@@ -425,7 +425,7 @@ where
         let op_ref = unsafe { op.deref() };
         if !helper.load_delete(op_ref, cs) {
             // Unflag to preserve lock-freedom.
-            if helper.gp.load_from_weak(&op_ref.gp, cs) {
+            if helper.gp.protect_weak(&op_ref.gp, cs) {
                 let gp_ref = helper.gp.as_ref().unwrap();
                 let _ = gp_ref.update.compare_exchange_tag(
                     op.with_tag(UpdateTag::DFLAG.bits()),
@@ -477,7 +477,7 @@ where
         let op_ref = unsafe { op.deref() };
         if !helper.load_delete(op_ref, cs) {
             // Unflag to preserve lock-freedom.
-            if helper.gp.load_from_weak(&op_ref.gp, cs) {
+            if helper.gp.protect_weak(&op_ref.gp, cs) {
                 let gp_ref = helper.gp.as_ref().unwrap();
                 let _ = gp_ref.update.compare_exchange_tag(
                     op.with_tag(UpdateTag::DFLAG.bits()),
@@ -516,7 +516,7 @@ where
         let op_ref = unsafe { op.deref() };
         if !helper.load_insert(op_ref, cs) {
             // Unflag to preserve lock-freedom.
-            if helper.p.load_from_weak(&op_ref.p, cs) {
+            if helper.p.protect_weak(&op_ref.p, cs) {
                 let p_ref = helper.p.as_ref().unwrap();
                 let _ = p_ref.update.compare_exchange_tag(
                     op.with_tag(UpdateTag::IFLAG.bits()),
