@@ -206,7 +206,7 @@ impl<K: Ord, V, C: Cs> Cursor<K, V, C> {
     ) -> Result<(), Rc<Node<K, V, C>, C>> {
         unsafe { node.deref() }
             .next
-            .swap(Rc::from_snapshot(&self.curr, cs), Ordering::Relaxed, cs);
+            .store(&self.curr, Ordering::Relaxed, cs);
 
         match unsafe { self.prev.deref() }.next.compare_exchange(
             self.curr.as_ptr(),

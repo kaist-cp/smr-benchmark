@@ -1,6 +1,6 @@
 use std::{
     marker::PhantomData,
-    mem::{self, forget, replace},
+    mem::{self, forget},
     sync::atomic::AtomicUsize,
 };
 
@@ -13,7 +13,7 @@ use crate::{Acquired, AtomicWeak, Cs, Pointer, Tagged, TaggedCnt};
 ///
 /// It returns the ownership of [`Rc`] pointer which was given as a parameter.
 pub struct CompareExchangeErrorRc<T, P> {
-    /// The `desired` pointer which was given as a parameter of `compare_exchange`.
+    /// The `desired` which was given as a parameter of `compare_exchange`.
     pub desired: P,
     /// The current pointer value inside the atomic pointer.
     pub current: TaggedCnt<T>,
@@ -60,6 +60,18 @@ impl<T, C: Cs> AtomicRc<T, C> {
         self.link.load(order)
     }
 
+    #[inline]
+    pub fn store<P: StrongPtr<T, C>>(&self, ptr: P, order: Ordering, cs: &C) {
+        let new_ptr = ptr.as_ptr();
+        ptr.into_ref_count();
+        let old_ptr = self.link.swap(new_ptr, order);
+        unsafe {
+            if let Some(cnt) = old_ptr.as_raw().as_mut() {
+                cs.delayed_decrement_ref_cnt(cnt);
+            }
+        }
+    }
+
     /// Swaps the currently stored shared pointer with the given shared pointer.
     /// This operation is thread-safe.
     /// (It is equivalent to `exchange` from the original implementation.)
@@ -99,10 +111,29 @@ impl<T, C: Cs> AtomicRc<T, C> {
                 desired.into_ref_count();
                 Ok(rc)
             }
-            Err(e) => Err(CompareExchangeErrorRc {
-                desired,
-                current: e,
-            }),
+            Err(current) => Err(CompareExchangeErrorRc { desired, current }),
+        }
+    }
+
+    #[inline]
+    pub fn compare_exchange_tag<'g, P>(
+        &self,
+        expected: &P,
+        desired_tag: usize,
+        success: Ordering,
+        failure: Ordering,
+        _: &'g C,
+    ) -> Result<TaggedCnt<T>, CompareExchangeErrorRc<T, TaggedCnt<T>>>
+    where
+        P: StrongPtr<T, C>,
+    {
+        let desired = expected.as_ptr().with_tag(desired_tag);
+        match self
+            .link
+            .compare_exchange(expected.as_ptr(), desired, success, failure)
+        {
+            Ok(current) => Ok(current),
+            Err(current) => Err(CompareExchangeErrorRc { desired, current }),
         }
     }
 
@@ -189,6 +220,7 @@ impl<T, C: Cs> From<Rc<T, C>> for AtomicRc<T, C> {
 
 pub struct Rc<T, C: Cs> {
     ptr: TaggedCnt<T>,
+    must_delay: bool,
     _marker: PhantomData<(T, *const C)>,
 }
 
@@ -205,6 +237,7 @@ impl<T, C: Cs> Rc<T, C> {
     pub(crate) fn from_raw(ptr: TaggedCnt<T>) -> Self {
         Self {
             ptr,
+            must_delay: true,
             _marker: PhantomData,
         }
     }
@@ -213,6 +246,7 @@ impl<T, C: Cs> Rc<T, C> {
     pub fn from_snapshot<'g>(ptr: &Snapshot<T, C>, cs: &'g C) -> Self {
         let rc = Self {
             ptr: ptr.as_ptr(),
+            must_delay: false,
             _marker: PhantomData,
         };
         unsafe {
@@ -228,6 +262,7 @@ impl<T, C: Cs> Rc<T, C> {
         let ptr = cs.create_object(obj);
         Self {
             ptr: TaggedCnt::new(ptr),
+            must_delay: false,
             _marker: PhantomData,
         }
     }
@@ -236,6 +271,7 @@ impl<T, C: Cs> Rc<T, C> {
     pub fn clone(&self, cs: &C) -> Self {
         let rc = Self {
             ptr: self.ptr,
+            must_delay: self.must_delay,
             _marker: PhantomData,
         };
         unsafe {
@@ -244,16 +280,6 @@ impl<T, C: Cs> Rc<T, C> {
             }
         }
         rc
-    }
-
-    pub fn finalize(self, cs: &C) {
-        unsafe {
-            if let Some(cnt) = self.ptr.as_raw().as_mut() {
-                cs.delayed_decrement_ref_cnt(cnt);
-            }
-        }
-        // Prevent recursive finalizing.
-        forget(self);
     }
 
     #[inline(always)]
@@ -277,6 +303,7 @@ impl<T, C: Cs> Rc<T, C> {
         self
     }
 
+    #[inline]
     pub(crate) fn into_raw(self) -> TaggedCnt<T> {
         let new_ptr = self.as_ptr();
         // Skip decrementing the ref count.
@@ -295,8 +322,16 @@ impl<T, C: Cs> Default for Rc<T, C> {
 impl<T, C: Cs> Drop for Rc<T, C> {
     #[inline(always)]
     fn drop(&mut self) {
-        if !self.is_null() {
-            replace(self, Rc::null()).finalize(&C::new());
+        unsafe {
+            if let Some(cnt) = self.ptr.as_raw().as_mut() {
+                if self.must_delay {
+                    let cs = C::new();
+                    cs.delayed_decrement_ref_cnt(cnt);
+                } else {
+                    let cs = C::without_epoch();
+                    cs.decrement_ref_cnt(cnt);
+                }
+            }
         }
     }
 }
@@ -369,6 +404,7 @@ impl<T, C: Cs> Snapshot<T, C> {
 }
 
 impl<T, C: Cs> Default for Snapshot<T, C> {
+    #[inline]
     fn default() -> Self {
         Self::new()
     }
@@ -395,24 +431,28 @@ pub struct TaggedSnapshot<'s, T, C: Cs> {
 }
 
 impl<T, C: Cs> Pointer<T> for Rc<T, C> {
+    #[inline]
     fn as_ptr(&self) -> TaggedCnt<T> {
         self.ptr
     }
 }
 
 impl<T, C: Cs> Pointer<T> for Snapshot<T, C> {
+    #[inline]
     fn as_ptr(&self) -> TaggedCnt<T> {
         self.acquired.as_ptr()
     }
 }
 
 impl<T, C: Cs> Pointer<T> for &Snapshot<T, C> {
+    #[inline]
     fn as_ptr(&self) -> TaggedCnt<T> {
         self.acquired.as_ptr()
     }
 }
 
 impl<'s, T, C: Cs> Pointer<T> for TaggedSnapshot<'s, T, C> {
+    #[inline]
     fn as_ptr(&self) -> TaggedCnt<T> {
         self.inner.acquired.as_ptr().with_tag(self.tag)
     }
@@ -429,6 +469,7 @@ pub trait StrongPtr<T, C: Cs>: Pointer<T> {
     ///
     /// For example, we do nothing but forget its ownership if the pointer is [`Rc`],
     /// but increment the reference count if the pointer is [`Snapshot`].
+    #[inline]
     fn into_ref_count(self)
     where
         Self: Sized,
@@ -445,6 +486,7 @@ pub trait StrongPtr<T, C: Cs>: Pointer<T> {
     /// Consumes `self` and constructs a [`Rc`] pointing to the same object.
     ///
     /// If `self` is already [`Rc`], it will not touch the reference count.
+    #[inline]
     fn into_rc(self) -> Rc<T, C>
     where
         Self: Sized,
@@ -458,14 +500,17 @@ pub trait StrongPtr<T, C: Cs>: Pointer<T> {
         rc
     }
 
+    #[inline]
     unsafe fn deref<'g>(&self) -> &'g T {
         self.as_ptr().deref().data()
     }
 
+    #[inline]
     unsafe fn deref_mut<'g>(&mut self) -> &'g mut T {
         self.as_ptr().deref_mut().data_mut()
     }
 
+    #[inline]
     fn as_ref(&self) -> Option<&T> {
         if self.as_ptr().is_null() {
             None
@@ -474,6 +519,7 @@ pub trait StrongPtr<T, C: Cs>: Pointer<T> {
         }
     }
 
+    #[inline]
     fn as_mut(&mut self) -> Option<&mut T> {
         if self.as_ptr().is_null() {
             None

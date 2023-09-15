@@ -1,6 +1,6 @@
 use std::{
     marker::PhantomData,
-    mem::{self, forget, replace},
+    mem::{self, forget},
     sync::atomic::AtomicUsize,
 };
 
@@ -13,10 +13,10 @@ use crate::{Cs, Pointer, Rc, Snapshot, StrongPtr, Tagged, TaggedCnt, TaggedSnaps
 ///
 /// It returns the ownership of [`Weak`] pointer which was given as a parameter.
 pub struct CompareExchangeErrorWeak<T, P> {
-    /// The `desired` pointer which was given as a parameter of `compare_exchange`.
+    /// The `desired` which was given as a parameter of `compare_exchange`.
     pub desired: P,
-    /// The actual pointer value inside the atomic pointer.
-    pub actual: TaggedCnt<T>,
+    /// The current pointer value inside the atomic pointer.
+    pub current: TaggedCnt<T>,
 }
 
 pub struct AtomicWeak<T, C: Cs> {
@@ -39,6 +39,28 @@ impl<T, C: Cs> AtomicWeak<T, C> {
         Self {
             link: Atomic::new(Tagged::null()),
             _marker: PhantomData,
+        }
+    }
+
+    /// Loads a raw tagged pointer from this atomic pointer.
+    ///
+    /// Note that the returned pointer cannot be dereferenced safely, becuase it is protected by
+    /// neither a SMR nor a reference count. To dereference, use `load_from_weak` method of
+    /// [`Snapshot`] instead.
+    #[inline]
+    pub fn load(&self, order: Ordering) -> TaggedCnt<T> {
+        self.link.load(order)
+    }
+
+    #[inline]
+    pub fn store<P: WeakPtr<T, C>>(&self, ptr: P, order: Ordering, cs: &C) {
+        let new_ptr = ptr.as_ptr();
+        ptr.into_weak_count();
+        let old_ptr = self.link.swap(new_ptr, order);
+        unsafe {
+            if let Some(cnt) = old_ptr.as_raw().as_mut() {
+                cs.delayed_decrement_ref_cnt(cnt);
+            }
         }
     }
 
@@ -81,7 +103,69 @@ impl<T, C: Cs> AtomicWeak<T, C> {
                 desired.into_weak_count();
                 Ok(weak)
             }
-            Err(e) => Err(CompareExchangeErrorWeak { desired, actual: e }),
+            Err(current) => Err(CompareExchangeErrorWeak { desired, current }),
+        }
+    }
+
+    #[inline]
+    pub fn compare_exchange_tag<'g, P>(
+        &self,
+        expected: &P,
+        desired_tag: usize,
+        success: Ordering,
+        failure: Ordering,
+        _: &'g C,
+    ) -> Result<TaggedCnt<T>, CompareExchangeErrorWeak<T, TaggedCnt<T>>>
+    where
+        P: StrongPtr<T, C>,
+    {
+        let desired = expected.as_ptr().with_tag(desired_tag);
+        match self
+            .link
+            .compare_exchange(expected.as_ptr(), desired, success, failure)
+        {
+            Ok(current) => Ok(current),
+            Err(current) => Err(CompareExchangeErrorWeak { desired, current }),
+        }
+    }
+
+    /// Atomically compares the underlying pointer with expected, and if they refer to
+    /// the same managed object, replaces the current pointer with a copy of desired
+    /// (incrementing its reference count) and returns true. Otherwise, returns false.
+    ///
+    /// It is guaranteed that the current pointer on a failure is protected by `current_snap`.
+    /// It is lock-free but not wait-free. Use `compare_exchange` for an wait-free implementation.
+    #[inline(always)]
+    pub fn compare_exchange_protecting_current<'g, P>(
+        &self,
+        expected: TaggedCnt<T>,
+        mut desired: P,
+        current_snap: &mut Snapshot<T, C>,
+        success: Ordering,
+        failure: Ordering,
+        cs: &'g C,
+    ) -> Result<Weak<T, C>, CompareExchangeErrorWeak<T, P>>
+    where
+        P: WeakPtr<T, C>,
+    {
+        loop {
+            current_snap.load_from_weak(self, cs);
+            if current_snap.as_ptr() != expected {
+                return Err(CompareExchangeErrorWeak {
+                    desired,
+                    current: current_snap.as_ptr(),
+                });
+            }
+            match self.compare_exchange(expected, desired, success, failure, cs) {
+                Ok(weak) => return Ok(weak),
+                Err(e) => {
+                    if e.current == current_snap.as_ptr() {
+                        return Err(e);
+                    } else {
+                        desired = e.desired;
+                    }
+                }
+            }
         }
     }
 
@@ -96,6 +180,7 @@ impl<T, C: Cs> AtomicWeak<T, C> {
 }
 
 impl<T, C: Cs> From<Weak<T, C>> for AtomicWeak<T, C> {
+    #[inline]
     fn from(value: Weak<T, C>) -> Self {
         let init_ptr = value.into_raw();
         Self {
@@ -127,6 +212,7 @@ impl<T, C: Cs> Default for AtomicWeak<T, C> {
 
 pub struct Weak<T, C: Cs> {
     ptr: TaggedCnt<T>,
+    must_delay: bool,
     _marker: PhantomData<*const C>,
 }
 
@@ -143,6 +229,7 @@ impl<T, C: Cs> Weak<T, C> {
     pub(crate) fn from_raw(ptr: TaggedCnt<T>) -> Self {
         Self {
             ptr,
+            must_delay: true,
             _marker: PhantomData,
         }
     }
@@ -157,6 +244,7 @@ impl<T, C: Cs> Weak<T, C> {
                 if cs.increment_weak_cnt(cnt) {
                     return Self {
                         ptr: ptr.as_ptr(),
+                        must_delay: false,
                         _marker: PhantomData,
                     };
                 }
@@ -169,6 +257,7 @@ impl<T, C: Cs> Weak<T, C> {
     pub fn clone(&self, cs: &C) -> Self {
         let weak = Self {
             ptr: self.ptr,
+            must_delay: self.must_delay,
             _marker: PhantomData,
         };
         unsafe {
@@ -177,17 +266,6 @@ impl<T, C: Cs> Weak<T, C> {
             }
         }
         weak
-    }
-
-    #[inline]
-    pub fn finalize(self, cs: &C) {
-        unsafe {
-            if let Some(cnt) = self.ptr.as_raw().as_mut() {
-                cs.delayed_decrement_weak_cnt(cnt);
-            }
-        }
-        // Prevent recursive finalizing.
-        forget(self);
     }
 
     #[inline(always)]
@@ -234,6 +312,7 @@ impl<T, C: Cs> Weak<T, C> {
         self
     }
 
+    #[inline]
     pub(crate) fn into_raw(self) -> TaggedCnt<T> {
         let new_ptr = self.as_ptr();
         // Skip decrementing the ref count.
@@ -245,8 +324,16 @@ impl<T, C: Cs> Weak<T, C> {
 impl<T, C: Cs> Drop for Weak<T, C> {
     #[inline(always)]
     fn drop(&mut self) {
-        if !self.is_null() {
-            replace(self, Weak::null()).finalize(&C::new());
+        unsafe {
+            if let Some(cnt) = self.ptr.as_raw().as_mut() {
+                if self.must_delay {
+                    let cs = C::new();
+                    cs.delayed_decrement_weak_cnt(cnt);
+                } else {
+                    let cs = C::without_epoch();
+                    cs.decrement_weak_cnt(cnt);
+                }
+            }
         }
     }
 }
@@ -259,6 +346,7 @@ impl<T, C: Cs> PartialEq for Weak<T, C> {
 }
 
 impl<T, C: Cs> Pointer<T> for Weak<T, C> {
+    #[inline]
     fn as_ptr(&self) -> TaggedCnt<T> {
         self.ptr
     }
@@ -277,6 +365,7 @@ pub trait WeakPtr<T, G>: Pointer<T> {
 }
 
 impl<T, C: Cs> WeakPtr<T, C> for Weak<T, C> {
+    #[inline]
     fn into_weak_count(self) {
         // As we have a reference count already, we don't have to do anything, but
         // prevent calling a destructor which decrements it.
@@ -285,6 +374,7 @@ impl<T, C: Cs> WeakPtr<T, C> for Weak<T, C> {
 }
 
 impl<T, C: Cs> WeakPtr<T, C> for Snapshot<T, C> {
+    #[inline]
     fn into_weak_count(self) {
         if let Some(cnt) = unsafe { self.as_ptr().as_raw().as_ref() } {
             cnt.add_ref();
@@ -293,6 +383,7 @@ impl<T, C: Cs> WeakPtr<T, C> for Snapshot<T, C> {
 }
 
 impl<T, C: Cs> WeakPtr<T, C> for &Snapshot<T, C> {
+    #[inline]
     fn into_weak_count(self) {
         if let Some(cnt) = unsafe { self.as_ptr().as_raw().as_ref() } {
             cnt.add_ref();
@@ -301,6 +392,7 @@ impl<T, C: Cs> WeakPtr<T, C> for &Snapshot<T, C> {
 }
 
 impl<'s, T, C: Cs> WeakPtr<T, C> for TaggedSnapshot<'s, T, C> {
+    #[inline]
     fn into_weak_count(self) {
         if let Some(cnt) = unsafe { self.as_ptr().as_raw().as_ref() } {
             cnt.add_ref();

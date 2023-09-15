@@ -26,7 +26,7 @@ where
         let height = Self::generate_height();
         let next: [AtomicRc<Node<K, V, C>, C>; MAX_HEIGHT] = Default::default();
         for link in next.iter().take(height) {
-            let _ = link.swap(Rc::null().with_tag(2), Ordering::Relaxed, cs);
+            link.store(Rc::null().with_tag(2), Ordering::Relaxed, cs);
         }
         Self {
             key,
@@ -273,11 +273,7 @@ where
         cursor.new_node.protect(&new_node, cs);
 
         loop {
-            new_node_ref.next[0].swap(
-                Rc::from_snapshot(&cursor.succs[0], cs),
-                Ordering::Relaxed,
-                cs,
-            );
+            new_node_ref.next[0].store(&cursor.succs[0], Ordering::Relaxed, cs);
 
             if unsafe { cursor.pred(0).deref() }.next[0]
                 .compare_exchange(

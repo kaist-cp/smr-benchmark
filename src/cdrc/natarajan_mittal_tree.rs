@@ -2,6 +2,7 @@ use cdrc_rs::{AtomicRc, Cs, Pointer, Rc, Snapshot, StrongPtr, TaggedCnt};
 
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use std::cmp;
+use std::mem::swap;
 use std::sync::atomic::Ordering;
 
 bitflags! {
@@ -266,7 +267,7 @@ where
             // advance parent and leaf pointers
             Snapshot::swap(&mut record.parent, &mut record.leaf);
             Snapshot::swap(&mut record.leaf, &mut record.curr);
-            (&mut record.leaf_dir, &mut record.curr_dir);
+            swap(&mut record.leaf_dir, &mut record.curr_dir);
             record.leaf.set_tag(Marks::empty().bits());
 
             // update other variables
@@ -377,23 +378,19 @@ where
                     new_internal_node.key = unsafe { record.leaf.deref().key.clone() };
                     new_internal_node
                         .left
-                        .swap(new_leaf.clone(cs), Ordering::Relaxed, cs);
-                    new_internal_node.right.swap(
-                        Rc::from_snapshot(&record.leaf, cs),
-                        Ordering::Relaxed,
-                        cs,
-                    );
+                        .store(new_leaf.clone(cs), Ordering::Relaxed, cs);
+                    new_internal_node
+                        .right
+                        .store(&record.leaf, Ordering::Relaxed, cs);
                 }
                 cmp::Ordering::Less => {
                     new_internal_node.key = unsafe { new_leaf.deref().key.clone() };
-                    new_internal_node.left.swap(
-                        Rc::from_snapshot(&record.leaf, cs),
-                        Ordering::Relaxed,
-                        cs,
-                    );
+                    new_internal_node
+                        .left
+                        .store(&record.leaf, Ordering::Relaxed, cs);
                     new_internal_node
                         .right
-                        .swap(new_leaf.clone(cs), Ordering::Relaxed, cs);
+                        .store(new_leaf.clone(cs), Ordering::Relaxed, cs);
                 }
             }
 
@@ -433,9 +430,9 @@ where
             }
 
             // Try injecting the deletion flag.
-            match record.leaf_addr().compare_exchange(
-                record.leaf.as_ptr(),
-                record.leaf.with_tag(Marks::new(true, false).bits()),
+            match record.leaf_addr().compare_exchange_tag(
+                &record.leaf,
+                Marks::new(true, false).bits(),
                 Ordering::AcqRel,
                 Ordering::Acquire,
                 cs,

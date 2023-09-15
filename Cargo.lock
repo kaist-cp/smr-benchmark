@@ -231,7 +231,7 @@ checksum = "acbf1af155f9b9ef647e42cdc158db4b64a1b61f743629225fde6f3e0be2a7c7"
 [[package]]
 name = "crossbeam"
 version = "0.8.2"
-source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#da5169cf7ff6cbd98a8a660d421e364e31fa6b2a"
+source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#655c8cc5575bbe4b3fd40222e965d1abafb379bd"
 dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-channel",
@@ -244,7 +244,7 @@ dependencies = [
 [[package]]
 name = "crossbeam-channel"
 version = "0.5.6"
-source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#da5169cf7ff6cbd98a8a660d421e364e31fa6b2a"
+source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#655c8cc5575bbe4b3fd40222e965d1abafb379bd"
 dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-utils 0.8.14 (git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested)",
@@ -253,7 +253,7 @@ dependencies = [
 [[package]]
 name = "crossbeam-deque"
 version = "0.8.2"
-source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#da5169cf7ff6cbd98a8a660d421e364e31fa6b2a"
+source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#655c8cc5575bbe4b3fd40222e965d1abafb379bd"
 dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-epoch 0.9.13 (git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested)",
@@ -274,7 +274,7 @@ dependencies = [
 [[package]]
 name = "crossbeam-epoch"
 version = "0.9.13"
-source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#da5169cf7ff6cbd98a8a660d421e364e31fa6b2a"
+source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#655c8cc5575bbe4b3fd40222e965d1abafb379bd"
 dependencies = [
  "autocfg",
  "cfg-if 1.0.0",
@@ -310,7 +310,7 @@ dependencies = [
 [[package]]
 name = "crossbeam-queue"
 version = "0.3.8"
-source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#da5169cf7ff6cbd98a8a660d421e364e31fa6b2a"
+source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#655c8cc5575bbe4b3fd40222e965d1abafb379bd"
 dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-utils 0.8.14 (git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested)",
@@ -326,7 +326,7 @@ dependencies = [
 [[package]]
 name = "crossbeam-utils"
 version = "0.8.14"
-source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#da5169cf7ff6cbd98a8a660d421e364e31fa6b2a"
+source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#655c8cc5575bbe4b3fd40222e965d1abafb379bd"
 dependencies = [
  "cfg-if 1.0.0",
 ]

@@ -100,7 +100,7 @@ pub struct Update<K, V, C: Cs> {
     l: AtomicWeak<Node<K, V, C>, C>,
     l_other: AtomicWeak<Node<K, V, C>, C>,
     pupdate: AtomicWeak<Update<K, V, C>, C>,
-    new_internal: AtomicWeak<Node<K, V, C>, C>,
+    new_internal: AtomicRc<Node<K, V, C>, C>,
 }
 
 impl<K, V, C: Cs> Node<K, V, C> {
@@ -226,10 +226,10 @@ impl<K, V, C: Cs> Helper<K, V, C> {
     }
 
     fn load_insert<'g>(&'g mut self, op: &'g Update<K, V, C>, cs: &C) -> bool {
+        self.new_internal.load(&op.new_internal, cs);
         self.p.load_from_weak(&op.p, cs)
             && self.l.load_from_weak(&op.l, cs)
             && self.l_other.load_from_weak(&op.l_other, cs)
-            && self.new_internal.load_from_weak(&op.new_internal, cs)
     }
 
     fn load_delete<'g>(&'g mut self, op: &'g Update<K, V, C>, cs: &C) -> bool {
@@ -325,7 +325,7 @@ where
                     p_l_dir: finder.p_l_dir,
                     l: AtomicWeak::from(Weak::from_strong(&finder.l, cs)),
                     l_other: AtomicWeak::from(Weak::from_strong(&finder.l_other, cs)),
-                    new_internal: AtomicWeak::from(Weak::from_strong(&new_internal, cs)),
+                    new_internal: AtomicRc::from(new_internal),
                     gp: AtomicWeak::null(),
                     gp_p_dir: Direction::L,
                     pupdate: AtomicWeak::null(),
@@ -379,7 +379,7 @@ where
                     l: AtomicWeak::from(Weak::from_strong(&finder.l, cs)),
                     l_other: AtomicWeak::from(Weak::from_strong(&finder.l_other, cs)),
                     pupdate: AtomicWeak::from(Weak::from_strong(&finder.pupdate, cs)),
-                    new_internal: AtomicWeak::null(),
+                    new_internal: AtomicRc::null(),
                 };
 
                 let new_update = Rc::new(op, cs).with_tag(UpdateTag::DFLAG.bits());
