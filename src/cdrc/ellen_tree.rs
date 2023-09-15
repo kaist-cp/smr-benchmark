@@ -447,9 +447,9 @@ where
                     self.help_marked(op, helper, cs);
                     return true;
                 } else {
-                    let _ = gp_ref.update.compare_exchange(
-                        op.with_tag(UpdateTag::DFLAG.bits()).as_ptr(),
-                        op.with_tag(UpdateTag::CLEAN.bits()),
+                    let _ = gp_ref.update.compare_exchange_tag(
+                        op.with_tag(UpdateTag::DFLAG.bits()),
+                        UpdateTag::CLEAN.bits(),
                         Ordering::Release,
                         Ordering::Relaxed,
                         cs,
@@ -479,9 +479,9 @@ where
         );
 
         // dunflag CAS
-        let _ = gp_ref.update.compare_exchange(
-            op.with_tag(UpdateTag::DFLAG.bits()).as_ptr(),
-            op.with_tag(UpdateTag::CLEAN.bits()),
+        let _ = gp_ref.update.compare_exchange_tag(
+            op.with_tag(UpdateTag::DFLAG.bits()),
+            UpdateTag::CLEAN.bits(),
             Ordering::Release,
             Ordering::Relaxed,
             cs,
@@ -507,9 +507,9 @@ where
         );
 
         // iunflag CAS
-        let _ = p_ref.update.compare_exchange(
-            op.with_tag(UpdateTag::IFLAG.bits()).as_ptr(),
-            op.with_tag(UpdateTag::CLEAN.bits()),
+        let _ = p_ref.update.compare_exchange_tag(
+            op.with_tag(UpdateTag::IFLAG.bits()),
+            UpdateTag::CLEAN.bits(),
             Ordering::Release,
             Ordering::Relaxed,
             cs,

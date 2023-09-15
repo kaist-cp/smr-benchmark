@@ -118,7 +118,7 @@ impl<T, C: Cs> AtomicRc<T, C> {
     #[inline]
     pub fn compare_exchange_tag<'g, P>(
         &self,
-        expected: &P,
+        expected: P,
         desired_tag: usize,
         success: Ordering,
         failure: Ordering,
