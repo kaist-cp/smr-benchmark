@@ -378,7 +378,12 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             DS::SkipList => {
                 bench_map_nr::<nr::SkipList<usize, usize>>(config, PrefillStrategy::Random)
             }
-            _ => todo!(),
+            DS::BonsaiTree => {
+                bench_map_nr::<nr::BonsaiTreeMap<usize, usize>>(config, PrefillStrategy::Random)
+            }
+            DS::EFRBTree => {
+                bench_map_nr::<nr::EFRBTree<usize, usize>>(config, PrefillStrategy::Random)
+            }
         },
         MM::EBR => match config.ds {
             DS::HList => {

@@ -1,14 +1,12 @@
-use std::{
-    mem::transmute,
-    ptr::null_mut,
-    sync::atomic::{AtomicPtr, Ordering},
-};
+use std::mem::transmute;
+use std::sync::atomic::Ordering;
 
-use super::{compose_tag, concurrent_map::ConcurrentMap, tag, untagged};
+use super::concurrent_map::ConcurrentMap;
+use super::pointers::{Atomic, Shared};
 
 const MAX_HEIGHT: usize = 32;
 
-type Tower<K, V> = [AtomicPtr<Node<K, V>>; MAX_HEIGHT];
+type Tower<K, V> = [Atomic<Node<K, V>>; MAX_HEIGHT];
 
 struct Node<K, V> {
     key: K,
@@ -20,9 +18,9 @@ struct Node<K, V> {
 impl<K, V> Node<K, V> {
     pub fn new(key: K, value: V) -> Self {
         let height = Self::generate_height();
-        let next: [AtomicPtr<Node<K, V>>; MAX_HEIGHT] = Default::default();
+        let next: [Atomic<Node<K, V>>; MAX_HEIGHT] = Default::default();
         for link in next.iter().take(height) {
-            link.store(compose_tag(null_mut(), 2), Ordering::Relaxed);
+            link.store(Shared::null().with_tag(2), Ordering::Relaxed);
         }
         Self {
             key,
@@ -49,7 +47,7 @@ impl<K, V> Node<K, V> {
         for level in (0..self.height).rev() {
             // We're loading the pointer only for the tag, so it's okay to use
             // `epoch::unprotected()` in this situation.
-            let tag = tag(self.next[level].fetch_or(1, Ordering::SeqCst));
+            let tag = self.next[level].fetch_or(1, Ordering::SeqCst).tag();
             // If the level 0 pointer was already marked, somebody else removed the node.
             if level == 0 && (tag & 1) != 0 {
                 return false;
@@ -62,7 +60,7 @@ impl<K, V> Node<K, V> {
 struct Cursor<'g, K, V> {
     found: Option<&'g Node<K, V>>,
     preds: [&'g Tower<K, V>; MAX_HEIGHT],
-    succs: [*mut Node<K, V>; MAX_HEIGHT],
+    succs: [Shared<Node<K, V>>; MAX_HEIGHT],
 }
 
 impl<'g, K, V> Cursor<'g, K, V> {
@@ -70,7 +68,7 @@ impl<'g, K, V> Cursor<'g, K, V> {
         Self {
             found: None,
             preds: [head; MAX_HEIGHT],
-            succs: [null_mut(); MAX_HEIGHT],
+            succs: [Shared::null(); MAX_HEIGHT],
         }
     }
 }
@@ -94,7 +92,7 @@ where
         let mut cursor = Cursor::new(&self.head);
 
         let mut level = MAX_HEIGHT;
-        while level >= 1 && untagged(self.head[level - 1].load(Ordering::Relaxed)).is_null() {
+        while level >= 1 && self.head[level - 1].load(Ordering::Relaxed).is_null() {
             level -= 1;
         }
 
@@ -104,14 +102,14 @@ where
             let mut curr = pred[level].load(Ordering::Acquire);
 
             loop {
-                let curr_node = some_or!(unsafe { untagged(curr).as_ref() }, break);
+                let curr_node = some_or!(unsafe { curr.as_ref() }, break);
                 match curr_node.key.cmp(key) {
                     std::cmp::Ordering::Less => {
                         pred = &curr_node.next;
                         curr = curr_node.next[level].load(Ordering::Acquire);
                     }
                     std::cmp::Ordering::Equal => {
-                        if tag(curr_node.next[level].load(Ordering::Acquire)) == 0 {
+                        if curr_node.next[level].load(Ordering::Acquire).tag() == 0 {
                             cursor.found = Some(curr_node)
                         }
                         return cursor;
@@ -139,16 +137,16 @@ where
                 let mut curr = pred[level].load(Ordering::Acquire);
                 // If `curr` is marked, that means `pred` is removed and we have to restart the
                 // search.
-                if tag(curr) == 1 {
+                if curr.tag() == 1 {
                     continue 'search;
                 }
 
                 while let Some(curr_ref) = unsafe { curr.as_ref() } {
                     let succ = curr_ref.next[level].load(Ordering::Acquire);
 
-                    if tag(succ) == 1 {
+                    if succ.tag() == 1 {
                         if self.help_unlink(&pred[level], curr, succ) {
-                            curr = untagged(succ);
+                            curr = succ.with_tag(0);
                             continue;
                         } else {
                             // On failure, we cannot do anything reasonable to continue
@@ -183,13 +181,13 @@ where
 
     fn help_unlink<'g>(
         &'g self,
-        pred: &'g AtomicPtr<Node<K, V>>,
-        curr: *mut Node<K, V>,
-        succ: *mut Node<K, V>,
+        pred: &'g Atomic<Node<K, V>>,
+        curr: Shared<Node<K, V>>,
+        succ: Shared<Node<K, V>>,
     ) -> bool {
         pred.compare_exchange(
-            untagged(curr),
-            untagged(succ),
+            curr.with_tag(0),
+            succ.with_tag(0),
             Ordering::Release,
             Ordering::Relaxed,
         )
@@ -205,8 +203,8 @@ where
         // The reference count is initially two to account for
         // 1. The link at the level 0 of the tower.
         // 2. The current reference in this function.
-        let new_node = Box::into_raw(Box::new(Node::new(key, value)));
-        let new_node_ref = unsafe { &*new_node };
+        let new_node = Shared::from_owned(Node::new(key, value));
+        let new_node_ref = unsafe { new_node.deref() };
         let height = new_node_ref.height;
 
         loop {
@@ -227,7 +225,7 @@ where
             // We failed. Let's search for the key and try again.
             cursor = self.find(&new_node_ref.key);
             if cursor.found.is_some() {
-                drop(unsafe { Box::from_raw(new_node) });
+                drop(unsafe { new_node.into_owned() });
                 return false;
             }
         }
@@ -243,13 +241,13 @@ where
                 // If the current pointer is marked, that means another thread is already
                 // removing the node we've just inserted. In that case, let's just stop
                 // building the tower.
-                if (tag(next) & 1) != 0 {
+                if (next.tag() & 1) != 0 {
                     break 'build;
                 }
 
                 if new_node_ref.next[level]
                     .compare_exchange(
-                        compose_tag(null_mut(), 2),
+                        Shared::null().with_tag(2),
                         succ,
                         Ordering::SeqCst,
                         Ordering::SeqCst,
@@ -285,15 +283,15 @@ where
             if node.mark_tower() {
                 for level in (0..node.height).rev() {
                     let succ = node.next[level].load(Ordering::SeqCst);
-                    if (tag(succ) & 2) != 0 {
+                    if (succ.tag() & 2) != 0 {
                         continue;
                     }
 
                     // Try linking the predecessor and successor at this level.
                     if cursor.preds[level][level]
                         .compare_exchange(
-                            node as *const _ as *mut Node<K, V>,
-                            untagged(succ),
+                            Shared::from(node as *const _ as usize),
+                            succ.with_tag(0),
                             Ordering::SeqCst,
                             Ordering::SeqCst,
                         )
@@ -311,8 +309,8 @@ where
 
 impl<K, V> ConcurrentMap<K, V> for SkipList<K, V>
 where
-    K: Ord + Clone,
-    V: Clone,
+    K: Ord + Clone + 'static,
+    V: Clone + 'static,
 {
     fn new() -> Self {
         SkipList::new()

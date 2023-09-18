@@ -1,26 +1,24 @@
 use super::concurrent_map::ConcurrentMap;
-use super::{tag, untagged};
+use super::pointers::{Atomic, Shared};
 
 use std::cmp::Ordering::{Equal, Greater, Less};
-use std::mem::transmute;
-use std::ptr::null_mut;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::Ordering;
 
-#[derive(Debug)]
 struct Node<K, V> {
     /// Mark: tag(), Tag: not needed
-    next: AtomicPtr<Node<K, V>>,
+    next: Atomic<Node<K, V>>,
     key: K,
     value: V,
 }
 
 struct List<K, V> {
-    head: AtomicPtr<Node<K, V>>,
+    head: Atomic<Node<K, V>>,
 }
 
 impl<K, V> Default for List<K, V>
 where
-    K: Ord,
+    K: Ord + 'static,
+    V: 'static,
 {
     fn default() -> Self {
         Self::new()
@@ -32,7 +30,7 @@ impl<K, V> Node<K, V> {
     #[inline]
     fn new(key: K, value: V) -> Self {
         Self {
-            next: AtomicPtr::new(null_mut()),
+            next: Atomic::null(),
             key,
             value,
         }
@@ -40,10 +38,10 @@ impl<K, V> Node<K, V> {
 }
 
 struct Cursor<K, V> {
-    prev: *const AtomicPtr<Node<K, V>>,
+    prev: *const Atomic<Node<K, V>>,
     // Tag of `curr` should always be zero so when `curr` is stored in a `prev`, we don't store a
     // marked pointer and cause cleanup to fail.
-    curr: *mut Node<K, V>,
+    curr: Shared<Node<K, V>>,
 }
 
 impl<K, V> Cursor<K, V>
@@ -52,23 +50,24 @@ where
 {
     /// Creates the head cursor.
     #[inline]
-    pub fn head(head: &AtomicPtr<Node<K, V>>) -> Cursor<K, V> {
+    pub fn head(head: &Atomic<Node<K, V>>) -> Cursor<K, V> {
         Self {
             prev: head,
-            curr: untagged(head.load(Ordering::Acquire)),
+            curr: head.load(Ordering::Acquire),
         }
     }
 }
 
 impl<K, V> List<K, V>
 where
-    K: Ord,
+    K: Ord + 'static,
+    V: 'static,
 {
     /// Creates a new list.
     #[inline]
     pub fn new() -> Self {
         List {
-            head: AtomicPtr::new(null_mut()),
+            head: Atomic::null(),
         }
     }
 
@@ -90,9 +89,9 @@ where
             // - stop cursor.curr if (not marked) && (cursor.curr >= key)
             // - advance cursor.prev if not marked
 
-            if tag(next) != 0 {
+            if next.tag() != 0 {
                 // We add a 0 tag here so that `self.curr`s tag is always 0.
-                cursor.curr = untagged(next);
+                cursor.curr = next.with_tag(0);
                 continue;
             }
 
@@ -125,15 +124,15 @@ where
     fn find_harris_michael(&self, key: &K) -> Result<(bool, Cursor<K, V>), ()> {
         let mut cursor = Cursor::head(&self.head);
         loop {
-            debug_assert_eq!(tag(cursor.curr), 0);
+            debug_assert_eq!(cursor.curr.tag(), 0);
 
             let curr_node = some_or!(unsafe { cursor.curr.as_ref() }, return Ok((false, cursor)));
             let mut next = curr_node.next.load(Ordering::Acquire);
 
             // NOTE: original version aborts here if self.prev is tagged
 
-            if tag(next) != 0 {
-                next = untagged(next);
+            if next.tag() != 0 {
+                next = next.with_tag(0);
                 unsafe { &*cursor.prev }
                     .compare_exchange(cursor.curr, next, Ordering::Release, Ordering::Relaxed)
                     .map_err(|_| ())?;
@@ -161,10 +160,10 @@ where
             let next = curr_node.next.load(Ordering::Acquire);
             match curr_node.key.cmp(key) {
                 Less => {
-                    cursor.curr = untagged(next);
+                    cursor.curr = next.with_tag(0);
                     continue;
                 }
-                Equal => break (tag(next) == 0, cursor),
+                Equal => break (next.tag() == 0, cursor),
                 Greater => break (false, cursor),
             }
         })
@@ -178,7 +177,7 @@ where
         loop {
             let (found, cursor) = ok_or!(find(self, key), continue);
             if found {
-                return unsafe { cursor.curr.as_ref().map(|n| transmute(&n.value)) };
+                return unsafe { cursor.curr.as_ref().map(|n| &n.value) };
             }
             return None;
         }
@@ -189,15 +188,14 @@ where
     where
         F: Fn(&Self, &K) -> Result<(bool, Cursor<K, V>), ()>,
     {
-        let node = Box::into_raw(Box::new(Node::new(key, value)));
+        let mut node = Box::new(Node::new(key, value));
         loop {
-            let (found, mut cursor) = ok_or!(find(self, unsafe { &((&*node).key) }), continue);
+            let (found, mut cursor) = ok_or!(find(self, &node.key), continue);
             if found {
-                drop(unsafe { Box::from_raw(node) });
                 return false;
             }
 
-            unsafe { &*node }.next.store(cursor.curr, Ordering::Relaxed);
+            node.next.store(cursor.curr, Ordering::Relaxed);
             match unsafe { &*cursor.prev }.compare_exchange(
                 cursor.curr,
                 node,
@@ -208,7 +206,7 @@ where
                     cursor.curr = node;
                     return true;
                 }
-                Err(_) => continue,
+                Err(e) => node = e.new,
             }
         }
     }
@@ -224,10 +222,10 @@ where
                 return None;
             }
 
-            let curr_node = unsafe { &*untagged(cursor.curr) };
+            let curr_node = unsafe { cursor.curr.deref() };
 
             let next = curr_node.next.fetch_or(1, Ordering::AcqRel);
-            if tag(next) == 1 {
+            if next.tag() == 1 {
                 continue;
             }
 
@@ -246,14 +244,14 @@ where
     pub fn pop<'g>(&'g self) -> Option<(&'g K, &'g V)> {
         loop {
             let cursor = Cursor::head(&self.head);
-            if untagged(cursor.curr).is_null() {
+            if cursor.curr.is_null() {
                 return None;
             }
 
-            let curr_node = unsafe { &*untagged(cursor.curr) };
+            let curr_node = unsafe { cursor.curr.deref() };
 
             let next = curr_node.next.fetch_or(1, Ordering::AcqRel);
-            if tag(next) == 1 {
+            if next.tag() == 1 {
                 continue;
             }
 
@@ -310,7 +308,8 @@ pub struct HList<K, V> {
 
 impl<K, V> ConcurrentMap<K, V> for HList<K, V>
 where
-    K: Ord,
+    K: Ord + 'static,
+    V: 'static,
 {
     fn new() -> Self {
         HList { inner: List::new() }
@@ -336,7 +335,8 @@ pub struct HMList<K, V> {
 
 impl<K, V> ConcurrentMap<K, V> for HMList<K, V>
 where
-    K: Ord,
+    K: Ord + 'static,
+    V: 'static,
 {
     fn new() -> Self {
         HMList { inner: List::new() }
@@ -362,7 +362,8 @@ pub struct HHSList<K, V> {
 
 impl<K, V> HHSList<K, V>
 where
-    K: Ord,
+    K: Ord + 'static,
+    V: 'static,
 {
     /// Pop the first element efficiently.
     /// This method is used for only the fine grained benchmark (src/bin/long_running).
@@ -373,7 +374,8 @@ where
 
 impl<K, V> ConcurrentMap<K, V> for HHSList<K, V>
 where
-    K: Ord,
+    K: Ord + 'static,
+    V: 'static,
 {
     fn new() -> Self {
         HHSList { inner: List::new() }
