@@ -81,11 +81,11 @@ where
         }
     }
 
-    fn load_children(&self, temp: &mut Snapshot<Self, C>, cs: &C) -> (Rc<Self, C>, Rc<Self, C>) {
-        temp.load(&self.left, cs);
-        let left = Rc::from_snapshot(temp, cs);
-        temp.load(&self.right, cs);
-        let right = Rc::from_snapshot(temp, cs);
+    fn load_children(&self, cs: &C) -> (Snapshot<Self, C>, Snapshot<Self, C>) {
+        let mut left = Snapshot::new();
+        left.load(&self.left, cs);
+        let mut right = Snapshot::new();
+        right.load(&self.right, cs);
         (left, right)
     }
 }
@@ -134,14 +134,18 @@ where
     }
 
     // TODO get ref of K, V and clone here
-    fn mk_node(
+    fn mk_node<P1, P2>(
         &mut self,
-        left: Rc<Node<K, V, C>, C>,
-        right: Rc<Node<K, V, C>, C>,
+        left: P1,
+        right: P2,
         key: K,
         value: V,
         cs: &C,
-    ) -> Rc<Node<K, V, C>, C> {
+    ) -> Rc<Node<K, V, C>, C>
+    where
+        P1: StrongPtr<Node<K, V, C>, C>,
+        P2: StrongPtr<Node<K, V, C>, C>,
+    {
         if Node::is_retired_spot(&left) || Node::is_retired_spot(&right) {
             return Node::retired_node();
         }
@@ -153,8 +157,8 @@ where
                 key,
                 value,
                 size: left_size + right_size + 1,
-                left: AtomicRc::from(left),
-                right: AtomicRc::from(right),
+                left: AtomicRc::from(left.into_rc()),
+                right: AtomicRc::from(right.into_rc()),
             },
             cs,
         );
@@ -162,15 +166,17 @@ where
     }
 
     /// Make a new balanced tree from cur (the root of a subtree) and newly constructed left and right subtree
-    fn mk_balanced<P>(
+    fn mk_balanced<P1, P2, P3>(
         &mut self,
-        cur: &P,
-        left: Rc<Node<K, V, C>, C>,
-        right: Rc<Node<K, V, C>, C>,
+        cur: &P1,
+        left: P2,
+        right: P3,
         cs: &C,
     ) -> Rc<Node<K, V, C>, C>
     where
-        P: StrongPtr<Node<K, V, C>, C>,
+        P1: StrongPtr<Node<K, V, C>, C>,
+        P2: StrongPtr<Node<K, V, C>, C>,
+        P3: StrongPtr<Node<K, V, C>, C>,
     {
         if Node::is_retired_spot(cur)
             || Node::is_retired_spot(&left)
@@ -200,16 +206,20 @@ where
     }
 
     #[inline]
-    fn mk_balanced_left(
+    fn mk_balanced_left<P1, P2>(
         &mut self,
-        left: Rc<Node<K, V, C>, C>,
-        right: Rc<Node<K, V, C>, C>,
+        left: P1,
+        right: P2,
         key: K,
         value: V,
         cs: &C,
-    ) -> Rc<Node<K, V, C>, C> {
+    ) -> Rc<Node<K, V, C>, C>
+    where
+        P1: StrongPtr<Node<K, V, C>, C>,
+        P2: StrongPtr<Node<K, V, C>, C>,
+    {
         let right_ref = unsafe { right.deref() };
-        let (right_left, right_right) = right_ref.load_children(&mut self.holder.temp, cs);
+        let (right_left, right_right) = right_ref.load_children(cs);
 
         if !self.check_root()
             || Node::is_retired_spot(&right_left)
@@ -228,16 +238,22 @@ where
     }
 
     #[inline]
-    fn single_left(
+    fn single_left<P1, P2, P3, P4>(
         &mut self,
-        left: Rc<Node<K, V, C>, C>,
-        right: Rc<Node<K, V, C>, C>,
-        right_left: Rc<Node<K, V, C>, C>,
-        right_right: Rc<Node<K, V, C>, C>,
+        left: P1,
+        right: P2,
+        right_left: P3,
+        right_right: P4,
         key: K,
         value: V,
         cs: &C,
-    ) -> Rc<Node<K, V, C>, C> {
+    ) -> Rc<Node<K, V, C>, C>
+    where
+        P1: StrongPtr<Node<K, V, C>, C>,
+        P2: StrongPtr<Node<K, V, C>, C>,
+        P3: StrongPtr<Node<K, V, C>, C>,
+        P4: StrongPtr<Node<K, V, C>, C>,
+    {
         let right_ref = unsafe { right.deref() };
         let new_left = self.mk_node(left, right_left, key, value, cs);
         let res = self.mk_node(
@@ -251,20 +267,26 @@ where
     }
 
     #[inline]
-    fn double_left(
+    fn double_left<P1, P2, P3, P4>(
         &mut self,
-        left: Rc<Node<K, V, C>, C>,
-        right: Rc<Node<K, V, C>, C>,
-        right_left: Rc<Node<K, V, C>, C>,
-        right_right: Rc<Node<K, V, C>, C>,
+        left: P1,
+        right: P2,
+        right_left: P3,
+        right_right: P4,
         key: K,
         value: V,
         cs: &C,
-    ) -> Rc<Node<K, V, C>, C> {
+    ) -> Rc<Node<K, V, C>, C>
+    where
+        P1: StrongPtr<Node<K, V, C>, C>,
+        P2: StrongPtr<Node<K, V, C>, C>,
+        P3: StrongPtr<Node<K, V, C>, C>,
+        P4: StrongPtr<Node<K, V, C>, C>,
+    {
         let right_ref = unsafe { right.deref() };
         let right_left_ref = unsafe { right_left.deref() };
         let (right_left_left, right_left_right) =
-            right_left_ref.load_children(&mut self.holder.temp, cs);
+            right_left_ref.load_children(cs);
 
         if !self.check_root()
             || Node::is_retired_spot(&right_left_left)
@@ -292,16 +314,20 @@ where
     }
 
     #[inline]
-    fn mk_balanced_right(
+    fn mk_balanced_right<P1, P2>(
         &mut self,
-        left: Rc<Node<K, V, C>, C>,
-        right: Rc<Node<K, V, C>, C>,
+        left: P1,
+        right: P2,
         key: K,
         value: V,
         cs: &C,
-    ) -> Rc<Node<K, V, C>, C> {
+    ) -> Rc<Node<K, V, C>, C>
+    where
+        P1: StrongPtr<Node<K, V, C>, C>,
+        P2: StrongPtr<Node<K, V, C>, C>,
+    {
         let left_ref = unsafe { left.deref() };
-        let (left_left, left_right) = left_ref.load_children(&mut self.holder.temp, cs);
+        let (left_left, left_right) = left_ref.load_children(cs);
 
         if !self.check_root()
             || Node::is_retired_spot(&left_right)
@@ -319,16 +345,22 @@ where
     }
 
     #[inline]
-    fn single_right(
+    fn single_right<P1, P2, P3, P4>(
         &mut self,
-        left: Rc<Node<K, V, C>, C>,
-        right: Rc<Node<K, V, C>, C>,
-        left_right: Rc<Node<K, V, C>, C>,
-        left_left: Rc<Node<K, V, C>, C>,
+        left: P1,
+        right: P2,
+        left_right: P3,
+        left_left: P4,
         key: K,
         value: V,
         cs: &C,
-    ) -> Rc<Node<K, V, C>, C> {
+    ) -> Rc<Node<K, V, C>, C>
+    where
+        P1: StrongPtr<Node<K, V, C>, C>,
+        P2: StrongPtr<Node<K, V, C>, C>,
+        P3: StrongPtr<Node<K, V, C>, C>,
+        P4: StrongPtr<Node<K, V, C>, C>,
+    {
         let left_ref = unsafe { left.deref() };
         let new_right = self.mk_node(left_right, right, key, value, cs);
         let res = self.mk_node(
@@ -342,20 +374,26 @@ where
     }
 
     #[inline]
-    fn double_right(
+    fn double_right<P1, P2, P3, P4>(
         &mut self,
-        left: Rc<Node<K, V, C>, C>,
-        right: Rc<Node<K, V, C>, C>,
-        left_right: Rc<Node<K, V, C>, C>,
-        left_left: Rc<Node<K, V, C>, C>,
+        left: P1,
+        right: P2,
+        left_right: P3,
+        left_left: P4,
         key: K,
         value: V,
         cs: &C,
-    ) -> Rc<Node<K, V, C>, C> {
+    ) -> Rc<Node<K, V, C>, C>
+    where
+        P1: StrongPtr<Node<K, V, C>, C>,
+        P2: StrongPtr<Node<K, V, C>, C>,
+        P3: StrongPtr<Node<K, V, C>, C>,
+        P4: StrongPtr<Node<K, V, C>, C>,
+    {
         let left_ref = unsafe { left.deref() };
         let left_right_ref = unsafe { left_right.deref() };
         let (left_right_left, left_right_right) =
-            left_right_ref.load_children(&mut self.holder.temp, cs);
+            left_right_ref.load_children(cs);
 
         if !self.check_root()
             || Node::is_retired_spot(&left_right_left)
@@ -399,7 +437,7 @@ where
         }
 
         let node_ref = unsafe { node.deref() };
-        let (left, right) = node_ref.load_children(&mut self.holder.temp, cs);
+        let (left, right) = node_ref.load_children(cs);
 
         if !self.check_root() || Node::is_retired_spot(&left) || Node::is_retired_spot(&right) {
             return (Node::retired_node(), false);
@@ -432,7 +470,7 @@ where
         }
 
         let node_ref = unsafe { node.deref() };
-        let (left, right) = node_ref.load_children(&mut self.holder.temp, cs);
+        let (left, right) = node_ref.load_children(cs);
 
         if !self.check_root() || Node::is_retired_spot(&left) || Node::is_retired_spot(&right) {
             return (Node::retired_node(), false);
@@ -472,7 +510,7 @@ where
         }
 
         let node_ref = unsafe { node.deref() };
-        let (left, right) = node_ref.load_children(&mut self.holder.temp, cs);
+        let (left, right) = node_ref.load_children(cs);
 
         if !self.check_root() || Node::is_retired_spot(&left) || Node::is_retired_spot(&right) {
             return (Node::retired_node(), Node::retired_node());
@@ -490,7 +528,7 @@ where
             node_ref.value.clone(),
             cs,
         );
-        return (right, succ);
+        return (right.into_rc(), succ);
     }
 
     fn pull_rightmost<P>(&mut self, node: P, cs: &C) -> (Rc<Node<K, V, C>, C>, Rc<Node<K, V, C>, C>)
@@ -502,7 +540,7 @@ where
         }
 
         let node_ref = unsafe { node.deref() };
-        let (left, right) = node_ref.load_children(&mut self.holder.temp, cs);
+        let (left, right) = node_ref.load_children(cs);
 
         if !self.check_root() || Node::is_retired_spot(&left) || Node::is_retired_spot(&right) {
             return (Node::retired_node(), Node::retired_node());
@@ -520,7 +558,7 @@ where
             node_ref.value.clone(),
             cs,
         );
-        return (left, succ);
+        return (left.into_rc(), succ);
     }
 
     pub fn check_root(&self) -> bool {
