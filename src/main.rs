@@ -901,7 +901,7 @@ impl PrefillStrategy {
         map: &M,
     ) {
         let output = &mut M::empty_output();
-        let cs = unsafe { &C::without_epoch() };
+        let cs = unsafe { &C::unprotected() };
         let rng = &mut rand::thread_rng();
         match self {
             PrefillStrategy::Random => {

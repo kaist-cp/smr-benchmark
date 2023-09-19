@@ -560,7 +560,7 @@ where
     type Output = Cursor<K, V, C>;
 
     fn new() -> Self {
-        EFRBTree::new(unsafe { &C::without_epoch() })
+        EFRBTree::new(unsafe { &C::unprotected() })
     }
 
     #[inline(always)]

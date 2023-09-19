@@ -116,8 +116,8 @@ where
         Node {
             key: right.key.clone(),
             value: None,
-            left: AtomicRc::new(left, unsafe { &C::without_epoch() }),
-            right: AtomicRc::new(right, unsafe { &C::without_epoch() }),
+            left: AtomicRc::new(left, unsafe { &C::unprotected() }),
+            right: AtomicRc::new(right, unsafe { &C::unprotected() }),
         }
     }
 }
@@ -230,7 +230,7 @@ where
         let s = Node::new_internal(inf0, inf1);
         let r = Node::new_internal(s, inf2);
         NMTreeMap {
-            r: AtomicRc::new(r, unsafe { &C::without_epoch() }),
+            r: AtomicRc::new(r, unsafe { &C::unprotected() }),
         }
     }
 

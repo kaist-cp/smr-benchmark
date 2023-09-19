@@ -103,23 +103,27 @@ struct State<'g, K, V, C: Cs> {
     holder: &'g mut Holder<K, V, C>,
 }
 
-pub struct Cursor<K, V, C: Cs>(Holder<K, V, C>, Snapshot<Node<K, V, C>, C>);
+pub struct Cursor<K, V, C: Cs> {
+    holder: Holder<K, V, C>,
+    /// Temp snapshot to create Rc.
+    root_snapshot: Snapshot<Node<K, V, C>, C>,
+}
 
 impl<K, V, C: Cs> OutputHolder<V> for Cursor<K, V, C> {
     fn default() -> Self {
-        Self(
-            Holder {
+        Self {
+            holder: Holder {
                 root: Default::default(),
                 curr: Default::default(),
                 temp: Default::default(),
                 found: None,
             },
-            Default::default(),
-        )
+            root_snapshot: Default::default(),
+        }
     }
 
     fn output(&self) -> &V {
-        self.0.found.as_ref().unwrap()
+        self.holder.found.as_ref().unwrap()
     }
 }
 
@@ -285,8 +289,7 @@ where
     {
         let right_ref = unsafe { right.deref() };
         let right_left_ref = unsafe { right_left.deref() };
-        let (right_left_left, right_left_right) =
-            right_left_ref.load_children(cs);
+        let (right_left_left, right_left_right) = right_left_ref.load_children(cs);
 
         if !self.check_root()
             || Node::is_retired_spot(&right_left_left)
@@ -392,8 +395,7 @@ where
     {
         let left_ref = unsafe { left.deref() };
         let left_right_ref = unsafe { left_right.deref() };
-        let (left_right_left, left_right_right) =
-            left_right_ref.load_children(cs);
+        let (left_right_left, left_right_right) = left_right_ref.load_children(cs);
 
         if !self.check_root()
             || Node::is_retired_spot(&left_right_left)
@@ -612,11 +614,11 @@ where
     }
 
     pub fn insert(&self, key: K, value: V, cursor: &mut Cursor<K, V, C>, cs: &C) -> bool {
-        let mut state = State::new(&self.root, &mut cursor.0);
+        let mut state = State::new(&self.root, &mut cursor.holder);
         loop {
-            cursor.1.load(&self.root, cs);
-            state.holder.root = cursor.1.as_ptr();
-            let (new_root, inserted) = state.do_insert(&cursor.1, &key, &value, cs);
+            cursor.root_snapshot.load(&self.root, cs);
+            state.holder.root = cursor.root_snapshot.as_ptr();
+            let (new_root, inserted) = state.do_insert(&cursor.root_snapshot, &key, &value, cs);
 
             if Node::is_retired(new_root.as_ptr()) {
                 continue;
@@ -625,7 +627,7 @@ where
             if self
                 .root
                 .compare_exchange(
-                    cursor.1.as_ptr(),
+                    cursor.root_snapshot.as_ptr(),
                     new_root,
                     Ordering::AcqRel,
                     Ordering::Acquire,
@@ -639,11 +641,11 @@ where
     }
 
     pub fn remove(&self, key: &K, cursor: &mut Cursor<K, V, C>, cs: &C) -> bool {
-        let mut state = State::new(&self.root, &mut cursor.0);
+        let mut state = State::new(&self.root, &mut cursor.holder);
         loop {
-            cursor.1.load(&self.root, cs);
-            state.holder.root = cursor.1.as_ptr();
-            let (new_root, found) = state.do_remove(&cursor.1, key, cs);
+            cursor.root_snapshot.load(&self.root, cs);
+            state.holder.root = cursor.root_snapshot.as_ptr();
+            let (new_root, found) = state.do_remove(&cursor.root_snapshot, key, cs);
 
             if Node::is_retired(new_root.as_ptr()) {
                 continue;
@@ -652,7 +654,7 @@ where
             if self
                 .root
                 .compare_exchange(
-                    cursor.1.as_ptr(),
+                    cursor.root_snapshot.as_ptr(),
                     new_root,
                     Ordering::AcqRel,
                     Ordering::Acquire,
@@ -679,7 +681,7 @@ where
     }
 
     fn get(&self, key: &K, output: &mut Self::Output, cs: &C) -> bool {
-        self.get(key, &mut output.0, cs)
+        self.get(key, &mut output.holder, cs)
     }
 
     fn insert(&self, key: K, value: V, output: &mut Self::Output, cs: &C) -> bool {

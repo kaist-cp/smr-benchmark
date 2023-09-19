@@ -310,6 +310,19 @@ impl<T, C: Cs> Rc<T, C> {
         forget(self);
         new_ptr
     }
+
+    #[inline]
+    pub fn finalize(self, cs: &C) {
+        unsafe {
+            if let Some(cnt) = self.ptr.as_raw().as_mut() {
+                if self.must_delay {
+                    cs.delayed_decrement_ref_cnt(cnt);
+                } else {
+                    cs.decrement_ref_cnt(cnt);
+                }
+            }
+        }
+    }
 }
 
 impl<T, C: Cs> Default for Rc<T, C> {

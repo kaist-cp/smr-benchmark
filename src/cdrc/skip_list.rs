@@ -22,7 +22,7 @@ where
     C: Cs,
 {
     pub fn new(key: K, value: V) -> Self {
-        let cs = unsafe { &C::without_epoch() };
+        let cs = unsafe { &C::unprotected() };
         let height = Self::generate_height();
         let next: [AtomicRc<Node<K, V, C>, C>; MAX_HEIGHT] = Default::default();
         for link in next.iter().take(height) {
@@ -135,7 +135,7 @@ where
 {
     pub fn new() -> Self {
         Self {
-            head: AtomicRc::new(Node::head(), unsafe { &C::without_epoch() }),
+            head: AtomicRc::new(Node::head(), unsafe { &C::unprotected() }),
         }
     }
 

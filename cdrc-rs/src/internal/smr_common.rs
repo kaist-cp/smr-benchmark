@@ -40,6 +40,7 @@ pub trait Cs {
 
     fn new() -> Self;
     unsafe fn without_epoch() -> Self;
+    unsafe fn unprotected() -> Self;
     fn create_object<T>(&self, obj: T) -> *mut Counted<T>;
     /// Creates a shield for the given pointer, assuming that `ptr` is already protected by a
     /// reference count.

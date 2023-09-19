@@ -105,7 +105,7 @@ impl Cs for CsEBR {
         let cnt = &mut *ptr;
         if let Some(guard) = &self.guard {
             guard.defer_unchecked(move || {
-                let inner_guard = Self::without_epoch();
+                let inner_guard = Self::unprotected();
                 inner_guard.eject(cnt, ret_type);
             });
         } else {
@@ -115,6 +115,11 @@ impl Cs for CsEBR {
 
     #[inline]
     unsafe fn without_epoch() -> Self {
+        Self { guard: None }
+    }
+
+    #[inline]
+    unsafe fn unprotected() -> Self {
         Self { guard: None }
     }
 

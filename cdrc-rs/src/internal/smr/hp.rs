@@ -1,4 +1,4 @@
-use std::mem::swap;
+use std::{mem::swap, ptr::null};
 
 use atomic::Ordering;
 
@@ -62,14 +62,18 @@ impl Cs for CsHP {
 
     #[inline]
     fn new() -> Self {
-        Self {
-            thread: DEFAULT_THREAD.with(|t| (&**t) as *const Thread),
-        }
+        let thread = DEFAULT_THREAD.with(|t| (&**t) as *const Thread);
+        Self { thread }
     }
 
     #[inline]
     unsafe fn without_epoch() -> Self {
         Self::new()
+    }
+
+    #[inline]
+    unsafe fn unprotected() -> Self {
+        Self { thread: null() }
     }
 
     #[inline]
@@ -121,10 +125,14 @@ impl Cs for CsHP {
     unsafe fn retire<T>(&self, ptr: *mut Counted<T>, ret_type: crate::RetireType) {
         debug_assert!(!ptr.is_null());
         let cnt = &mut *ptr;
-        (*self.thread).defer(ptr, move || {
-            let inner_guard = Self::new();
-            inner_guard.eject(cnt, ret_type);
-        });
+        if let Some(thread) = self.thread.as_ref() {
+            thread.defer(ptr, move || {
+                let inner_guard = Self::new();
+                inner_guard.eject(cnt, ret_type);
+            });
+        } else {
+            self.eject(cnt, ret_type);
+        }
     }
 
     #[inline]
