@@ -14,16 +14,6 @@ pub struct AcquiredEBR<T>(TaggedCnt<T>);
 
 impl<T> Acquired<T> for AcquiredEBR<T> {
     #[inline(always)]
-    fn ptr(&self) -> &TaggedCnt<T> {
-        &self.0
-    }
-
-    #[inline(always)]
-    fn ptr_mut(&mut self) -> &mut TaggedCnt<T> {
-        &mut self.0
-    }
-
-    #[inline(always)]
     fn as_ptr(&self) -> TaggedCnt<T> {
         self.0
     }
@@ -48,28 +38,34 @@ impl<T> Acquired<T> for AcquiredEBR<T> {
         self.0 == other.0
     }
 
-    fn clear_protection(&mut self) {
-        // No operation for EBR.
+    #[inline]
+    fn clear(&mut self) {
+        self.0 = TaggedCnt::null();
+    }
+
+    #[inline]
+    fn set_tag(&mut self, tag: usize) {
+        self.0 = self.0.with_tag(tag);
     }
 }
 
 pub struct CsEBR {
-    guard: Option<crossbeam_epoch::Guard>,
+    guard: Option<crossbeam::epoch::Guard>,
 }
 
-impl From<crossbeam_epoch::Guard> for CsEBR {
+impl From<crossbeam::epoch::Guard> for CsEBR {
     #[inline(always)]
-    fn from(guard: crossbeam_epoch::Guard) -> Self {
+    fn from(guard: crossbeam::epoch::Guard) -> Self {
         Self { guard: Some(guard) }
     }
 }
 
 impl Cs for CsEBR {
-    type Acquired<T> = AcquiredEBR<T>;
+    type RawShield<T> = AcquiredEBR<T>;
 
     #[inline(always)]
     fn new() -> Self {
-        Self::from(crossbeam_epoch::pin())
+        Self::from(crossbeam::epoch::pin())
     }
 
     #[inline(always)]
@@ -79,20 +75,22 @@ impl Cs for CsEBR {
     }
 
     #[inline(always)]
-    fn reserve<T>(&self, ptr: TaggedCnt<T>) -> Self::Acquired<T> {
-        AcquiredEBR(ptr)
+    fn reserve<T>(&self, ptr: TaggedCnt<T>, shield: &mut Self::RawShield<T>) {
+        *shield = AcquiredEBR(ptr);
     }
 
     #[inline(always)]
     fn protect_snapshot<T>(
         &self,
         link: &atomic::Atomic<TaggedCnt<T>>,
-    ) -> Option<Self::Acquired<T>> {
+        shield: &mut Self::RawShield<T>,
+    ) -> bool {
         let ptr = link.load(Ordering::Acquire);
         if !ptr.is_null() && unsafe { ptr.deref() }.ref_count() == 0 {
-            None
+            false
         } else {
-            Some(AcquiredEBR(ptr))
+            *shield = AcquiredEBR(ptr);
+            true
         }
     }
 
@@ -107,7 +105,7 @@ impl Cs for CsEBR {
         let cnt = &mut *ptr;
         if let Some(guard) = &self.guard {
             guard.defer_unchecked(move || {
-                let inner_guard = Self::without_epoch();
+                let inner_guard = Self::unprotected();
                 inner_guard.eject(cnt, ret_type);
             });
         } else {
@@ -115,13 +113,20 @@ impl Cs for CsEBR {
         }
     }
 
+    #[inline]
     unsafe fn without_epoch() -> Self {
         Self { guard: None }
     }
 
+    #[inline]
+    unsafe fn unprotected() -> Self {
+        Self { guard: None }
+    }
+
+    #[inline]
     fn clear(&mut self) {
         if let Some(guard) = &mut self.guard {
-            guard.repin();
+            guard.repin_after(|| {});
         }
     }
 }

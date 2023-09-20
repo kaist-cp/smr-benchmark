@@ -17,11 +17,11 @@ use std::{
 ///
 /// Note: The counter steals the top two bits of the integer for book-keeping purposes. Hence the
 /// maximum representable value in the counter is 2^(8*32-2) - 1.
-pub(crate) struct StickyCounter {
+pub(crate) struct Count {
     x: AtomicU32,
 }
 
-impl StickyCounter {
+impl Count {
     const fn zero_flag() -> u32 {
         1 << (mem::size_of::<u32>() * 8 - 1)
     }
@@ -108,16 +108,16 @@ pub enum EjectAction {
 /// An instance of an object of type T with an atomic reference count.
 pub struct Counted<T> {
     storage: ManuallyDrop<T>,
-    ref_cnt: StickyCounter,
-    weak_cnt: StickyCounter,
+    ref_cnt: Count,
+    weak_cnt: Count,
 }
 
 impl<T> Counted<T> {
     pub(crate) fn new(val: T) -> Self {
         Self {
             storage: ManuallyDrop::new(val),
-            ref_cnt: StickyCounter::new(),
-            weak_cnt: StickyCounter::new(),
+            ref_cnt: Count::new(),
+            weak_cnt: Count::new(),
         }
     }
 
@@ -199,7 +199,7 @@ impl<T> Default for Tagged<T> {
 
 impl<T> Clone for Tagged<T> {
     fn clone(&self) -> Self {
-        Self { ptr: self.ptr }
+        *self
     }
 }
 
@@ -223,7 +223,7 @@ impl<T> Tagged<T> {
     }
 
     pub fn is_null(&self) -> bool {
-        self.untagged().is_null()
+        self.as_raw().is_null()
     }
 
     pub fn tag(&self) -> usize {
@@ -231,7 +231,8 @@ impl<T> Tagged<T> {
         ptr & low_bits::<T>()
     }
 
-    pub fn untagged(&self) -> *mut T {
+    /// Converts the pointer to a raw pointer (without the tag).
+    pub fn as_raw(&self) -> *mut T {
         let ptr = self.ptr as usize;
         (ptr & !low_bits::<T>()) as *mut T
     }
@@ -240,24 +241,12 @@ impl<T> Tagged<T> {
         Self::new(with_tag(self.ptr, tag))
     }
 
-    pub fn set_ptr(&mut self, ptr: *mut T) {
-        self.ptr = with_tag(ptr, self.tag());
-    }
-
-    pub fn set_tag(&mut self, tag: usize) {
-        self.ptr = with_tag(self.ptr, tag);
-    }
-
     pub unsafe fn deref<'g>(&self) -> &'g T {
-        &*self.untagged()
+        &*self.as_raw()
     }
 
     pub unsafe fn deref_mut<'g>(&mut self) -> &'g mut T {
-        &mut *self.untagged()
-    }
-
-    pub fn as_usize(&self) -> usize {
-        self.ptr as usize
+        &mut *self.as_raw()
     }
 }
 
@@ -275,4 +264,7 @@ pub type TaggedCnt<T> = Tagged<Counted<T>>;
 
 pub trait Pointer<T> {
     fn as_ptr(&self) -> TaggedCnt<T>;
+    fn is_null(&self) -> bool {
+        self.as_ptr().is_null()
+    }
 }

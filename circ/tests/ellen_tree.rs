@@ -1,5 +1,5 @@
 use bitflags::bitflags;
-use cdrc_rs::{AtomicRc, AtomicWeak, Cs, Pointer, Rc, Snapshot, Weak};
+use circ::{AtomicRc, AtomicWeak, Cs, Pointer, Rc, Snapshot, StrongPtr, Weak};
 use std::{mem::swap, sync::atomic::Ordering};
 
 bitflags! {
@@ -180,7 +180,7 @@ where
     fn search(&mut self, root: &AtomicRc<Node<K, V, C>, C>, key: &K, cs: &C) {
         self.l.load(root, cs);
         loop {
-            let l_node = unsafe { self.l.as_ref() }.unwrap();
+            let l_node = unsafe { self.l.deref() };
             if l_node.is_leaf {
                 break;
             }
@@ -266,7 +266,7 @@ where
 
     pub fn find(&self, key: &K, cursor: &mut Cursor<K, V, C>, cs: &C) -> bool {
         cursor.0.search(&self.root, key, cs);
-        let l_node = unsafe { cursor.0.l.as_ref().unwrap() };
+        let l_node = cursor.0.l.as_ref().unwrap();
         l_node.key.eq(key)
     }
 
@@ -274,8 +274,8 @@ where
         loop {
             let finder = &mut cursor.0;
             finder.search(&self.root, &key, cs);
-            let l_node = unsafe { finder.l.as_ref().unwrap() };
-            let p_node = unsafe { finder.p.as_ref().unwrap() };
+            let l_node = finder.l.as_ref().unwrap();
+            let p_node = finder.p.as_ref().unwrap();
 
             if l_node.key == key {
                 return false;
@@ -345,7 +345,7 @@ where
                 return false;
             }
 
-            let l_node = unsafe { finder.l.as_ref().unwrap() };
+            let l_node = finder.l.as_ref().unwrap();
 
             if l_node.key != Key::Fin(key.clone()) {
                 return false;
@@ -369,15 +369,13 @@ where
                 let new_update = Rc::new(op, cs).with_tag(UpdateTag::DFLAG.bits());
                 finder.pupdate.protect(&new_update, cs);
 
-                match unsafe { finder.gp.as_ref().unwrap() }
-                    .update
-                    .compare_exchange(
-                        finder.gpupdate.as_ptr(),
-                        new_update,
-                        Ordering::Release,
-                        Ordering::Relaxed,
-                        cs,
-                    ) {
+                match finder.gp.as_ref().unwrap().update.compare_exchange(
+                    finder.gpupdate.as_ptr(),
+                    new_update,
+                    Ordering::Release,
+                    Ordering::Relaxed,
+                    cs,
+                ) {
                     Ok(_) => {
                         if self.help_delete(&finder.pupdate, &mut cursor.1, cs) {
                             return true;
@@ -412,8 +410,8 @@ where
             return false;
         }
 
-        let gp_ref = unsafe { helper.gp.as_ref() }.unwrap();
-        let p_ref = unsafe { helper.p.as_ref() }.unwrap();
+        let gp_ref = helper.gp.as_ref().unwrap();
+        let p_ref = helper.p.as_ref().unwrap();
 
         match p_ref.update.compare_exchange(
             helper.pupdate.as_ptr(),
@@ -453,7 +451,7 @@ where
             return;
         }
 
-        let gp_ref = unsafe { helper.gp.as_ref() }.unwrap();
+        let gp_ref = helper.gp.as_ref().unwrap();
 
         // dchild CAS
         let _ = gp_ref.child(op_ref.gp_p_dir).compare_exchange(
@@ -481,7 +479,7 @@ where
             return;
         }
 
-        let p_ref = unsafe { helper.p.as_ref() }.unwrap();
+        let p_ref = helper.p.as_ref().unwrap();
 
         // ichild CAS
         let _ = p_ref.child(op_ref.p_l_dir).compare_exchange(
@@ -580,5 +578,10 @@ fn smoke<C: Cs>() {
 
 #[test]
 fn smoke_ebr() {
-    smoke::<cdrc_rs::CsEBR>();
+    smoke::<circ::CsEBR>();
+}
+
+#[test]
+fn smoke_hp() {
+    smoke::<circ::CsHP>();
 }
