@@ -144,7 +144,7 @@ where
         right: P2,
         key: K,
         value: V,
-        cs: &C,
+        _: &C,
     ) -> Rc<Node<K, V, C>, C>
     where
         P1: StrongPtr<Node<K, V, C>, C>,
@@ -156,16 +156,13 @@ where
 
         let left_size = Node::node_size(&left);
         let right_size = Node::node_size(&right);
-        let new_node = Rc::new(
-            Node {
-                key,
-                value,
-                size: left_size + right_size + 1,
-                left: AtomicRc::from(left.into_rc()),
-                right: AtomicRc::from(right.into_rc()),
-            },
-            cs,
-        );
+        let new_node = Rc::new(Node {
+            key,
+            value,
+            size: left_size + right_size + 1,
+            left: AtomicRc::from(left.into_rc()),
+            right: AtomicRc::from(right.into_rc()),
+        });
         new_node
     }
 

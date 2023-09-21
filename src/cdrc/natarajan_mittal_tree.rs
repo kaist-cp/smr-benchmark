@@ -116,8 +116,8 @@ where
         Node {
             key: right.key.clone(),
             value: None,
-            left: AtomicRc::new(left, unsafe { &C::unprotected() }),
-            right: AtomicRc::new(right, unsafe { &C::unprotected() }),
+            left: AtomicRc::new(left),
+            right: AtomicRc::new(right),
         }
     }
 }
@@ -230,7 +230,7 @@ where
         let s = Node::new_internal(inf0, inf1);
         let r = Node::new_internal(s, inf2);
         NMTreeMap {
-            r: AtomicRc::new(r, unsafe { &C::unprotected() }),
+            r: AtomicRc::new(r),
         }
     }
 
@@ -356,17 +356,14 @@ where
     }
 
     pub fn insert(&self, key: K, value: V, record: &mut SeekRecord<K, V, C>, cs: &C) -> bool {
-        let new_leaf = Rc::new(Node::new_leaf(Key::Fin(key.clone()), Some(value)), cs);
+        let new_leaf = Rc::new(Node::new_leaf(Key::Fin(key.clone()), Some(value)));
 
-        let mut new_internal = Rc::new(
-            Node {
-                key: Key::Inf, // temporary placeholder
-                value: None,
-                left: AtomicRc::null(),
-                right: AtomicRc::null(),
-            },
-            cs,
-        );
+        let mut new_internal = Rc::new(Node {
+            key: Key::Inf, // temporary placeholder
+            value: None,
+            left: AtomicRc::null(),
+            right: AtomicRc::null(),
+        });
 
         loop {
             self.seek(&key, record, cs);

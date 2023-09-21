@@ -261,7 +261,7 @@ where
     /// Creates a new list.
     pub fn new() -> Self {
         List {
-            head: AtomicRc::new(Node::head(), &C::new()),
+            head: AtomicRc::new(Node::head()),
         }
     }
 
@@ -283,7 +283,7 @@ where
     where
         F: Fn(&mut Cursor<K, V, C>, &K, &C) -> Result<bool, ()>,
     {
-        let mut node = Rc::new(Node::new(key, value), cs);
+        let mut node = Rc::new(Node::new(key, value));
         loop {
             let found = self.get(&unsafe { node.deref() }.key, &find, cursor, cs);
             if found {

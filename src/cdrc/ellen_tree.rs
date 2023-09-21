@@ -104,13 +104,13 @@ pub struct Update<K, V, C: Cs> {
 }
 
 impl<K, V, C: Cs> Node<K, V, C> {
-    pub fn internal(key: Key<K>, value: Option<V>, left: Self, right: Self, cs: &C) -> Self {
+    pub fn internal(key: Key<K>, value: Option<V>, left: Self, right: Self) -> Self {
         Self {
             key,
             value,
             update: AtomicRc::null(),
-            left: AtomicRc::new(left, cs),
-            right: AtomicRc::new(right, cs),
+            left: AtomicRc::new(left),
+            right: AtomicRc::new(right),
             is_leaf: false,
         }
     }
@@ -258,18 +258,14 @@ pub struct EFRBTree<K, V, C: Cs> {
 }
 
 impl<K, V, C: Cs> EFRBTree<K, V, C> {
-    pub fn new(cs: &C) -> Self {
+    pub fn new() -> Self {
         Self {
-            root: AtomicRc::new(
-                Node::internal(
-                    Key::Inf2,
-                    None,
-                    Node::leaf(Key::Inf1, None),
-                    Node::leaf(Key::Inf2, None),
-                    cs,
-                ),
-                cs,
-            ),
+            root: AtomicRc::new(Node::internal(
+                Key::Inf2,
+                None,
+                Node::leaf(Key::Inf1, None),
+                Node::leaf(Key::Inf2, None),
+            )),
         }
     }
 }
@@ -306,19 +302,15 @@ where
                     _ => (new_sibling, new),
                 };
 
-                let new_internal = Rc::new(
-                    Node::internal(
-                        // key field max(k, l → key)
-                        right.key.clone(),
-                        None,
-                        // two child fields equal to new and newSibling
-                        // (the one with the smaller key is the left child)
-                        left,
-                        right,
-                        cs,
-                    ),
-                    cs,
-                );
+                let new_internal = Rc::new(Node::internal(
+                    // key field max(k, l → key)
+                    right.key.clone(),
+                    None,
+                    // two child fields equal to new and newSibling
+                    // (the one with the smaller key is the left child)
+                    left,
+                    right,
+                ));
 
                 let op = Update {
                     p: Weak::from_strong(&finder.p, cs),
@@ -331,7 +323,7 @@ where
                     pupdate: Weak::null(),
                 };
 
-                let new_pupdate = Rc::new(op, cs).with_tag(UpdateTag::IFLAG.bits());
+                let new_pupdate = Rc::new(op).with_tag(UpdateTag::IFLAG.bits());
                 finder.new_update.protect(&new_pupdate, cs);
 
                 match p_node.update.compare_exchange(
@@ -382,7 +374,7 @@ where
                     new_internal: AtomicRc::null(),
                 };
 
-                let new_update = Rc::new(op, cs).with_tag(UpdateTag::DFLAG.bits());
+                let new_update = Rc::new(op).with_tag(UpdateTag::DFLAG.bits());
                 finder.pupdate.protect(&new_update, cs);
 
                 match finder.gp.as_ref().unwrap().update.compare_exchange(
@@ -560,7 +552,7 @@ where
     type Output = Cursor<K, V, C>;
 
     fn new() -> Self {
-        EFRBTree::new(unsafe { &C::unprotected() })
+        EFRBTree::new()
     }
 
     #[inline(always)]

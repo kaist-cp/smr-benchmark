@@ -135,7 +135,7 @@ where
 {
     pub fn new() -> Self {
         Self {
-            head: AtomicRc::new(Node::head(), unsafe { &C::unprotected() }),
+            head: AtomicRc::new(Node::head()),
         }
     }
 
@@ -267,7 +267,7 @@ where
             return false;
         }
 
-        let new_node = Rc::new(Node::new(key, value), cs);
+        let new_node = Rc::new(Node::new(key, value));
         let new_node_ref = unsafe { new_node.deref() };
         let height = new_node_ref.height;
         cursor.new_node.protect(&new_node, cs);

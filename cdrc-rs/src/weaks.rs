@@ -212,7 +212,6 @@ impl<T, C: Cs> Default for AtomicWeak<T, C> {
 
 pub struct Weak<T, C: Cs> {
     ptr: TaggedCnt<T>,
-    must_delay: bool,
     _marker: PhantomData<*const C>,
 }
 
@@ -229,7 +228,6 @@ impl<T, C: Cs> Weak<T, C> {
     pub(crate) fn from_raw(ptr: TaggedCnt<T>) -> Self {
         Self {
             ptr,
-            must_delay: true,
             _marker: PhantomData,
         }
     }
@@ -244,7 +242,6 @@ impl<T, C: Cs> Weak<T, C> {
                 if cs.increment_weak_cnt(cnt) {
                     return Self {
                         ptr: ptr.as_ptr(),
-                        must_delay: false,
                         _marker: PhantomData,
                     };
                 }
@@ -257,7 +254,6 @@ impl<T, C: Cs> Weak<T, C> {
     pub fn clone(&self, cs: &C) -> Self {
         let weak = Self {
             ptr: self.ptr,
-            must_delay: self.must_delay,
             _marker: PhantomData,
         };
         unsafe {
@@ -326,13 +322,8 @@ impl<T, C: Cs> Drop for Weak<T, C> {
     fn drop(&mut self) {
         unsafe {
             if let Some(cnt) = self.ptr.as_raw().as_mut() {
-                if self.must_delay {
-                    let cs = C::new();
-                    cs.delayed_decrement_weak_cnt(cnt);
-                } else {
-                    let cs = C::without_epoch();
-                    cs.decrement_weak_cnt(cnt);
-                }
+                let cs = C::new();
+                cs.delayed_decrement_weak_cnt(cnt);
             }
         }
     }

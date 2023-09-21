@@ -183,6 +183,10 @@ impl<T> Counted<T> {
     pub(crate) fn release_weak(&self) -> bool {
         self.weak_cnt.decrement(1, Ordering::Release)
     }
+
+    pub(crate) fn into_inner(self) -> T {
+        ManuallyDrop::into_inner(self.storage)
+    }
 }
 
 pub struct Tagged<T> {

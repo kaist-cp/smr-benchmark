@@ -77,7 +77,7 @@ impl Cs for CsHP {
     }
 
     #[inline]
-    fn create_object<T>(&self, obj: T) -> *mut crate::Counted<T> {
+    fn create_object<T>(obj: T) -> *mut crate::Counted<T> {
         let obj = Counted::new(obj);
         Box::into_raw(Box::new(obj))
     }
@@ -117,8 +117,8 @@ impl Cs for CsHP {
     }
 
     #[inline]
-    unsafe fn delete_object<T>(&self, ptr: *mut Counted<T>) {
-        drop(Box::from_raw(ptr));
+    unsafe fn own_object<T>(ptr: *mut Counted<T>) -> Counted<T> {
+        *Box::from_raw(ptr)
     }
 
     #[inline]

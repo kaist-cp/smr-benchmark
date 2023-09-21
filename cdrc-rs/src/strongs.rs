@@ -35,9 +35,9 @@ const_assert!(mem::size_of::<Atomic<TaggedCnt<u8>>>() == mem::size_of::<AtomicUs
 
 impl<T, C: Cs> AtomicRc<T, C> {
     #[inline(always)]
-    pub fn new(obj: T, cs: &C) -> Self {
+    pub fn new(obj: T) -> Self {
         Self {
-            link: Atomic::new(Rc::new(obj, cs).into_raw()),
+            link: Atomic::new(Rc::<T, C>::new(obj).into_raw()),
             _marker: PhantomData,
         }
     }
@@ -185,6 +185,15 @@ impl<T, C: Cs> AtomicRc<T, C> {
         let prev = link.fetch_or(tag, order);
         TaggedCnt::new(prev as *mut _)
     }
+
+    #[inline]
+    pub unsafe fn into_inner(self) -> T {
+        let ptr = self.link.load(Ordering::Relaxed).as_raw();
+        debug_assert!(!ptr.is_null());
+        debug_assert!((*ptr).ref_count() == 1);
+        forget(self);
+        C::own_object(ptr).into_inner()
+    }
 }
 
 impl<T, C: Cs> Drop for AtomicRc<T, C> {
@@ -255,8 +264,8 @@ impl<T, C: Cs> Rc<T, C> {
     }
 
     #[inline(always)]
-    pub fn new(obj: T, cs: &C) -> Self {
-        let ptr = cs.create_object(obj);
+    pub fn new(obj: T) -> Self {
+        let ptr = C::create_object(obj);
         Self {
             ptr: TaggedCnt::new(ptr),
             _marker: PhantomData,
@@ -313,6 +322,15 @@ impl<T, C: Cs> Rc<T, C> {
                 cs.delayed_decrement_ref_cnt(cnt);
             }
         }
+    }
+
+    #[inline]
+    pub unsafe fn into_inner(self) -> T {
+        let ptr = self.ptr.as_raw();
+        debug_assert!(!ptr.is_null());
+        debug_assert!((*ptr).ref_count() == 1);
+        forget(self);
+        C::own_object(ptr).into_inner()
     }
 }
 

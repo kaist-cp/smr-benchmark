@@ -69,7 +69,7 @@ impl Cs for CsEBR {
     }
 
     #[inline(always)]
-    fn create_object<T>(&self, obj: T) -> *mut Counted<T> {
+    fn create_object<T>(obj: T) -> *mut Counted<T> {
         let obj = Counted::new(obj);
         Box::into_raw(Box::new(obj))
     }
@@ -95,8 +95,8 @@ impl Cs for CsEBR {
     }
 
     #[inline(always)]
-    unsafe fn delete_object<T>(&self, ptr: *mut Counted<T>) {
-        drop(Box::from_raw(ptr));
+    unsafe fn own_object<T>(ptr: *mut Counted<T>) -> Counted<T> {
+        *Box::from_raw(ptr)
     }
 
     #[inline(always)]

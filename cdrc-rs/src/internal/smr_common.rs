@@ -41,7 +41,7 @@ pub trait Cs {
     fn new() -> Self;
     unsafe fn without_epoch() -> Self;
     unsafe fn unprotected() -> Self;
-    fn create_object<T>(&self, obj: T) -> *mut Counted<T>;
+    fn create_object<T>(obj: T) -> *mut Counted<T>;
     /// Creates a shield for the given pointer, assuming that `ptr` is already protected by a
     /// reference count.
     fn reserve<T>(&self, ptr: TaggedCnt<T>, shield: &mut Self::RawShield<T>);
@@ -50,7 +50,7 @@ pub trait Cs {
         link: &Atomic<TaggedCnt<T>>,
         shield: &mut Self::RawShield<T>,
     ) -> bool;
-    unsafe fn delete_object<T>(&self, ptr: *mut Counted<T>);
+    unsafe fn own_object<T>(ptr: *mut Counted<T>) -> Counted<T>;
     unsafe fn retire<T>(&self, ptr: *mut Counted<T>, ret_type: RetireType);
     fn clear(&mut self);
 
@@ -66,7 +66,7 @@ pub trait Cs {
     #[inline]
     unsafe fn destroy<T>(&self, cnt: &mut Counted<T>) {
         debug_assert!(cnt.ref_count() == 0);
-        self.delete_object(cnt);
+        drop(Self::own_object(cnt));
     }
 
     /// Perform an eject action. This can correspond to any action that
