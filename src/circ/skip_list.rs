@@ -290,6 +290,7 @@ where
 
             // We failed. Let's search for the key and try again.
             if self.find(&new_node_ref.key, cursor, cs) {
+                drop(unsafe { new_node.into_inner() });
                 return false;
             }
         }

@@ -370,7 +370,10 @@ where
             let new_internal_node = unsafe { new_internal.deref_mut() };
 
             match unsafe { record.leaf.deref() }.key.cmp(&key) {
-                cmp::Ordering::Equal => return false,
+                cmp::Ordering::Equal => {
+                    drop(unsafe { new_internal.into_inner() });
+                    return false;
+                }
                 cmp::Ordering::Greater => {
                     new_internal_node.key = unsafe { record.leaf.deref().key.clone() };
                     new_internal_node

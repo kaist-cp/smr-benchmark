@@ -287,6 +287,7 @@ where
         loop {
             let found = self.get(&unsafe { node.deref() }.key, &find, cursor, cs);
             if found {
+                drop(unsafe { node.into_inner() });
                 return false;
             }
 
