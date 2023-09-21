@@ -19,6 +19,7 @@ nbr-rs = { path = "./nbr-rs" }
 cdrc-rs = { path = "./cdrc-rs" }
 hp-sharp = { path = "./hp-sharp" }
 vbr-rs = { path = "./vbr-rs" }
+circ = { path = "./circ" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tikv-jemallocator = "0.5"

@@ -171,6 +171,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
+name = "circ"
+version = "0.1.0"
+dependencies = [
+ "atomic",
+ "cfg-if 1.0.0",
+ "crossbeam",
+ "membarrier 0.2.3 (git+https://github.com/jeehoonkang/membarrier-rs.git?branch=smr-benchmark)",
+ "rustc-hash",
+ "scopeguard",
+ "static_assertions 1.1.0",
+]
+
+[[package]]
 name = "clang-sys"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -838,6 +851,7 @@ dependencies = [
  "bitflags 2.3.3",
  "cdrc-rs",
  "cfg-if 1.0.0",
+ "circ",
  "clap",
  "crossbeam-epoch 0.9.13",
  "crossbeam-pebr-epoch",

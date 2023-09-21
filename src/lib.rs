@@ -32,6 +32,7 @@ mod utils;
 
 pub mod cdrc;
 pub mod cdrc_hp_sharp;
+pub mod circ;
 pub mod ebr;
 pub mod hp;
 pub mod hp_pp;
@@ -40,10 +41,3 @@ pub mod nbr;
 pub mod nr;
 pub mod pebr;
 pub mod vbr;
-
-use core::cell::Cell;
-
-thread_local! {
-    static TRAVERSE_COUNT: Cell<u64> = Cell::new(0);
-    static RESTART_COUNT: Cell<u64> = Cell::new(0);
-}
