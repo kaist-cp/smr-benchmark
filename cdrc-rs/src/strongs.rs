@@ -220,7 +220,6 @@ impl<T, C: Cs> From<Rc<T, C>> for AtomicRc<T, C> {
 
 pub struct Rc<T, C: Cs> {
     ptr: TaggedCnt<T>,
-    must_delay: bool,
     _marker: PhantomData<(T, *const C)>,
 }
 
@@ -237,7 +236,6 @@ impl<T, C: Cs> Rc<T, C> {
     pub(crate) fn from_raw(ptr: TaggedCnt<T>) -> Self {
         Self {
             ptr,
-            must_delay: true,
             _marker: PhantomData,
         }
     }
@@ -246,7 +244,6 @@ impl<T, C: Cs> Rc<T, C> {
     pub fn from_snapshot<'g>(ptr: &Snapshot<T, C>, cs: &'g C) -> Self {
         let rc = Self {
             ptr: ptr.as_ptr(),
-            must_delay: false,
             _marker: PhantomData,
         };
         unsafe {
@@ -262,7 +259,6 @@ impl<T, C: Cs> Rc<T, C> {
         let ptr = cs.create_object(obj);
         Self {
             ptr: TaggedCnt::new(ptr),
-            must_delay: false,
             _marker: PhantomData,
         }
     }
@@ -271,7 +267,6 @@ impl<T, C: Cs> Rc<T, C> {
     pub fn clone(&self, cs: &C) -> Self {
         let rc = Self {
             ptr: self.ptr,
-            must_delay: self.must_delay,
             _marker: PhantomData,
         };
         unsafe {
@@ -315,11 +310,7 @@ impl<T, C: Cs> Rc<T, C> {
     pub fn finalize(self, cs: &C) {
         unsafe {
             if let Some(cnt) = self.ptr.as_raw().as_mut() {
-                if self.must_delay {
-                    cs.delayed_decrement_ref_cnt(cnt);
-                } else {
-                    cs.decrement_ref_cnt(cnt);
-                }
+                cs.delayed_decrement_ref_cnt(cnt);
             }
         }
     }
@@ -337,13 +328,8 @@ impl<T, C: Cs> Drop for Rc<T, C> {
     fn drop(&mut self) {
         unsafe {
             if let Some(cnt) = self.ptr.as_raw().as_mut() {
-                if self.must_delay {
-                    let cs = C::new();
-                    cs.delayed_decrement_ref_cnt(cnt);
-                } else {
-                    let cs = C::without_epoch();
-                    cs.decrement_ref_cnt(cnt);
-                }
+                let cs = C::new();
+                cs.delayed_decrement_ref_cnt(cnt);
             }
         }
     }
