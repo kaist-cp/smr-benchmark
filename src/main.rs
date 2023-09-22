@@ -663,7 +663,11 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 circ_bench::BonsaiTreeMap<usize, usize, circ::CsEBR>,
                 N,
             >(config, PrefillStrategy::Random),
-            _ => panic!("Unsupported(or unimplemented) data structure for CIRC"),
+            DS::EFRBTree => bench_map_circ::<
+                circ::CsEBR,
+                circ_bench::EFRBTree<usize, usize, circ::CsEBR>,
+                N,
+            >(config, PrefillStrategy::Random),
         },
         MM::CIRC_HP => match config.ds {
             DS::HList => {
@@ -702,7 +706,11 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 circ_bench::BonsaiTreeMap<usize, usize, circ::CsHP>,
                 N,
             >(config, PrefillStrategy::Random),
-            _ => panic!("Unsupported(or unimplemented) data structure for CIRC"),
+            DS::EFRBTree => bench_map_circ::<
+                circ::CsHP,
+                circ_bench::EFRBTree<usize, usize, circ::CsHP>,
+                N,
+            >(config, PrefillStrategy::Random),
         },
         MM::HP_SHARP => match config.ds {
             DS::HList => bench_map_hp_sharp::<hp_sharp_bench::HList<usize, usize>>(
