@@ -162,6 +162,7 @@ where
                     std::cmp::Ordering::Less => {
                         cursor.pred_offset[level] = 0;
                         Snapshot::swap(&mut cursor.preds[level], &mut cursor.succs[level]);
+                        cursor.succs[level].load(&unsafe { cursor.pred(level).deref() }.next[level], cs);
                     }
                     std::cmp::Ordering::Equal => {
                         let clean = curr_node.next[level].load(Ordering::Acquire).tag() == 0;
@@ -396,7 +397,7 @@ where
     }
 
     fn get(&self, key: &K, output: &mut Self::Output, cs: &C) -> bool {
-        let found = self.find(key, output, cs);
+        let found = self.find_optimistic(key, output, cs);
         if found {
             output.found_value = Some(unsafe { output.found().deref() }.value.clone());
         }
