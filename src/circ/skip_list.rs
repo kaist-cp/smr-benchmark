@@ -162,7 +162,8 @@ where
                     std::cmp::Ordering::Less => {
                         cursor.pred_offset[level] = 0;
                         Snapshot::swap(&mut cursor.preds[level], &mut cursor.succs[level]);
-                        cursor.succs[level].load(&unsafe { cursor.pred(level).deref() }.next[level], cs);
+                        cursor.succs[level]
+                            .load(&unsafe { cursor.pred(level).deref() }.next[level], cs);
                     }
                     std::cmp::Ordering::Equal => {
                         let clean = curr_node.next[level].load(Ordering::Acquire).tag() == 0;
