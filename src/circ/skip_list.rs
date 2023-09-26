@@ -140,11 +140,12 @@ where
     }
 
     pub fn find_optimistic(&self, key: &K, cursor: &mut Cursor<K, V, C>, cs: &C) -> bool {
-        cursor.initialize(&self.head, cs);
+        cursor.found_level = None;
+        cursor.preds[0].load(&self.head, cs);
 
         let mut level = MAX_HEIGHT;
         while level >= 1
-            && unsafe { cursor.pred(level - 1).deref() }.next[level - 1]
+            && unsafe { cursor.preds[0].deref() }.next[level - 1]
                 .load(Ordering::Relaxed)
                 .is_null()
         {
@@ -153,22 +154,20 @@ where
 
         while level >= 1 {
             level -= 1;
-            cursor.pred_offset[level] = cursor.pred_offset[level + 1] + 1;
-            cursor.succs[level].load(&unsafe { cursor.pred(level).deref() }.next[level], cs);
+            cursor.succs[0].load(&unsafe { cursor.preds[0].deref() }.next[level], cs);
 
             loop {
-                let curr_node = some_or!(cursor.succs[level].as_ref(), break);
+                let curr_node = some_or!(cursor.succs[0].as_ref(), break);
                 match curr_node.key.cmp(key) {
                     std::cmp::Ordering::Less => {
-                        cursor.pred_offset[level] = 0;
-                        Snapshot::swap(&mut cursor.preds[level], &mut cursor.succs[level]);
-                        cursor.succs[level]
-                            .load(&unsafe { cursor.pred(level).deref() }.next[level], cs);
+                        Snapshot::swap(&mut cursor.preds[0], &mut cursor.succs[0]);
+                        cursor.succs[0]
+                            .load(&unsafe { cursor.preds[0].deref() }.next[level], cs);
                     }
                     std::cmp::Ordering::Equal => {
                         let clean = curr_node.next[level].load(Ordering::Acquire).tag() == 0;
                         if clean {
-                            cursor.found_level = Some(level);
+                            cursor.found_level = Some(0);
                         }
                         return clean;
                     }
@@ -354,6 +353,7 @@ where
             }
             let height = unsafe { cursor.found().deref() }.height;
             cursor.found_value = Some(unsafe { cursor.found().deref() }.value.clone());
+            assert!(cursor.found().as_ptr().tag() == 0);
 
             // Try removing the node by marking its tower.
             if unsafe { cursor.found().deref() }.mark_tower(cs) {

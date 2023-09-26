@@ -337,7 +337,10 @@ where
                         self.help_insert(&finder.new_update, &mut cursor.1, cs);
                         return true;
                     }
-                    Err(_) => {}
+                    Err(e) => unsafe {
+                        let new_pupdate = e.desired.into_inner().unwrap();
+                        drop(new_pupdate.new_internal.into_inner().unwrap());
+                    }
                 }
             }
         }
@@ -389,7 +392,9 @@ where
                             return true;
                         }
                     }
-                    Err(_) => {}
+                    Err(e) => unsafe {
+                        drop(e.desired.into_inner().unwrap());
+                    }
                 }
             }
         }

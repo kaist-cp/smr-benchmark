@@ -365,13 +365,22 @@ where
             right: AtomicRc::null(),
         });
 
+        let mut new_leaf_pos = None;
+
         loop {
             self.seek(&key, record, cs);
             let new_internal_node = unsafe { new_internal.deref_mut() };
 
             match unsafe { record.leaf.deref() }.key.cmp(&key) {
                 cmp::Ordering::Equal => {
-                    drop(unsafe { new_internal.into_inner() });
+                    let new_internal = unsafe { new_internal.into_inner() }.unwrap();
+                    let result = match new_leaf_pos {
+                        Some(Direction::L) => unsafe { new_internal.left.into_inner() },
+                        Some(Direction::R) => unsafe { new_internal.right.into_inner() },
+                        None => None
+                    };
+                    debug_assert!(result.is_none());
+                    unsafe { new_leaf.into_inner() }.unwrap();
                     return false;
                 }
                 cmp::Ordering::Greater => {
@@ -382,6 +391,7 @@ where
                     new_internal_node
                         .right
                         .store(&record.leaf, Ordering::Relaxed, cs);
+                    new_leaf_pos = Some(Direction::L);
                 }
                 cmp::Ordering::Less => {
                     new_internal_node.key = unsafe { new_leaf.deref().key.clone() };
@@ -391,6 +401,7 @@ where
                     new_internal_node
                         .right
                         .store(new_leaf.clone(), Ordering::Relaxed, cs);
+                    new_leaf_pos = Some(Direction::R);
                 }
             }
 
