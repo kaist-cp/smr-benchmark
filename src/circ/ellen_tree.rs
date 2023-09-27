@@ -241,15 +241,25 @@ impl<K, V, C: Cs> Helper<K, V, C> {
     }
 }
 
-pub struct Cursor<K, V, C: Cs>(Finder<K, V, C>, Helper<K, V, C>);
+pub struct Cursor<K, V, C: Cs> {
+    finder: Finder<K, V, C>,
+    helper: Helper<K, V, C>,
+    helping_op1: Snapshot<Update<K, V, C>, C>,
+    helping_op2: Snapshot<Update<K, V, C>, C>,
+}
 
 impl<K, V, C: Cs> OutputHolder<V> for Cursor<K, V, C> {
     fn default() -> Self {
-        Self(Finder::new(), Helper::new())
+        Self {
+            finder: Finder::new(),
+            helper: Helper::new(),
+            helping_op1: Snapshot::new(),
+            helping_op2: Snapshot::new(),
+        }
     }
 
     fn output(&self) -> &V {
-        unsafe { self.0.l.deref() }.value.as_ref().unwrap()
+        unsafe { self.finder.l.deref() }.value.as_ref().unwrap()
     }
 }
 
@@ -277,14 +287,14 @@ where
     C: Cs,
 {
     pub fn find(&self, key: &K, cursor: &mut Cursor<K, V, C>, cs: &C) -> bool {
-        cursor.0.search(&self.root, key, cs);
-        let l_node = cursor.0.l.as_ref().unwrap();
+        cursor.finder.search(&self.root, key, cs);
+        let l_node = cursor.finder.l.as_ref().unwrap();
         l_node.key.eq(key)
     }
 
     pub fn insert(&self, key: K, value: V, cursor: &mut Cursor<K, V, C>, cs: &C) -> bool {
         loop {
-            let finder = &mut cursor.0;
+            let finder = &mut cursor.finder;
             finder.search(&self.root, &key, cs);
             let l_node = finder.l.as_ref().unwrap();
             let p_node = finder.p.as_ref().unwrap();
@@ -292,7 +302,12 @@ where
             if l_node.key == key {
                 return false;
             } else if finder.pupdate.tag() != UpdateTag::CLEAN.bits() {
-                self.help(&finder.pupdate, &mut cursor.1, cs);
+                self.help(
+                    &mut finder.pupdate,
+                    &mut cursor.helping_op2,
+                    &mut cursor.helper,
+                    cs,
+                );
             } else {
                 let new = Node::leaf(Key::Fin(key.clone()), Some(value.clone()));
                 let new_sibling = Node::leaf(l_node.key.clone(), l_node.value.clone());
@@ -326,21 +341,28 @@ where
                 let new_pupdate = Rc::new(op).with_tag(UpdateTag::IFLAG.bits());
                 finder.new_update.protect(&new_pupdate, cs);
 
-                match p_node.update.compare_exchange(
+                match p_node.update.compare_exchange_protecting_current(
                     finder.pupdate.as_ptr(),
                     new_pupdate,
+                    &mut cursor.helping_op1,
                     Ordering::Release,
                     Ordering::Relaxed,
                     cs,
                 ) {
                     Ok(_) => {
-                        self.help_insert(&finder.new_update, &mut cursor.1, cs);
+                        self.help_insert(&finder.new_update, &mut cursor.helper, cs);
                         return true;
                     }
                     Err(e) => unsafe {
                         let new_pupdate = e.desired.into_inner().unwrap();
                         drop(new_pupdate.new_internal.into_inner().unwrap());
-                    }
+                        self.help(
+                            &mut cursor.helping_op1,
+                            &mut cursor.helping_op2,
+                            &mut cursor.helper,
+                            cs,
+                        );
+                    },
                 }
             }
         }
@@ -348,7 +370,7 @@ where
 
     pub fn delete(&self, key: &K, cursor: &mut Cursor<K, V, C>, cs: &C) -> bool {
         loop {
-            let finder = &mut cursor.0;
+            let finder = &mut cursor.finder;
             finder.search(&self.root, key, cs);
 
             if finder.gp.is_null() {
@@ -362,9 +384,19 @@ where
                 return false;
             }
             if finder.gpupdate.tag() != UpdateTag::CLEAN.bits() {
-                self.help(&finder.gpupdate, &mut cursor.1, cs);
+                self.help(
+                    &mut finder.gpupdate,
+                    &mut cursor.helping_op2,
+                    &mut cursor.helper,
+                    cs,
+                );
             } else if finder.pupdate.tag() != UpdateTag::CLEAN.bits() {
-                self.help(&finder.pupdate, &mut cursor.1, cs);
+                self.help(
+                    &mut finder.pupdate,
+                    &mut cursor.helping_op2,
+                    &mut cursor.helper,
+                    cs,
+                );
             } else {
                 let op = Update {
                     gp: Weak::from_strong(&finder.gp),
@@ -380,41 +412,65 @@ where
                 let new_update = Rc::new(op).with_tag(UpdateTag::DFLAG.bits());
                 finder.pupdate.protect(&new_update, cs);
 
-                match finder.gp.as_ref().unwrap().update.compare_exchange(
-                    finder.gpupdate.as_ptr(),
-                    new_update,
-                    Ordering::Release,
-                    Ordering::Relaxed,
-                    cs,
-                ) {
+                match finder
+                    .gp
+                    .as_ref()
+                    .unwrap()
+                    .update
+                    .compare_exchange_protecting_current(
+                        finder.gpupdate.as_ptr(),
+                        new_update,
+                        &mut cursor.helping_op1,
+                        Ordering::Release,
+                        Ordering::Relaxed,
+                        cs,
+                    ) {
                     Ok(_) => {
-                        if self.help_delete(&finder.pupdate, &mut cursor.1, cs) {
+                        if self.help_delete(
+                            &mut finder.pupdate,
+                            &mut cursor.helping_op1,
+                            &mut cursor.helper,
+                            cs,
+                        ) {
                             return true;
                         }
                     }
                     Err(e) => unsafe {
                         drop(e.desired.into_inner().unwrap());
-                    }
+                        self.help(
+                            &mut cursor.helping_op1,
+                            &mut cursor.helping_op2,
+                            &mut cursor.helper,
+                            cs,
+                        );
+                    },
                 }
             }
         }
     }
 
     #[inline]
-    fn help(&self, op: &Snapshot<Update<K, V, C>, C>, helper: &mut Helper<K, V, C>, cs: &C) {
+    fn help(
+        &self,
+        op: &mut Snapshot<Update<K, V, C>, C>,
+        aux: &mut Snapshot<Update<K, V, C>, C>,
+        helper: &mut Helper<K, V, C>,
+        cs: &C,
+    ) {
         match UpdateTag::from_bits_truncate(op.tag()) {
             UpdateTag::IFLAG => self.help_insert(op, helper, cs),
             UpdateTag::MARK => self.help_marked(op, helper, cs),
             UpdateTag::DFLAG => {
-                let _ = self.help_delete(op, helper, cs);
+                let _ = self.help_delete(op, aux, helper, cs);
             }
-            _ => unreachable!(),
+            _ => {}
         }
     }
 
     fn help_delete(
         &self,
-        op: &Snapshot<Update<K, V, C>, C>,
+        op: &mut Snapshot<Update<K, V, C>, C>,
+        aux: &mut Snapshot<Update<K, V, C>, C>,
         helper: &mut Helper<K, V, C>,
         cs: &C,
     ) -> bool {
@@ -438,9 +494,10 @@ where
         let gp_ref = helper.gp.as_ref().unwrap();
         let p_ref = helper.p.as_ref().unwrap();
 
-        match p_ref.update.compare_exchange(
+        match p_ref.update.compare_exchange_protecting_current(
             helper.pupdate.as_ptr(),
             op.with_tag(UpdateTag::MARK.bits()),
+            aux,
             Ordering::Release,
             Ordering::Acquire,
             cs,
@@ -463,6 +520,7 @@ where
                         Ordering::Relaxed,
                         cs,
                     );
+                    self.help(aux, op, helper, cs);
                     return false;
                 }
             }
