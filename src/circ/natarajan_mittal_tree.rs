@@ -377,7 +377,7 @@ where
                     let result = match new_leaf_pos {
                         Some(Direction::L) => unsafe { new_internal.left.into_inner() },
                         Some(Direction::R) => unsafe { new_internal.right.into_inner() },
-                        None => None
+                        None => None,
                     };
                     debug_assert!(result.is_none());
                     unsafe { new_leaf.into_inner() }.unwrap();

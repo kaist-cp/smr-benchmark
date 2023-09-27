@@ -161,8 +161,7 @@ where
                 match curr_node.key.cmp(key) {
                     std::cmp::Ordering::Less => {
                         Snapshot::swap(&mut cursor.preds[0], &mut cursor.succs[0]);
-                        cursor.succs[0]
-                            .load(&unsafe { cursor.preds[0].deref() }.next[level], cs);
+                        cursor.succs[0].load(&unsafe { cursor.preds[0].deref() }.next[level], cs);
                     }
                     std::cmp::Ordering::Equal => {
                         let clean = curr_node.next[level].load(Ordering::Acquire).tag() == 0;
