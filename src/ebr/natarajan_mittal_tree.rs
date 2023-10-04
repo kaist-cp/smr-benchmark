@@ -170,7 +170,7 @@ impl<'g, K, V> SeekRecord<'g, K, V> {
 
 // COMMENT(@jeehoonkang): write down the invariant of the tree
 pub struct NMTreeMap<K, V> {
-    r: Node<K, V>,
+    r: Atomic<Node<K, V>>,
 }
 
 impl<K, V> Default for NMTreeMap<K, V>
@@ -186,11 +186,12 @@ where
 impl<K, V> Drop for NMTreeMap<K, V> {
     fn drop(&mut self) {
         unsafe {
+            let r = self.r.load(Ordering::Relaxed, unprotected()).into_owned();
             let mut stack = vec![
-                self.r.left.load(Ordering::Relaxed, unprotected()),
-                self.r.right.load(Ordering::Relaxed, unprotected()),
+                r.left.load(Ordering::Relaxed, unprotected()),
+                r.right.load(Ordering::Relaxed, unprotected()),
             ];
-            assert!(self.r.value.is_none());
+            assert!(r.value.is_none());
 
             while let Some(mut node) = stack.pop() {
                 if node.is_null() {
@@ -225,12 +226,13 @@ where
         let inf2 = Node::new_leaf(Key::Inf, None);
         let s = Node::new_internal(inf0, inf1);
         let r = Node::new_internal(s, inf2);
-        NMTreeMap { r }
+        NMTreeMap { r: Atomic::new(r) }
     }
 
     // All `Shared<_>` fields are unmarked.
     fn seek<'g>(&'g self, key: &K, guard: &'g Guard) -> SeekRecord<'g, K, V> {
-        let s = self.r.left.load(Ordering::Relaxed, guard);
+        let r = self.r.load(Ordering::Relaxed, guard);
+        let s = unsafe { r.deref() }.left.load(Ordering::Relaxed, guard);
         let s_node = unsafe { s.deref() };
         let leaf = s_node
             .left
@@ -239,7 +241,7 @@ where
         let leaf_node = unsafe { leaf.deref() };
 
         let mut record = SeekRecord {
-            ancestor: Shared::from(&self.r as *const _),
+            ancestor: r,
             successor: s,
             successor_dir: Direction::L,
             parent: s,
@@ -280,7 +282,8 @@ where
 
     /// Similar to `seek`, but traverse the tree with only two pointers
     fn seek_leaf<'g>(&'g self, key: &K, guard: &'g Guard) -> SeekRecord<'g, K, V> {
-        let s = self.r.left.load(Ordering::Relaxed, guard);
+        let r = self.r.load(Ordering::Relaxed, guard);
+        let s = unsafe { r.deref() }.left.load(Ordering::Relaxed, guard);
         let s_node = unsafe { s.deref() };
         let leaf = s_node.left.load(Ordering::Acquire, guard).with_tag(0);
 

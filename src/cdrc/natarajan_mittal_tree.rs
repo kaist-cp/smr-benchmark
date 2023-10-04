@@ -193,9 +193,6 @@ impl<K, V, C: Cs> SeekRecord<K, V, C> {
 
 // COMMENT(@jeehoonkang): write down the invariant of the tree
 pub struct NMTreeMap<K, V, C: Cs> {
-    // It was `Node<K, V>` in EBR implementation,
-    // but it will be difficult to initialize fake ancestor
-    // with the previous definition.
     r: AtomicRc<Node<K, V, C>, C>,
 }
 
