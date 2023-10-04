@@ -97,10 +97,10 @@ pub struct Update<K, V, C: Cs> {
     gp_p_dir: Direction,
     p: Weak<Node<K, V, C>, C>,
     p_l_dir: Direction,
-    l: Weak<Node<K, V, C>, C>,
-    l_other: Weak<Node<K, V, C>, C>,
-    pupdate: Weak<Update<K, V, C>, C>,
-    new_internal: AtomicRc<Node<K, V, C>, C>,
+    l: Rc<Node<K, V, C>, C>,
+    l_other: Rc<Node<K, V, C>, C>,
+    pupdate: Rc<Update<K, V, C>, C>,
+    new_internal: Rc<Node<K, V, C>, C>,
 }
 
 impl<K, V, C: Cs> Node<K, V, C> {
@@ -207,10 +207,6 @@ where
 pub struct Helper<K, V, C: Cs> {
     gp: Snapshot<Node<K, V, C>, C>,
     p: Snapshot<Node<K, V, C>, C>,
-    l: Snapshot<Node<K, V, C>, C>,
-    l_other: Snapshot<Node<K, V, C>, C>,
-    new_internal: Snapshot<Node<K, V, C>, C>,
-    pupdate: Snapshot<Update<K, V, C>, C>,
 }
 
 impl<K, V, C: Cs> Helper<K, V, C> {
@@ -218,26 +214,37 @@ impl<K, V, C: Cs> Helper<K, V, C> {
         Self {
             gp: Snapshot::new(),
             p: Snapshot::new(),
-            l: Snapshot::new(),
-            l_other: Snapshot::new(),
-            new_internal: Snapshot::new(),
-            pupdate: Snapshot::new(),
         }
     }
 
-    fn load_insert<'g>(&'g mut self, op: &'g Update<K, V, C>, cs: &C) -> bool {
-        self.new_internal.load(&op.new_internal, cs);
-        self.p.protect_weak(&op.p, cs)
-            && self.l.protect_weak(&op.l, cs)
-            && self.l_other.protect_weak(&op.l_other, cs)
-    }
+    fn load_delete(
+        &mut self,
+        op: &Snapshot<Update<K, V, C>, C>,
+        cs: &C,
+    ) -> Option<(&Update<K, V, C>, &Node<K, V, C>, &Node<K, V, C>)> {
+        let op_ref = unsafe { op.deref() };
 
-    fn load_delete<'g>(&'g mut self, op: &'g Update<K, V, C>, cs: &C) -> bool {
-        self.gp.protect_weak(&op.gp, cs)
-            && self.p.protect_weak(&op.p, cs)
-            && self.l.protect_weak(&op.l, cs)
-            && self.l_other.protect_weak(&op.l_other, cs)
-            && self.pupdate.protect_weak(&op.pupdate, cs)
+        let gp_ref = if self.gp.protect_weak(&op_ref.gp, cs) {
+            self.gp.as_ref().unwrap()
+        } else {
+            return None;
+        };
+
+        let p_ref = if self.p.protect_weak(&op_ref.p, cs) {
+            self.p.as_ref().unwrap()
+        } else {
+            // Unflag to preserve lock-freedom.
+            let _ = gp_ref.update.compare_exchange_tag(
+                op.with_tag(UpdateTag::DFLAG.bits()),
+                UpdateTag::CLEAN.bits(),
+                Ordering::Release,
+                Ordering::Relaxed,
+                cs,
+            );
+            return None;
+        };
+
+        Some((op_ref, gp_ref, p_ref))
     }
 }
 
@@ -330,12 +337,12 @@ where
                 let op = Update {
                     p: Weak::from_strong(&finder.p),
                     p_l_dir: finder.p_l_dir,
-                    l: Weak::from_strong(&finder.l),
-                    l_other: Weak::from_strong(&finder.l_other),
-                    new_internal: AtomicRc::from(new_internal),
+                    l: Rc::from_snapshot(&finder.l),
+                    l_other: Rc::from_snapshot(&finder.l_other),
+                    new_internal,
                     gp: Weak::null(),
                     gp_p_dir: Direction::L,
-                    pupdate: Weak::null(),
+                    pupdate: Rc::null(),
                 };
 
                 let new_pupdate = Rc::new(op).with_tag(UpdateTag::IFLAG.bits());
@@ -403,10 +410,10 @@ where
                     gp_p_dir: finder.gp_p_dir,
                     p: Weak::from_strong(&finder.p),
                     p_l_dir: finder.p_l_dir,
-                    l: Weak::from_strong(&finder.l),
-                    l_other: Weak::from_strong(&finder.l_other),
-                    pupdate: Weak::from_strong(&finder.pupdate),
-                    new_internal: AtomicRc::null(),
+                    l: Rc::from_snapshot(&finder.l),
+                    l_other: Rc::from_snapshot(&finder.l_other),
+                    pupdate: Rc::from_snapshot(&finder.pupdate),
+                    new_internal: Rc::null(),
                 };
 
                 let new_update = Rc::new(op).with_tag(UpdateTag::DFLAG.bits());
@@ -475,27 +482,10 @@ where
         cs: &C,
     ) -> bool {
         // Precondition: op points to a DInfo record (i.e., it is not ⊥)
-        let op_ref = unsafe { op.deref() };
-        if !helper.load_delete(op_ref, cs) {
-            // Unflag to preserve lock-freedom.
-            if helper.gp.protect_weak(&op_ref.gp, cs) {
-                let gp_ref = helper.gp.as_ref().unwrap();
-                let _ = gp_ref.update.compare_exchange_tag(
-                    op.with_tag(UpdateTag::DFLAG.bits()),
-                    UpdateTag::CLEAN.bits(),
-                    Ordering::Release,
-                    Ordering::Relaxed,
-                    cs,
-                );
-            }
-            return false;
-        }
-
-        let gp_ref = helper.gp.as_ref().unwrap();
-        let p_ref = helper.p.as_ref().unwrap();
+        let (op_ref, gp_ref, p_ref) = some_or!(helper.load_delete(op, cs), return false);
 
         match p_ref.update.compare_exchange_protecting_current(
-            helper.pupdate.as_ptr(),
+            op_ref.pupdate.as_ptr(),
             op.with_tag(UpdateTag::MARK.bits()),
             aux,
             Ordering::Release,
@@ -529,28 +519,12 @@ where
 
     fn help_marked(&self, op: &Snapshot<Update<K, V, C>, C>, helper: &mut Helper<K, V, C>, cs: &C) {
         // Precondition: op points to a DInfo record (i.e., it is not ⊥)
-        let op_ref = unsafe { op.deref() };
-        if !helper.load_delete(op_ref, cs) {
-            // Unflag to preserve lock-freedom.
-            if helper.gp.protect_weak(&op_ref.gp, cs) {
-                let gp_ref = helper.gp.as_ref().unwrap();
-                let _ = gp_ref.update.compare_exchange_tag(
-                    op.with_tag(UpdateTag::DFLAG.bits()),
-                    UpdateTag::CLEAN.bits(),
-                    Ordering::Release,
-                    Ordering::Relaxed,
-                    cs,
-                );
-            }
-            return;
-        }
-
-        let gp_ref = helper.gp.as_ref().unwrap();
+        let (op_ref, gp_ref, _) = some_or!(helper.load_delete(op, cs), return);
 
         // dchild CAS
         let _ = gp_ref.child(op_ref.gp_p_dir).compare_exchange(
-            helper.p.as_ptr(),
-            &helper.l_other,
+            op_ref.p.as_ptr(),
+            op_ref.l_other.clone(),
             Ordering::Release,
             Ordering::Relaxed,
             cs,
@@ -569,18 +543,7 @@ where
     fn help_insert(&self, op: &Snapshot<Update<K, V, C>, C>, helper: &mut Helper<K, V, C>, cs: &C) {
         // Precondition: op points to a IInfo record (i.e., it is not ⊥)
         let op_ref = unsafe { op.deref() };
-        if !helper.load_insert(op_ref, cs) {
-            // Unflag to preserve lock-freedom.
-            if helper.p.protect_weak(&op_ref.p, cs) {
-                let p_ref = helper.p.as_ref().unwrap();
-                let _ = p_ref.update.compare_exchange_tag(
-                    op.with_tag(UpdateTag::IFLAG.bits()),
-                    UpdateTag::CLEAN.bits(),
-                    Ordering::Release,
-                    Ordering::Relaxed,
-                    cs,
-                );
-            }
+        if !helper.p.protect_weak(&op_ref.p, cs) {
             return;
         }
 
@@ -588,8 +551,8 @@ where
 
         // ichild CAS
         let _ = p_ref.child(op_ref.p_l_dir).compare_exchange(
-            helper.l.as_ptr(),
-            &helper.new_internal,
+            op_ref.l.as_ptr(),
+            op_ref.new_internal.clone(),
             Ordering::Release,
             Ordering::Relaxed,
             cs,
