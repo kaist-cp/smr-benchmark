@@ -86,7 +86,7 @@ impl Cs for CsHP {
     fn reserve<T>(&self, ptr: TaggedCnt<T>, shield: &mut Self::RawShield<T>) {
         shield.ptr = ptr;
         shield.hazptr.protect_raw(ptr.as_raw());
-        membarrier::light();
+        membarrier::light_membarrier();
     }
 
     #[inline]
@@ -99,7 +99,7 @@ impl Cs for CsHP {
         loop {
             shield.ptr = ptr;
             shield.hazptr.protect_raw(ptr.as_raw());
-            membarrier::light();
+            membarrier::light_membarrier();
 
             let new_ptr = link.load(Ordering::Acquire);
             if new_ptr == ptr {
