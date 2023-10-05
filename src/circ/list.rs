@@ -1,5 +1,5 @@
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
-use circ::{AtomicRc, Cs, Pointer, Rc, Snapshot, StrongPtr, TaggedCnt};
+use circ::{AtomicRc, Cs, Pointer, Rc, Snapshot, StrongPtr};
 
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::sync::atomic::Ordering;
@@ -52,14 +52,16 @@ where
 }
 
 pub struct Cursor<K, V, C: Cs> {
-    // `Snapshot`s are used only for traversing the list.
+    // The previous node of `curr`.
     prev: Snapshot<Node<K, V, C>, C>,
-    // We don't have to protect the next pointer of `prev`.
-    prev_next: TaggedCnt<Node<K, V, C>>,
     // Tag of `curr` should always be zero so when `curr` is stored in a `prev`, we don't store a
     // tagged pointer and cause cleanup to fail.
     curr: Snapshot<Node<K, V, C>, C>,
     next: Snapshot<Node<K, V, C>, C>,
+
+    // Additional fields for HList.
+    anchor: Snapshot<Node<K, V, C>, C>,
+    anchor_next: Snapshot<Node<K, V, C>, C>,
 }
 
 impl<K, V, C: Cs> OutputHolder<V> for Cursor<K, V, C> {
@@ -76,9 +78,10 @@ impl<K, V, C: Cs> Cursor<K, V, C> {
     fn new() -> Self {
         Self {
             prev: Snapshot::new(),
-            prev_next: TaggedCnt::null(),
             curr: Snapshot::new(),
             next: Snapshot::new(),
+            anchor: Snapshot::new(),
+            anchor_next: Snapshot::new(),
         }
     }
 
@@ -86,7 +89,8 @@ impl<K, V, C: Cs> Cursor<K, V, C> {
     fn initialize(&mut self, head: &AtomicRc<Node<K, V, C>, C>, cs: &C) {
         self.prev.load(head, cs);
         self.curr.load(&unsafe { self.prev.deref() }.next, cs);
-        self.prev_next = self.curr.as_ptr();
+        self.anchor.clear();
+        self.anchor_next.clear();
     }
 }
 
@@ -94,23 +98,34 @@ impl<K: Ord, V, C: Cs> Cursor<K, V, C> {
     /// Clean up a chain of logically removed nodes in each traversal.
     #[inline]
     fn find_harris(&mut self, key: &K, cs: &C) -> Result<bool, ()> {
-        // Finding phase
-        // - cursor.curr: first untagged node w/ key >= search key (4)
-        // - cursor.prev: the ref of .next in previous untagged node (1 -> 2)
-        // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
         let found = loop {
+            // * 0 deleted: <prev> -> <curr>
+            // * 1 deleted: <anchor> -> <prev> -x-> <curr>
+            // * 2 deleted: <anchor> -> <anchor_next> -x-> <prev> -x-> <curr>
+            // * n deleted: <anchor> -> <anchor_next> -x> (...) -x-> <prev> -x-> <curr>
             let curr_node = some_or!(self.curr.as_ref(), break false);
             self.next.load(&curr_node.next, cs);
-
-            // - finding stage is done if cursor.curr advancement stops
-            // - advance cursor.curr if (.next is tagged) || (cursor.curr < key)
-            // - stop cursor.curr if (not tagged) && (cursor.curr >= key)
-            // - advance cursor.prev if not tagged
 
             if self.next.tag() != 0 {
                 // We add a 0 tag here so that `self.curr`s tag is always 0.
                 self.next.set_tag(0);
+
+                // <prev> -?-> <curr> -x-> <next>
                 Snapshot::swap(&mut self.next, &mut self.curr);
+                // <prev> -?-> <next> -x-> <curr>
+                Snapshot::swap(&mut self.next, &mut self.prev);
+                // <next> -?-> <prev> -x-> <curr>
+
+                if self.anchor.is_null() {
+                    // <next> -> <prev> -x-> <curr>, anchor = null, anchor_next = null
+                    debug_assert!(self.anchor_next.is_null());
+                    Snapshot::swap(&mut self.next, &mut self.anchor);
+                    // <anchor> -> <prev> -x-> <curr>
+                } else if self.anchor_next.is_null() {
+                    // <anchor> -> <next> -x-> <prev> -x-> <curr>, anchor_next = null
+                    Snapshot::swap(&mut self.next, &mut self.anchor_next);
+                    // <anchor> -> <anchor_next> -x-> <prev> -x-> <curr>
+                }
                 continue;
             }
 
@@ -118,23 +133,28 @@ impl<K: Ord, V, C: Cs> Cursor<K, V, C> {
                 Less => {
                     Snapshot::swap(&mut self.prev, &mut self.curr);
                     Snapshot::swap(&mut self.curr, &mut self.next);
-                    self.prev_next = self.curr.as_ptr();
+                    self.anchor.clear();
+                    self.anchor_next.clear();
                 }
                 Equal => break true,
                 Greater => break false,
             }
         };
 
-        // If prev and curr WERE adjacent, no need to clean up
-        if self.prev_next == self.curr.as_ptr() {
+        // If the anchor is not installed, no need to clean up
+        if self.anchor.is_null() {
             return Ok(found);
         }
 
-        // cleanup tagged nodes between prev and curr
-        unsafe { self.prev.deref() }
+        // cleanup tagged nodes between anchor and curr
+        unsafe { self.anchor.deref() }
             .next
             .compare_exchange(
-                self.prev_next,
+                if self.anchor_next.is_null() {
+                    self.prev.as_ptr()
+                } else {
+                    self.anchor_next.as_ptr()
+                },
                 &self.curr,
                 Ordering::Release,
                 Ordering::Relaxed,
@@ -142,6 +162,7 @@ impl<K: Ord, V, C: Cs> Cursor<K, V, C> {
             )
             .map_err(|_| ())?;
 
+        Snapshot::swap(&mut self.anchor, &mut self.prev);
         Ok(found)
     }
 
