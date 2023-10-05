@@ -68,6 +68,22 @@ impl<K, V> Node<K, V> {
     }
 }
 
+impl<K, V> Node<K, V>
+where
+    K: Default,
+    V: Default,
+{
+    pub fn head() -> Self {
+        Self {
+            key: K::default(),
+            value: V::default(),
+            next: Default::default(),
+            height: MAX_HEIGHT,
+            refs: AtomicUsize::new(0),
+        }
+    }
+}
+
 struct Cursor<'g, K, V> {
     found: Option<&'g Node<K, V>>,
     preds: [&'g Tower<K, V>; MAX_HEIGHT],
@@ -75,23 +91,30 @@ struct Cursor<'g, K, V> {
 }
 
 impl<'g, K, V> Cursor<'g, K, V> {
-    fn new(head: &'g Tower<K, V>) -> Self {
+    fn new(head: &Atomic<Node<K, V>>, guard: &'g Guard) -> Self {
+        let head = head.load(Ordering::Relaxed, guard);
+        let next = &unsafe { head.deref() }.next;
         Self {
             found: None,
-            preds: [head; MAX_HEIGHT],
+            preds: [next; MAX_HEIGHT],
             succs: [Shared::null(); MAX_HEIGHT],
         }
     }
 }
 
 pub struct SkipList<K, V> {
-    head: Tower<K, V>,
+    head: Atomic<Node<K, V>>,
 }
 
 impl<K, V> Drop for SkipList<K, V> {
     fn drop(&mut self) {
-        let mut node = self.head[0].load(Ordering::Relaxed, unsafe { unprotected() });
-
+        let mut node = unsafe {
+            self.head
+                .load(Ordering::Relaxed, unprotected())
+                .into_owned()
+                .next[0]
+                .load(Ordering::Relaxed, unprotected())
+        };
         while let Some(node_ref) = unsafe { node.as_ref() } {
             let next = node_ref.next[0].load(Ordering::Relaxed, unsafe { unprotected() });
             drop(unsafe { node.into_owned() });
@@ -102,28 +125,25 @@ impl<K, V> Drop for SkipList<K, V> {
 
 impl<K, V> SkipList<K, V>
 where
-    K: Ord + Clone,
-    V: Clone,
+    K: Ord + Clone + Default,
+    V: Clone + Default,
 {
     pub fn new() -> Self {
         Self {
-            head: Default::default(),
+            head: Atomic::new(Node::head()),
         }
     }
 
     fn find_optimistic<'g>(&'g self, key: &K, guard: &'g Guard) -> Cursor<'g, K, V> {
-        let mut cursor = Cursor::new(&self.head);
+        let mut cursor = Cursor::new(&self.head, guard);
+        let head = cursor.preds[0];
 
         let mut level = MAX_HEIGHT;
-        while level >= 1
-            && self.head[level - 1]
-                .load(Ordering::Relaxed, guard)
-                .is_null()
-        {
+        while level >= 1 && head[level - 1].load(Ordering::Relaxed, guard).is_null() {
             level -= 1;
         }
 
-        let mut pred = &self.head;
+        let mut pred = head;
         while level >= 1 {
             level -= 1;
             let mut curr = pred[level].load(Ordering::Acquire, guard);
@@ -151,18 +171,15 @@ where
 
     fn find<'g>(&'g self, key: &K, guard: &'g Guard) -> Cursor<'g, K, V> {
         'search: loop {
-            let mut cursor = Cursor::new(&self.head);
+            let mut cursor = Cursor::new(&self.head, guard);
+            let head = cursor.preds[0];
 
             let mut level = MAX_HEIGHT;
-            while level >= 1
-                && self.head[level - 1]
-                    .load(Ordering::Relaxed, guard)
-                    .is_null()
-            {
+            while level >= 1 && head[level - 1].load(Ordering::Relaxed, guard).is_null() {
                 level -= 1;
             }
 
-            let mut pred = &self.head;
+            let mut pred = head;
             while level >= 1 {
                 level -= 1;
                 let mut curr = pred[level].load_consume(guard);
@@ -360,8 +377,8 @@ where
 
 impl<K, V> ConcurrentMap<K, V> for SkipList<K, V>
 where
-    K: Ord + Clone,
-    V: Clone,
+    K: Ord + Clone + Default,
+    V: Clone + Default,
 {
     fn new() -> Self {
         SkipList::new()
