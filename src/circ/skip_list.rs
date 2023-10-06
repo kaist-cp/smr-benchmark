@@ -1,6 +1,6 @@
 use std::{fmt::Display, sync::atomic::Ordering};
 
-use circ::{AtomicRc, Cs, Pointer, Rc, Snapshot, StrongPtr, TaggedCnt};
+use circ::{AtomicRc, CompareExchangeErrorRc, Cs, Pointer, Rc, Snapshot, StrongPtr};
 
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 
@@ -58,12 +58,38 @@ where
         height
     }
 
-    pub fn mark_tower(&self, cs: &C) -> bool {
+    pub fn mark_tower(&self, aux: &mut Snapshot<Self, C>, cs: &C) -> bool {
         for level in (0..self.height).rev() {
-            let tag = self.next[level].fetch_or(1, Ordering::SeqCst, cs).tag();
-            // If the level 0 pointer was already marked, somebody else removed the node.
-            if level == 0 && (tag & 1) != 0 {
-                return false;
+            loop {
+                aux.load(&self.next[level], cs);
+                if aux.tag() & 1 != 0 {
+                    break;
+                }
+                match self.next[level].compare_exchange_tag(
+                    &*aux,
+                    1,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                    cs,
+                ) {
+                    Ok(_) => break,
+                    Err(CompareExchangeErrorRc::Changed { current, .. }) => {
+                        // If the level 0 pointer was already marked, somebody else removed the node.
+                        if level == 0 && (current.tag() & 1) != 0 {
+                            return false;
+                        }
+                        if current.tag() & 1 != 0 {
+                            break;
+                        }
+                    }
+                    Err(CompareExchangeErrorRc::Closed { .. }) => {
+                        // If the level 0 pointer was already marked, somebody else removed the node.
+                        if level == 0 {
+                            return false;
+                        }
+                        break;
+                    }
+                }
             }
         }
         true
@@ -207,6 +233,7 @@ where
                     cursor.next.load(&succ_ref.next[level], cs);
 
                     if cursor.next.tag() == 1 {
+                        cursor.next.set_tag(0);
                         if self.help_unlink(
                             &unsafe { cursor.pred(level).deref() }.next[level],
                             &cursor.succs[level],
@@ -215,7 +242,6 @@ where
                             cs,
                         ) {
                             Snapshot::swap(&mut cursor.succs[level], &mut cursor.next);
-                            cursor.succs[level].set_tag(0);
                             continue;
                         } else {
                             // On failure, we cannot do anything reasonable to continue
@@ -254,15 +280,26 @@ where
         level: usize,
         cs: &C,
     ) -> bool {
-        pred.compare_exchange_loaned(
-            succ.with_tag(0).as_ptr(),
-            next.with_tag(1),
-            unsafe { &succ.deref().next[level] },
+        assert!(succ.tag() == 0);
+        assert!(next.tag() == 0);
+        let (next_rc, next_dt) = next.loan();
+
+        match pred.compare_exchange(
+            succ.as_ptr().with_tag(0),
+            next_rc,
             Ordering::Release,
             Ordering::Relaxed,
             cs,
-        )
-        .is_ok()
+        ) {
+            Ok(_) => {
+                next_dt.repay_frontier(&unsafe { succ.deref() }.next[level], 1, cs);
+                true
+            }
+            Err(e) => {
+                next_dt.repay(e.desired());
+                false
+            }
+        }
     }
 
     pub fn insert(&self, key: K, value: V, cursor: &mut Cursor<K, V, C>, cs: &C) -> bool {
@@ -276,19 +313,24 @@ where
         cursor.new_node.protect(&new_node, cs);
 
         loop {
-            new_node_ref.next[0].store(&cursor.succs[0], Ordering::Relaxed, cs);
+            let (succ_rc, succ_dt) = cursor.succs[0].loan();
+            new_node_ref.next[0].store(succ_rc, Ordering::Relaxed, cs);
 
-            if unsafe { cursor.pred(0).deref() }.next[0]
-                .compare_exchange(
-                    cursor.succs[0].as_ptr(),
-                    &cursor.new_node,
-                    Ordering::Relaxed,
-                    Ordering::Relaxed,
-                    cs,
-                )
-                .is_ok()
-            {
-                break;
+            match unsafe { cursor.pred(0).deref() }.next[0].compare_exchange(
+                cursor.succs[0].as_ptr(),
+                &cursor.new_node,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+                cs,
+            ) {
+                Ok(succ_rc) => {
+                    succ_dt.repay(succ_rc);
+                    break;
+                }
+                Err(_) => {
+                    let succ_rc = new_node_ref.next[0].swap(Rc::null(), Ordering::Relaxed, cs);
+                    succ_dt.repay(succ_rc);
+                }
             }
 
             // We failed. Let's search for the key and try again.
@@ -302,41 +344,60 @@ where
         // Build the rest of the tower above level 0.
         'build: for level in 1..height {
             loop {
-                let next = new_node_ref.next[level].load(Ordering::SeqCst);
+                cursor.next.load(&new_node_ref.next[level], cs);
 
                 // If the current pointer is marked, that means another thread is already
                 // removing the node we've just inserted. In that case, let's just stop
                 // building the tower.
-                if (next.tag() & 1) != 0 {
+                if (cursor.next.tag() & 1) != 0 {
                     break 'build;
                 }
 
-                if new_node_ref.next[level]
-                    .compare_exchange(
-                        TaggedCnt::null().with_tag(2),
-                        &cursor.succs[level],
-                        Ordering::SeqCst,
-                        Ordering::SeqCst,
-                        cs,
-                    )
-                    .is_err()
-                {
-                    break 'build;
+                let (succ_rc, succ_dt) = cursor.succs[level].loan();
+
+                match new_node_ref.next[level].compare_exchange(
+                    cursor.next.as_ptr(),
+                    succ_rc,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                    cs,
+                ) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        succ_dt.repay(e.desired());
+                        break 'build;
+                    }
                 }
 
                 // Try installing the new node at the current level.
-                if unsafe { cursor.pred(level).deref() }.next[level]
-                    .compare_exchange(
-                        cursor.succs[level].as_ptr(),
-                        &cursor.new_node,
-                        Ordering::SeqCst,
-                        Ordering::SeqCst,
-                        cs,
-                    )
-                    .is_ok()
-                {
-                    // Success! Continue on the next level.
-                    break;
+                match unsafe { cursor.pred(level).deref() }.next[level].compare_exchange(
+                    cursor.succs[level].as_ptr(),
+                    &cursor.new_node,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                    cs,
+                ) {
+                    Ok(succ_rc) => {
+                        succ_dt.repay(succ_rc);
+                        // Success! Continue on the next level.
+                        break;
+                    }
+                    Err(_) => {
+                        // Repay the debt and try again.
+                        // Note that someone might mark the inserted node.
+                        // So, the tag value may be changed,
+                        // but the pointer itself won't be changed.
+                        let succ_rc = new_node_ref.next[level].swap(
+                            Rc::null().with_tag(2),
+                            Ordering::SeqCst,
+                            cs,
+                        );
+                        if succ_rc.tag() & 1 != 0 {
+                            // Restore the tag.
+                            new_node_ref.next[level].fetch_or(1, Ordering::SeqCst, cs);
+                        }
+                        succ_dt.repay(succ_rc.with_tag(0));
+                    }
                 }
 
                 // Installation failed.
@@ -358,7 +419,7 @@ where
             assert!(cursor.found().as_ptr().tag() == 0);
 
             // Try removing the node by marking its tower.
-            if unsafe { cursor.found().deref() }.mark_tower(cs) {
+            if unsafe { cursor.found().deref() }.mark_tower(&mut cursor.next, cs) {
                 for level in (0..height).rev() {
                     cursor
                         .next
@@ -367,17 +428,14 @@ where
                         continue;
                     }
                     // Try linking the predecessor and successor at this level.
-                    if unsafe { cursor.pred(level).deref() }.next[level]
-                        .compare_exchange_loaned(
-                            cursor.found().as_ptr(),
-                            cursor.next.with_tag(1),
-                            unsafe { &cursor.found().deref().next[level] },
-                            Ordering::SeqCst,
-                            Ordering::SeqCst,
-                            cs,
-                        )
-                        .is_err()
-                    {
+                    cursor.next.set_tag(0);
+                    if !self.help_unlink(
+                        &unsafe { cursor.pred(level).deref() }.next[level],
+                        cursor.found(),
+                        &cursor.next,
+                        level,
+                        cs,
+                    ) {
                         self.find(key, cursor, cs);
                         break;
                     }
@@ -430,6 +488,7 @@ mod tests {
 
     #[test]
     fn smoke_skip_list_hp() {
+        // TODO: Implement CIRCL for HP and uncomment
         // concurrent_map::tests::smoke::<CsHP, SkipList<i32, String, CsHP>>();
     }
 }

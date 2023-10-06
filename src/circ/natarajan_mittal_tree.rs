@@ -1,4 +1,4 @@
-use circ::{AtomicRc, Cs, Pointer, Rc, Snapshot, StrongPtr, TaggedCnt};
+use circ::{AtomicRc, CompareExchangeErrorRc, Cs, Pointer, Rc, Snapshot, StrongPtr, TaggedCnt};
 
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use std::cmp;
@@ -411,14 +411,17 @@ where
                 cs,
             ) {
                 Ok(_) => return true,
-                Err(e) => {
-                    // Insertion failed. Help the conflicting remove operation if needed.
-                    // NOTE: The paper version checks if any of the mark is set, which is redundant.
-                    new_internal = e.desired;
-                    if e.current.with_tag(Marks::empty().bits()) == record.leaf.as_ptr() {
-                        self.cleanup(record, cs);
+                Err(e) => match e {
+                    CompareExchangeErrorRc::Changed { desired, current } => {
+                        // Insertion failed. Help the conflicting remove operation if needed.
+                        // NOTE: The paper version checks if any of the mark is set, which is redundant.
+                        new_internal = desired;
+                        if current.with_tag(Marks::empty().bits()) == record.leaf.as_ptr() {
+                            self.cleanup(record, cs);
+                        }
                     }
-                }
+                    CompareExchangeErrorRc::Closed { .. } => unreachable!(),
+                },
             }
         }
     }
@@ -456,15 +459,18 @@ where
                     Snapshot::swap(&mut record.leaf, &mut record.found);
                     break leaf;
                 }
-                Err(e) => {
-                    // Flagging failed.
-                    // case 1. record.leaf_addr(e.current) points to another node: restart.
-                    // case 2. Another thread flagged/tagged the edge to leaf: help and restart
-                    // NOTE: The paper version checks if any of the mark is set, which is redundant.
-                    if record.leaf.as_ptr() == e.current.with_tag(Marks::empty().bits()) {
-                        self.cleanup(record, cs);
+                Err(e) => match e {
+                    CompareExchangeErrorRc::Changed { current, .. } => {
+                        // Flagging failed.
+                        // case 1. record.leaf_addr(e.current) points to another node: restart.
+                        // case 2. Another thread flagged/tagged the edge to leaf: help and restart
+                        // NOTE: The paper version checks if any of the mark is set, which is redundant.
+                        if record.leaf.as_ptr() == current.with_tag(Marks::empty().bits()) {
+                            self.cleanup(record, cs);
+                        }
                     }
-                }
+                    CompareExchangeErrorRc::Closed { .. } => unreachable!(),
+                },
             }
         };
 

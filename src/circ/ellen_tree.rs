@@ -1,5 +1,5 @@
 use bitflags::bitflags;
-use circ::{AtomicRc, Cs, Pointer, Rc, Snapshot, StrongPtr, Weak};
+use circ::{AtomicRc, CompareExchangeErrorRc, Cs, Pointer, Rc, Snapshot, StrongPtr, Weak};
 use std::{mem::swap, sync::atomic::Ordering};
 
 use super::{concurrent_map::OutputHolder, ConcurrentMap};
@@ -361,7 +361,7 @@ where
                         return true;
                     }
                     Err(e) => unsafe {
-                        let new_pupdate = e.desired.into_inner().unwrap();
+                        let new_pupdate = e.desired().into_inner().unwrap();
                         drop(new_pupdate.new_internal.into_inner().unwrap());
                         self.help(
                             &mut cursor.helping_op1,
@@ -443,7 +443,7 @@ where
                         }
                     }
                     Err(e) => unsafe {
-                        drop(e.desired.into_inner().unwrap());
+                        drop(e.desired().into_inner().unwrap());
                         self.help(
                             &mut cursor.helping_op1,
                             &mut cursor.helping_op2,
@@ -497,23 +497,26 @@ where
                 self.help_marked(op, helper, cs);
                 return true;
             }
-            Err(e) => {
-                if e.current == op.with_tag(UpdateTag::MARK.bits()).as_ptr() {
-                    // (prev value) = <Mark, op>
-                    self.help_marked(op, helper, cs);
-                    return true;
-                } else {
-                    let _ = gp_ref.update.compare_exchange_tag(
-                        op.with_tag(UpdateTag::DFLAG.bits()),
-                        UpdateTag::CLEAN.bits(),
-                        Ordering::Release,
-                        Ordering::Relaxed,
-                        cs,
-                    );
-                    self.help(aux, op, helper, cs);
-                    return false;
+            Err(e) => match e {
+                CompareExchangeErrorRc::Changed { current, .. } => {
+                    if current == op.with_tag(UpdateTag::MARK.bits()).as_ptr() {
+                        // (prev value) = <Mark, op>
+                        self.help_marked(op, helper, cs);
+                        return true;
+                    } else {
+                        let _ = gp_ref.update.compare_exchange_tag(
+                            op.with_tag(UpdateTag::DFLAG.bits()),
+                            UpdateTag::CLEAN.bits(),
+                            Ordering::Release,
+                            Ordering::Relaxed,
+                            cs,
+                        );
+                        self.help(aux, op, helper, cs);
+                        return false;
+                    }
                 }
-            }
+                CompareExchangeErrorRc::Closed { .. } => unreachable!(),
+            },
         }
     }
 

@@ -147,21 +147,21 @@ impl<K: Ord, V, C: Cs> Cursor<K, V, C> {
         }
 
         // cleanup tagged nodes between anchor and curr
-        unsafe { self.anchor.deref() }
-            .next
-            .compare_exchange_loaned(
-                if self.anchor_next.is_null() {
-                    self.prev.as_ptr()
-                } else {
-                    self.anchor_next.as_ptr()
-                },
-                self.curr.with_tag(1),
-                unsafe { &self.prev.deref().next },
-                Ordering::Release,
-                Ordering::Relaxed,
-                cs,
-            )
-            .map_err(|_| ())?;
+        let (curr_rc, curr_dt) = self.curr.loan();
+        match unsafe { self.anchor.deref() }.next.compare_exchange(
+            if self.anchor_next.is_null() {
+                self.prev.as_ptr()
+            } else {
+                self.anchor_next.as_ptr()
+            },
+            curr_rc,
+            Ordering::Release,
+            Ordering::Relaxed,
+            cs,
+        ) {
+            Ok(_) => curr_dt.repay_frontier(&unsafe { self.prev.deref() }.next, 1, cs),
+            Err(e) => curr_dt.repay(e.desired()),
+        }
 
         Snapshot::swap(&mut self.anchor, &mut self.prev);
         Ok(found)
@@ -180,17 +180,7 @@ impl<K: Ord, V, C: Cs> Cursor<K, V, C> {
 
             if self.next.tag() != 0 {
                 self.next.set_tag(0);
-                unsafe { self.prev.deref() }
-                    .next
-                    .compare_exchange_loaned(
-                        self.curr.as_ptr(),
-                        self.next.with_tag(1),
-                        unsafe { &self.curr.deref().next },
-                        Ordering::Release,
-                        Ordering::Relaxed,
-                        cs,
-                    )
-                    .map_err(|_| ())?;
+                self.try_unlink_curr(cs).map_err(|_| ())?;
                 Snapshot::swap(&mut self.curr, &mut self.next);
                 continue;
             }
@@ -220,6 +210,28 @@ impl<K: Ord, V, C: Cs> Cursor<K, V, C> {
         })
     }
 
+    #[inline]
+    fn try_unlink_curr(&mut self, cs: &C) -> Result<(), ()> {
+        let (next_rc, next_dt) = self.next.loan();
+
+        match unsafe { self.prev.deref() }.next.compare_exchange(
+            self.curr.as_ptr(),
+            next_rc,
+            Ordering::Release,
+            Ordering::Relaxed,
+            cs,
+        ) {
+            Ok(_) => {
+                next_dt.repay_frontier(&unsafe { self.curr.deref() }.next, 1, cs);
+                Ok(())
+            }
+            Err(e) => {
+                next_dt.repay(e.desired());
+                Err(())
+            }
+        }
+    }
+
     /// Inserts a value.
     #[inline]
     pub fn insert(
@@ -227,9 +239,10 @@ impl<K: Ord, V, C: Cs> Cursor<K, V, C> {
         node: Rc<Node<K, V, C>, C>,
         cs: &C,
     ) -> Result<(), Rc<Node<K, V, C>, C>> {
+        let (curr_rc, curr_dt) = self.curr.loan();
         unsafe { node.deref() }
             .next
-            .store(&self.curr, Ordering::Relaxed, cs);
+            .store(curr_rc, Ordering::Relaxed, cs);
 
         match unsafe { self.prev.deref() }.next.compare_exchange(
             self.curr.as_ptr(),
@@ -238,8 +251,18 @@ impl<K: Ord, V, C: Cs> Cursor<K, V, C> {
             Ordering::Relaxed,
             cs,
         ) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(e.desired),
+            Ok(curr_rc) => {
+                curr_dt.repay(curr_rc);
+                Ok(())
+            }
+            Err(e) => {
+                let node = e.desired();
+                let curr_rc = unsafe { node.deref() }
+                    .next
+                    .swap(Rc::null(), Ordering::Relaxed, cs);
+                curr_dt.repay(curr_rc);
+                Err(node)
+            }
         }
     }
 
@@ -260,14 +283,7 @@ impl<K: Ord, V, C: Cs> Cursor<K, V, C> {
             )
             .map_err(|_| ())?;
 
-        let _ = unsafe { self.prev.deref() }.next.compare_exchange_loaned(
-            self.curr.as_ptr(),
-            self.next.with_tag(1),
-            unsafe { &self.curr.deref().next },
-            Ordering::Release,
-            Ordering::Relaxed,
-            cs,
-        );
+        let _ = self.try_unlink_curr(cs);
 
         Ok(())
     }
@@ -533,16 +549,19 @@ mod tests {
 
     #[test]
     fn smoke_h_list_hp() {
+        // TODO: Implement CIRCL for HP and uncomment
         // concurrent_map::tests::smoke::<CsHP, HList<i32, String, CsHP>>();
     }
 
     #[test]
     fn smoke_hm_list_hp() {
+        // TODO: Implement CIRCL for HP and uncomment
         // concurrent_map::tests::smoke::<CsHP, HMList<i32, String, CsHP>>();
     }
 
     #[test]
     fn smoke_hhs_list_hp() {
+        // TODO: Implement CIRCL for HP and uncomment
         // concurrent_map::tests::smoke::<CsHP, HHSList<i32, String, CsHP>>();
     }
 
