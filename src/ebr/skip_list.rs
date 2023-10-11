@@ -369,8 +369,8 @@ where
                         break;
                     }
                 }
+                return Some(&node.value);
             }
-            return Some(&node.value);
         }
     }
 }

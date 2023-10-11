@@ -63,6 +63,9 @@ where
             loop {
                 aux.load(&self.next[level], cs);
                 if aux.tag() & 1 != 0 {
+                    if level == 0 {
+                        return false;
+                    }
                     break;
                 }
                 match self.next[level].compare_exchange_tag(
@@ -440,8 +443,8 @@ where
                         break;
                     }
                 }
+                return true;
             }
-            return true;
         }
     }
 }
