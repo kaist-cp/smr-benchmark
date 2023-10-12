@@ -147,21 +147,20 @@ impl<K: Ord, V, C: Cs> Cursor<K, V, C> {
         }
 
         // cleanup tagged nodes between anchor and curr
-        let (curr_rc, curr_dt) = self.curr.loan();
-        match unsafe { self.anchor.deref() }.next.compare_exchange(
-            if self.anchor_next.is_null() {
-                self.prev.as_ptr()
-            } else {
-                self.anchor_next.as_ptr()
-            },
-            curr_rc,
-            Ordering::Release,
-            Ordering::Relaxed,
-            cs,
-        ) {
-            Ok(_) => curr_dt.repay_frontier(&unsafe { self.prev.deref() }.next, 1, cs),
-            Err(e) => curr_dt.repay(e.desired()),
-        }
+        unsafe { self.anchor.deref() }
+            .next
+            .compare_exchange(
+                if self.anchor_next.is_null() {
+                    self.prev.as_ptr()
+                } else {
+                    self.anchor_next.as_ptr()
+                },
+                &self.curr,
+                Ordering::Release,
+                Ordering::Relaxed,
+                cs,
+            )
+            .map_err(|_| ())?;
 
         Snapshot::swap(&mut self.anchor, &mut self.prev);
         Ok(found)
@@ -212,24 +211,17 @@ impl<K: Ord, V, C: Cs> Cursor<K, V, C> {
 
     #[inline]
     fn try_unlink_curr(&mut self, cs: &C) -> Result<(), ()> {
-        let (next_rc, next_dt) = self.next.loan();
-
-        match unsafe { self.prev.deref() }.next.compare_exchange(
-            self.curr.as_ptr(),
-            next_rc,
-            Ordering::Release,
-            Ordering::Relaxed,
-            cs,
-        ) {
-            Ok(_) => {
-                next_dt.repay_frontier(&unsafe { self.curr.deref() }.next, 1, cs);
-                Ok(())
-            }
-            Err(e) => {
-                next_dt.repay(e.desired());
-                Err(())
-            }
-        }
+        unsafe { self.prev.deref() }
+            .next
+            .compare_exchange(
+                self.curr.as_ptr(),
+                &self.next,
+                Ordering::Release,
+                Ordering::Relaxed,
+                cs,
+            )
+            .map(|_| ())
+            .map_err(|_| ())
     }
 
     /// Inserts a value.
