@@ -18,7 +18,8 @@ struct List<K, V> {
 
 impl<K, V> Default for List<K, V>
 where
-    K: Ord,
+    K: Ord + Default,
+    V: Default,
 {
     fn default() -> Self {
         Self::new()
@@ -40,7 +41,11 @@ impl<K, V> Drop for List<K, V> {
     }
 }
 
-impl<K, V> Node<K, V> {
+impl<K, V> Node<K, V>
+where
+    K: Default,
+    V: Default,
+{
     /// Creates a new node.
     #[inline]
     fn new(key: K, value: V) -> Self {
@@ -48,6 +53,15 @@ impl<K, V> Node<K, V> {
             next: Atomic::null(),
             key,
             value,
+        }
+    }
+
+    #[inline]
+    fn head() -> Self {
+        Self {
+            next: Atomic::null(),
+            key: Default::default(),
+            value: Default::default(),
         }
     }
 }
@@ -66,6 +80,7 @@ where
     /// Creates the head cursor.
     #[inline]
     pub fn head(head: &'g Atomic<Node<K, V>>, guard: &'g Guard) -> Cursor<'g, K, V> {
+        let head = &unsafe { head.load(Ordering::Relaxed, guard).deref() }.next;
         Self {
             prev: head,
             curr: head.load(Ordering::Acquire, guard),
@@ -75,13 +90,14 @@ where
 
 impl<K, V> List<K, V>
 where
-    K: Ord,
+    K: Ord + Default,
+    V: Default,
 {
     /// Creates a new list.
     #[inline]
     pub fn new() -> Self {
         List {
-            head: Atomic::null(),
+            head: Atomic::new(Node::head()),
         }
     }
 
@@ -374,7 +390,8 @@ pub struct HList<K, V> {
 
 impl<K, V> ConcurrentMap<K, V> for HList<K, V>
 where
-    K: Ord,
+    K: Ord + Default,
+    V: Default,
 {
     fn new() -> Self {
         HList { inner: List::new() }
@@ -400,7 +417,8 @@ pub struct HMList<K, V> {
 
 impl<K, V> ConcurrentMap<K, V> for HMList<K, V>
 where
-    K: Ord,
+    K: Ord + Default,
+    V: Default,
 {
     fn new() -> Self {
         HMList { inner: List::new() }
@@ -426,7 +444,8 @@ pub struct HHSList<K, V> {
 
 impl<K, V> HHSList<K, V>
 where
-    K: Ord,
+    K: Ord + Default,
+    V: Default,
 {
     /// Pop the first element efficiently.
     /// This method is used for only the fine grained benchmark (src/bin/long_running).
@@ -437,7 +456,8 @@ where
 
 impl<K, V> ConcurrentMap<K, V> for HHSList<K, V>
 where
-    K: Ord,
+    K: Ord + Default,
+    V: Default,
 {
     fn new() -> Self {
         HHSList { inner: List::new() }
