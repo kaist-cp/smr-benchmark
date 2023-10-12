@@ -422,7 +422,7 @@ where
                         let leaf_rc = leaf_link.swap(Rc::null(), Ordering::Relaxed, cs);
                         new_leaf = new_leaf_link.swap(Rc::null(), Ordering::Relaxed, cs);
                         leaf_dt.repay(leaf_rc);
-                        
+
                         if current.with_tag(Marks::empty().bits()) == record.leaf.as_ptr() {
                             self.cleanup(record, cs);
                         }
