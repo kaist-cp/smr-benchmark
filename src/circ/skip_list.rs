@@ -296,7 +296,7 @@ where
             return false;
         }
 
-        let mut new_node = Rc::new(Node::new(key, value));
+        let new_node = Rc::new(Node::new(key, value));
         let new_node_ref = unsafe { new_node.deref() };
         let height = new_node_ref.height;
         let mut new_node_ss = Snapshot::new();
@@ -308,17 +308,16 @@ where
 
             match unsafe { cursor.preds[0].deref() }.next[0].compare_exchange(
                 cursor.succs[0].as_ptr(),
-                new_node,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
+                &new_node_ss,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
                 cs,
             ) {
                 Ok(succ_rc) => {
                     succ_dt.repay(succ_rc);
                     break;
                 }
-                Err(e) => {
-                    new_node = e.desired();
+                Err(_) => {
                     let succ_rc = new_node_ref.next[0].swap(Rc::null(), Ordering::Relaxed, cs);
                     succ_dt.repay(succ_rc);
                 }
@@ -387,7 +386,7 @@ where
                             Ok(succ_rc) => succ_rc,
                             Err(_) => new_node_ref.next[level]
                                 .compare_exchange(
-                                    succ_ptr.with_tag(1),
+                                    succ_ptr.with_tag(succ_ptr.tag() | 1),
                                     Rc::null().with_tag(1 | 2),
                                     Ordering::SeqCst,
                                     Ordering::SeqCst,
