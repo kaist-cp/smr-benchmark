@@ -308,7 +308,7 @@ where
     /// Physically removes node.
     ///
     /// Returns true if it successfully unlinks the flagged node in `record`.
-    fn cleanup(&self, record: &mut SeekRecord<K, V>, cs: &CsEBR) -> bool {
+    fn cleanup(&self, record: &SeekRecord<K, V>, cs: &CsEBR) -> bool {
         // Identify the node(subtree) that will replace `successor`.
         let leaf_marked = record.leaf_addr().load(Ordering::Acquire);
         let leaf_flag = Marks::from_bits_truncate(leaf_marked.tag()).flag();
@@ -480,7 +480,7 @@ where
             }
 
             // leaf is still present in the tree.
-            if self.cleanup(record, cs) {
+            if self.cleanup(&next_record, cs) {
                 return true;
             }
         }
