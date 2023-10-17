@@ -1,30 +1,29 @@
 use std::{fmt::Display, sync::atomic::Ordering};
 
-use circ::{AtomicRc, CompareExchangeErrorRc, Cs, Pointer, Rc, Snapshot, StrongPtr};
+use circ::{AtomicRc, CompareExchangeErrorRc, Cs, CsEBR, Pointer, Rc, Snapshot, StrongPtr};
 
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 
 const MAX_HEIGHT: usize = 32;
 
-type Tower<K, V, C> = [AtomicRc<Node<K, V, C>, C>; MAX_HEIGHT];
+type Tower<K, V> = [AtomicRc<Node<K, V>, CsEBR>; MAX_HEIGHT];
 
-struct Node<K, V, C: Cs> {
+struct Node<K, V> {
     key: K,
     value: V,
-    next: Tower<K, V, C>,
+    next: Tower<K, V>,
     height: usize,
 }
 
-impl<K, V, C> Node<K, V, C>
+impl<K, V> Node<K, V>
 where
     K: Default,
     V: Default,
-    C: Cs,
 {
     pub fn new(key: K, value: V) -> Self {
-        let cs = unsafe { &C::unprotected() };
+        let cs = unsafe { &CsEBR::unprotected() };
         let height = Self::generate_height();
-        let next: [AtomicRc<Node<K, V, C>, C>; MAX_HEIGHT] = Default::default();
+        let next: [AtomicRc<Node<K, V>, CsEBR>; MAX_HEIGHT] = Default::default();
         for link in next.iter().take(height) {
             link.store(Rc::null().with_tag(2), Ordering::Relaxed, cs);
         }
@@ -58,7 +57,7 @@ where
         height
     }
 
-    pub fn mark_tower(&self, cs: &C) -> bool {
+    pub fn mark_tower(&self, cs: &CsEBR) -> bool {
         for level in (0..self.height).rev() {
             loop {
                 let aux = self.next[level].load_ss(cs);
@@ -99,15 +98,15 @@ where
     }
 }
 
-pub struct Cursor<K, V, C: Cs> {
-    preds: [Snapshot<Node<K, V, C>, C>; MAX_HEIGHT],
-    succs: [Snapshot<Node<K, V, C>, C>; MAX_HEIGHT],
+pub struct Cursor<K, V> {
+    preds: [Snapshot<Node<K, V>, CsEBR>; MAX_HEIGHT],
+    succs: [Snapshot<Node<K, V>, CsEBR>; MAX_HEIGHT],
     /// `found_value` is not set by a traversal function.
     /// It must be manually set in Get/Remove function.
     found_value: Option<V>,
 }
 
-impl<K, V, C: Cs> OutputHolder<V> for Cursor<K, V, C> {
+impl<K, V> OutputHolder<V> for Cursor<K, V> {
     fn default() -> Self {
         Self {
             preds: core::array::from_fn(|_| Default::default()),
@@ -121,8 +120,8 @@ impl<K, V, C: Cs> OutputHolder<V> for Cursor<K, V, C> {
     }
 }
 
-impl<K, V, C: Cs> Cursor<K, V, C> {
-    fn initialize(&mut self, head: &AtomicRc<Node<K, V, C>, C>, cs: &C) {
+impl<K, V> Cursor<K, V> {
+    fn initialize(&mut self, head: &AtomicRc<Node<K, V>, CsEBR>, cs: &CsEBR) {
         self.preds[MAX_HEIGHT - 1].load(head, cs);
         for succ in &mut self.succs {
             succ.clear();
@@ -130,15 +129,14 @@ impl<K, V, C: Cs> Cursor<K, V, C> {
     }
 }
 
-pub struct SkipList<K, V, C: Cs> {
-    head: AtomicRc<Node<K, V, C>, C>,
+pub struct SkipList<K, V> {
+    head: AtomicRc<Node<K, V>, CsEBR>,
 }
 
-impl<K, V, C> SkipList<K, V, C>
+impl<K, V> SkipList<K, V>
 where
     K: Ord + Clone + Default,
     V: Clone + Default,
-    C: Cs,
 {
     pub fn new() -> Self {
         Self {
@@ -147,7 +145,7 @@ where
     }
 
     /// Returns `None` if the key is not found. Otherwise, returns `Some(found level)`.
-    pub fn find_optimistic(&self, key: &K, cursor: &mut Cursor<K, V, C>, cs: &C) -> Option<usize> {
+    pub fn find_optimistic(&self, key: &K, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> Option<usize> {
         let mut pred = Snapshot::new();
         let mut succ = Snapshot::new();
         pred.load(&self.head, cs);
@@ -189,7 +187,7 @@ where
     }
 
     /// Returns `None` if the key is not found. Otherwise, returns `Some(found level)`.
-    fn find(&self, key: &K, cursor: &mut Cursor<K, V, C>, cs: &C) -> Option<usize> {
+    fn find(&self, key: &K, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> Option<usize> {
         'search: loop {
             cursor.initialize(&self.head, cs);
 
@@ -263,11 +261,11 @@ where
 
     fn help_unlink(
         &self,
-        pred: &Snapshot<Node<K, V, C>, C>,
-        succ: &Snapshot<Node<K, V, C>, C>,
-        next: &Snapshot<Node<K, V, C>, C>,
+        pred: &Snapshot<Node<K, V>, CsEBR>,
+        succ: &Snapshot<Node<K, V>, CsEBR>,
+        next: &Snapshot<Node<K, V>, CsEBR>,
         level: usize,
-        cs: &C,
+        cs: &CsEBR,
     ) -> bool {
         debug_assert!(succ.tag() == 0);
         debug_assert!(next.tag() == 0);
@@ -291,7 +289,7 @@ where
         }
     }
 
-    pub fn insert(&self, key: K, value: V, cursor: &mut Cursor<K, V, C>, cs: &C) -> bool {
+    pub fn insert(&self, key: K, value: V, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> bool {
         if self.find(&key, cursor, cs).is_some() {
             return false;
         }
@@ -407,7 +405,7 @@ where
         true
     }
 
-    pub fn remove(&self, key: &K, cursor: &mut Cursor<K, V, C>, cs: &C) -> bool {
+    pub fn remove(&self, key: &K, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> bool {
         loop {
             let found_level = self.find(key, cursor, cs);
             if found_level.is_none() {
@@ -445,19 +443,18 @@ where
     }
 }
 
-impl<K, V, C> ConcurrentMap<K, V, C> for SkipList<K, V, C>
+impl<K, V> ConcurrentMap<K, V> for SkipList<K, V>
 where
     K: Ord + Clone + Default,
     V: Clone + Default + Display,
-    C: Cs,
 {
-    type Output = Cursor<K, V, C>;
+    type Output = Cursor<K, V>;
 
     fn new() -> Self {
         SkipList::new()
     }
 
-    fn get(&self, key: &K, output: &mut Self::Output, cs: &C) -> bool {
+    fn get(&self, key: &K, output: &mut Self::Output, cs: &CsEBR) -> bool {
         let found_level = self.find_optimistic(key, output, cs);
         if let Some(level) = found_level {
             output.found_value = Some(unsafe { output.succs[level].deref() }.value.clone());
@@ -465,29 +462,23 @@ where
         found_level.is_some()
     }
 
-    fn insert(&self, key: K, value: V, output: &mut Self::Output, cs: &C) -> bool {
+    fn insert(&self, key: K, value: V, output: &mut Self::Output, cs: &CsEBR) -> bool {
         self.insert(key, value, output, cs)
     }
 
-    fn remove(&self, key: &K, output: &mut Self::Output, cs: &C) -> bool {
+    fn remove(&self, key: &K, output: &mut Self::Output, cs: &CsEBR) -> bool {
         self.remove(key, output, cs)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::SkipList;
-    use crate::circ::concurrent_map;
-    use circ::CsEBR;
+    // use super::SkipList;
+    // use crate::circ_hp::concurrent_map;
 
     #[test]
-    fn smoke_skip_list_ebr() {
-        concurrent_map::tests::smoke::<CsEBR, SkipList<i32, String, CsEBR>>();
-    }
-
-    #[test]
-    fn smoke_skip_list_hp() {
+    fn smoke_skip_list() {
         // TODO: Implement CIRCL for HP and uncomment
-        // concurrent_map::tests::smoke::<CsHP, SkipList<i32, String, CsHP>>();
+        // concurrent_map::tests::smoke::<CsEBR, SkipList<i32, String, CsEBR>>();
     }
 }

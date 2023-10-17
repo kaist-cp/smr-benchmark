@@ -32,7 +32,8 @@ mod utils;
 
 pub mod cdrc;
 pub mod cdrc_hp_sharp;
-pub mod circ;
+pub mod circ_ebr;
+pub mod circ_hp;
 pub mod ebr;
 pub mod hp;
 pub mod hp_pp;

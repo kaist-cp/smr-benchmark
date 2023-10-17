@@ -8,6 +8,7 @@ extern crate crossbeam_pebr;
 extern crate smr_benchmark;
 
 use ::hp_pp::DEFAULT_DOMAIN;
+use circ::{Cs, CsEBR, CsHP};
 use clap::{value_parser, Arg, ArgMatches, Command, ValueEnum};
 use crossbeam_utils::thread::scope;
 use csv::Writer;
@@ -25,7 +26,7 @@ use std::time::{Duration, Instant};
 use typenum::{Unsigned, U1, U4};
 
 use smr_benchmark::{
-    cdrc, cdrc_hp_sharp, circ as circ_bench, ebr, hp, hp_pp, hp_sharp as hp_sharp_bench, nbr, nr,
+    cdrc, cdrc_hp_sharp, circ_ebr, circ_hp, ebr, hp, hp_pp, hp_sharp as hp_sharp_bench, nbr, nr,
     pebr, vbr,
 };
 
@@ -628,89 +629,72 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             >(config, PrefillStrategy::Random),
         },
         MM::CIRC_EBR => match config.ds {
-            DS::HList => bench_map_circ::<
-                circ::CsEBR,
-                circ_bench::HList<usize, usize, circ::CsEBR>,
-                N,
-            >(config, PrefillStrategy::Decreasing),
-            DS::HMList => bench_map_circ::<
-                circ::CsEBR,
-                circ_bench::HMList<usize, usize, circ::CsEBR>,
-                N,
-            >(config, PrefillStrategy::Decreasing),
-            DS::HHSList => bench_map_circ::<
-                circ::CsEBR,
-                circ_bench::HHSList<usize, usize, circ::CsEBR>,
-                N,
-            >(config, PrefillStrategy::Decreasing),
-            DS::HashMap => bench_map_circ::<
-                circ::CsEBR,
-                circ_bench::HashMap<usize, usize, circ::CsEBR>,
-                N,
-            >(config, PrefillStrategy::Decreasing),
-            DS::NMTree => bench_map_circ::<
-                circ::CsEBR,
-                circ_bench::NMTreeMap<usize, usize, circ::CsEBR>,
-                N,
-            >(config, PrefillStrategy::Random),
-            DS::SkipList => bench_map_circ::<
-                circ::CsEBR,
-                circ_bench::SkipList<usize, usize, circ::CsEBR>,
-                N,
-            >(config, PrefillStrategy::Random),
-            DS::BonsaiTree => bench_map_circ::<
-                circ::CsEBR,
-                circ_bench::BonsaiTreeMap<usize, usize, circ::CsEBR>,
-                N,
-            >(config, PrefillStrategy::Random),
-            DS::EFRBTree => bench_map_circ::<
-                circ::CsEBR,
-                circ_bench::EFRBTree<usize, usize, circ::CsEBR>,
-                N,
-            >(config, PrefillStrategy::Random),
+            DS::HList => bench_map_circ_ebr::<circ_ebr::HList<usize, usize>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::HMList => bench_map_circ_ebr::<circ_ebr::HMList<usize, usize>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::HHSList => bench_map_circ_ebr::<circ_ebr::HHSList<usize, usize>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::HashMap => bench_map_circ_ebr::<circ_ebr::HashMap<usize, usize>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::NMTree => bench_map_circ_ebr::<circ_ebr::NMTreeMap<usize, usize>, N>(
+                config,
+                PrefillStrategy::Random,
+            ),
+            DS::SkipList => bench_map_circ_ebr::<circ_ebr::SkipList<usize, usize>, N>(
+                config,
+                PrefillStrategy::Random,
+            ),
+            DS::BonsaiTree => bench_map_circ_ebr::<circ_ebr::BonsaiTreeMap<usize, usize>, N>(
+                config,
+                PrefillStrategy::Random,
+            ),
+            DS::EFRBTree => bench_map_circ_ebr::<circ_ebr::EFRBTree<usize, usize>, N>(
+                config,
+                PrefillStrategy::Random,
+            ),
         },
         MM::CIRC_HP => match config.ds {
-            DS::HList => {
-                bench_map_circ::<circ::CsHP, circ_bench::HList<usize, usize, circ::CsHP>, N>(
-                    config,
-                    PrefillStrategy::Decreasing,
-                )
-            }
-            DS::HMList => bench_map_circ::<
-                circ::CsHP,
-                circ_bench::HMList<usize, usize, circ::CsHP>,
-                N,
-            >(config, PrefillStrategy::Decreasing),
-            DS::HHSList => bench_map_circ::<
-                circ::CsHP,
-                circ_bench::HHSList<usize, usize, circ::CsHP>,
-                N,
-            >(config, PrefillStrategy::Decreasing),
-            DS::HashMap => bench_map_circ::<
-                circ::CsHP,
-                circ_bench::HashMap<usize, usize, circ::CsHP>,
-                N,
-            >(config, PrefillStrategy::Decreasing),
-            DS::NMTree => bench_map_circ::<
-                circ::CsHP,
-                circ_bench::NMTreeMap<usize, usize, circ::CsHP>,
-                N,
-            >(config, PrefillStrategy::Random),
-            DS::SkipList => bench_map_circ::<
-                circ::CsHP,
-                circ_bench::SkipList<usize, usize, circ::CsHP>,
-                N,
-            >(config, PrefillStrategy::Random),
-            DS::BonsaiTree => bench_map_circ::<
-                circ::CsHP,
-                circ_bench::BonsaiTreeMap<usize, usize, circ::CsHP>,
-                N,
-            >(config, PrefillStrategy::Random),
-            DS::EFRBTree => bench_map_circ::<
-                circ::CsHP,
-                circ_bench::EFRBTree<usize, usize, circ::CsHP>,
-                N,
-            >(config, PrefillStrategy::Random),
+            DS::HList => bench_map_circ_hp::<circ_hp::HList<usize, usize>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::HMList => bench_map_circ_hp::<circ_hp::HMList<usize, usize>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::HHSList => bench_map_circ_hp::<circ_hp::HHSList<usize, usize>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::HashMap => bench_map_circ_hp::<circ_hp::HashMap<usize, usize>, N>(
+                config,
+                PrefillStrategy::Decreasing,
+            ),
+            DS::NMTree => bench_map_circ_hp::<circ_hp::NMTreeMap<usize, usize>, N>(
+                config,
+                PrefillStrategy::Random,
+            ),
+            DS::SkipList => bench_map_circ_hp::<circ_hp::SkipList<usize, usize>, N>(
+                config,
+                PrefillStrategy::Random,
+            ),
+            DS::BonsaiTree => bench_map_circ_hp::<circ_hp::BonsaiTreeMap<usize, usize>, N>(
+                config,
+                PrefillStrategy::Random,
+            ),
+            DS::EFRBTree => bench_map_circ_hp::<circ_hp::EFRBTree<usize, usize>, N>(
+                config,
+                PrefillStrategy::Random,
+            ),
         },
         MM::HP_SHARP => match config.ds {
             DS::HList => bench_map_hp_sharp::<hp_sharp_bench::HList<usize, usize>>(
@@ -1020,13 +1004,45 @@ impl PrefillStrategy {
         stdout().flush().unwrap();
     }
 
-    fn prefill_circ<C: circ::Cs, M: circ_bench::ConcurrentMap<usize, usize, C> + Send + Sync>(
+    fn prefill_circ_hp<M: circ_hp::ConcurrentMap<usize, usize> + Send + Sync>(
         self,
         config: &Config,
         map: &M,
     ) {
         let output = &mut M::empty_output();
-        let cs = unsafe { &C::unprotected() };
+        let cs = unsafe { &CsHP::unprotected() };
+        let rng = &mut rand::thread_rng();
+        match self {
+            PrefillStrategy::Random => {
+                for _ in 0..config.prefill {
+                    let key = config.key_dist.sample(rng);
+                    let value = key.clone();
+                    map.insert(key, value, output, cs);
+                }
+            }
+            PrefillStrategy::Decreasing => {
+                let mut keys = Vec::with_capacity(config.prefill);
+                for _ in 0..config.prefill {
+                    keys.push(config.key_dist.sample(rng));
+                }
+                keys.sort_by(|a, b| b.cmp(a));
+                for key in keys.drain(..) {
+                    let value = key.clone();
+                    map.insert(key, value, output, cs);
+                }
+            }
+        }
+        print!("prefilled... ");
+        stdout().flush().unwrap();
+    }
+
+    fn prefill_circ_ebr<M: circ_ebr::ConcurrentMap<usize, usize> + Send + Sync>(
+        self,
+        config: &Config,
+        map: &M,
+    ) {
+        let output = &mut M::empty_output();
+        let cs = unsafe { &CsEBR::unprotected() };
         let rng = &mut rand::thread_rng();
         match self {
             PrefillStrategy::Random => {
@@ -1754,16 +1770,12 @@ fn bench_map_cdrc<
     (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
 }
 
-fn bench_map_circ<
-    C: circ::Cs,
-    M: circ_bench::ConcurrentMap<usize, usize, C> + Send + Sync,
-    N: Unsigned,
->(
+fn bench_map_circ_hp<M: circ_hp::ConcurrentMap<usize, usize> + Send + Sync, N: Unsigned>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
     let map = &M::new();
-    strategy.prefill_circ(config, map);
+    strategy.prefill_circ_hp(config, map);
 
     let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
     let (ops_sender, ops_receiver) = mpsc::channel();
@@ -1821,7 +1833,108 @@ fn bench_map_circ<
                 let start = Instant::now();
 
                 let output = &mut M::empty_output();
-                let mut cs = C::new();
+                let mut cs = CsHP::new();
+                while start.elapsed() < config.duration {
+                    let key = config.key_dist.sample(rng);
+                    match Op::OPS[config.op_dist.sample(&mut rng)] {
+                        Op::Get => {
+                            map.get(&key, output, &cs);
+                        }
+                        Op::Insert => {
+                            let value = key.clone();
+                            map.insert(key, value, output, &cs);
+                        }
+                        Op::Remove => {
+                            map.remove(&key, output, &cs);
+                        }
+                    }
+                    ops += 1;
+                    if ops % N::to_u64() == 0 {
+                        cs.clear();
+                    }
+                }
+
+                ops_sender.send(ops).unwrap();
+            });
+        }
+    })
+    .unwrap();
+    println!("end");
+
+    let mut ops = 0;
+    for _ in 0..config.threads {
+        let local_ops = ops_receiver.recv().unwrap();
+        ops += local_ops;
+    }
+    let ops_per_sec = ops / config.interval;
+    let (peak_mem, avg_mem, garb_peak, garb_avg) = mem_receiver.recv().unwrap();
+    (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
+}
+
+fn bench_map_circ_ebr<M: circ_ebr::ConcurrentMap<usize, usize> + Send + Sync, N: Unsigned>(
+    config: &Config,
+    strategy: PrefillStrategy,
+) -> (u64, usize, usize, usize, usize) {
+    let map = &M::new();
+    strategy.prefill_circ_ebr(config, map);
+
+    let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
+    let (ops_sender, ops_receiver) = mpsc::channel();
+    let (mem_sender, mem_receiver) = mpsc::channel();
+
+    scope(|s| {
+        // sampling & interference thread
+        if config.aux_thread > 0 {
+            let mem_sender = mem_sender.clone();
+            s.spawn(move |_| {
+                let mut samples = 0usize;
+                let mut acc = 0usize;
+                let mut peak = 0usize;
+                let mut _garb_acc = 0usize;
+                let mut _garb_peak = 0usize;
+                barrier.clone().wait();
+
+                let start = Instant::now();
+                let mut next_sampling = start + config.sampling_period;
+                while start.elapsed() < config.duration {
+                    let now = Instant::now();
+                    if now > next_sampling {
+                        let allocated = config.mem_sampler.sample();
+                        samples += 1;
+
+                        acc += allocated;
+                        peak = max(peak, allocated);
+
+                        // TODO: measure garbages for CIRC
+                        // (Is it reasonable to measure garbages for reference counting?)
+
+                        next_sampling = now + config.sampling_period;
+                    }
+                    std::thread::sleep(config.aux_thread_period);
+                }
+
+                if config.sampling {
+                    mem_sender
+                        .send((peak, acc / samples, _garb_peak, _garb_acc / samples))
+                        .unwrap();
+                } else {
+                    mem_sender.send((0, 0, 0, 0)).unwrap();
+                }
+            });
+        } else {
+            mem_sender.send((0, 0, 0, 0)).unwrap();
+        }
+
+        for _ in 0..config.threads {
+            let ops_sender = ops_sender.clone();
+            s.spawn(move |_| {
+                let mut ops: u64 = 0;
+                let mut rng = &mut rand::thread_rng();
+                barrier.clone().wait();
+                let start = Instant::now();
+
+                let output = &mut M::empty_output();
+                let mut cs = CsEBR::new();
                 while start.elapsed() < config.duration {
                     let key = config.key_dist.sample(rng);
                     match Op::OPS[config.op_dist.sample(&mut rng)] {

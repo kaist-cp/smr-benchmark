@@ -1,4 +1,4 @@
-use circ::{AtomicRc, CompareExchangeErrorRc, Cs, Pointer, Rc, Snapshot, StrongPtr, TaggedCnt};
+use circ::{AtomicRc, CompareExchangeErrorRc, CsHP, Pointer, Rc, Snapshot, StrongPtr, TaggedCnt};
 
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use std::cmp;
@@ -86,22 +86,21 @@ where
     }
 }
 
-struct Node<K, V, C: Cs> {
+struct Node<K, V> {
     key: Key<K>,
     // TODO(@jeehoonkang): how about having another type that is either (1) value, or (2) left and
     // right.
     value: Option<V>,
-    left: AtomicRc<Node<K, V, C>, C>,
-    right: AtomicRc<Node<K, V, C>, C>,
+    left: AtomicRc<Node<K, V>, CsHP>,
+    right: AtomicRc<Node<K, V>, CsHP>,
 }
 
-impl<K, V, C> Node<K, V, C>
+impl<K, V> Node<K, V>
 where
     K: Clone,
     V: Clone,
-    C: Cs,
 {
-    fn new_leaf(key: Key<K>, value: Option<V>) -> Node<K, V, C> {
+    fn new_leaf(key: Key<K>, value: Option<V>) -> Node<K, V> {
         Node {
             key,
             value,
@@ -112,7 +111,7 @@ where
 
     /// Make a new internal node, consuming the given left and right nodes,
     /// using the right node's key.
-    fn new_internal(left: Node<K, V, C>, right: Node<K, V, C>) -> Node<K, V, C> {
+    fn new_internal(left: Node<K, V>, right: Node<K, V>) -> Node<K, V> {
         Node {
             key: right.key.clone(),
             value: None,
@@ -132,29 +131,29 @@ enum Direction {
 /// All Shared<_> are unmarked.
 ///
 /// All of the edges of path from `successor` to `parent` are in the process of removal.
-pub struct SeekRecord<K, V, C: Cs> {
+pub struct SeekRecord<K, V> {
     /// Parent of `successor`
-    ancestor: Snapshot<Node<K, V, C>, C>,
+    ancestor: Snapshot<Node<K, V>, CsHP>,
     /// The first internal node with a marked outgoing edge.
     /// As we do not dereference the successor, It is okay to maintain a raw pointer.
-    successor: TaggedCnt<Node<K, V, C>>,
+    successor: TaggedCnt<Node<K, V>>,
     /// The direction of successor from ancestor.
     successor_dir: Direction,
     /// Parent of `leaf`
-    parent: Snapshot<Node<K, V, C>, C>,
+    parent: Snapshot<Node<K, V>, CsHP>,
     /// The end of the access path.
-    leaf: Snapshot<Node<K, V, C>, C>,
+    leaf: Snapshot<Node<K, V>, CsHP>,
     /// The direction of leaf from parent.
     leaf_dir: Direction,
     /// The next node of the access path.
-    curr: Snapshot<Node<K, V, C>, C>,
+    curr: Snapshot<Node<K, V>, CsHP>,
     /// The direction of curr from leaf.
     curr_dir: Direction,
     /// The found node for Get and Remove operation.
-    found: Snapshot<Node<K, V, C>, C>,
+    found: Snapshot<Node<K, V>, CsHP>,
 }
 
-impl<K, V, C: Cs> OutputHolder<V> for SeekRecord<K, V, C> {
+impl<K, V> OutputHolder<V> for SeekRecord<K, V> {
     fn default() -> Self {
         Self {
             ancestor: Default::default(),
@@ -175,15 +174,15 @@ impl<K, V, C: Cs> OutputHolder<V> for SeekRecord<K, V, C> {
 }
 
 // TODO(@jeehoonkang): code duplication...
-impl<K, V, C: Cs> SeekRecord<K, V, C> {
-    fn successor_addr(&self) -> &AtomicRc<Node<K, V, C>, C> {
+impl<K, V> SeekRecord<K, V> {
+    fn successor_addr(&self) -> &AtomicRc<Node<K, V>, CsHP> {
         match self.successor_dir {
             Direction::L => &unsafe { self.ancestor.deref() }.left,
             Direction::R => &unsafe { self.ancestor.deref() }.right,
         }
     }
 
-    fn leaf_addr(&self) -> &AtomicRc<Node<K, V, C>, C> {
+    fn leaf_addr(&self) -> &AtomicRc<Node<K, V>, CsHP> {
         match self.leaf_dir {
             Direction::L => &unsafe { self.parent.deref() }.left,
             Direction::R => &unsafe { self.parent.deref() }.right,
@@ -192,26 +191,24 @@ impl<K, V, C: Cs> SeekRecord<K, V, C> {
 }
 
 // COMMENT(@jeehoonkang): write down the invariant of the tree
-pub struct NMTreeMap<K, V, C: Cs> {
-    r: AtomicRc<Node<K, V, C>, C>,
+pub struct NMTreeMap<K, V> {
+    r: AtomicRc<Node<K, V>, CsHP>,
 }
 
-impl<K, V, C> Default for NMTreeMap<K, V, C>
+impl<K, V> Default for NMTreeMap<K, V>
 where
     K: Ord + Clone,
     V: Clone,
-    C: Cs,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<K, V, C> NMTreeMap<K, V, C>
+impl<K, V> NMTreeMap<K, V>
 where
     K: Ord + Clone,
     V: Clone,
-    C: Cs,
 {
     pub fn new() -> Self {
         // An empty tree has 5 default nodes with infinite keys so that the SeekRecord is allways
@@ -232,7 +229,7 @@ where
     }
 
     // All `Shared<_>` fields are unmarked.
-    fn seek(&self, key: &K, record: &mut SeekRecord<K, V, C>, cs: &C) {
+    fn seek(&self, key: &K, record: &mut SeekRecord<K, V>, cs: &CsHP) {
         record.ancestor.load(&self.r, cs);
         record
             .parent
@@ -280,7 +277,7 @@ where
     }
 
     /// Similar to `seek`, but traverse the tree with only two pointers
-    fn seek_leaf(&self, key: &K, record: &mut SeekRecord<K, V, C>, cs: &C) {
+    fn seek_leaf(&self, key: &K, record: &mut SeekRecord<K, V>, cs: &CsHP) {
         record.ancestor.load(&self.r, cs);
         record
             .parent
@@ -307,7 +304,7 @@ where
     /// Physically removes node.
     ///
     /// Returns true if it successfully unlinks the flagged node in `record`.
-    fn cleanup(&self, record: &mut SeekRecord<K, V, C>, cs: &C) -> bool {
+    fn cleanup(&self, record: &mut SeekRecord<K, V>, cs: &CsHP) -> bool {
         // Identify the node(subtree) that will replace `successor`.
         let leaf_marked = record.leaf_addr().load(Ordering::Acquire);
         let leaf_flag = Marks::from_bits_truncate(leaf_marked.tag()).flag();
@@ -345,14 +342,14 @@ where
             .is_ok()
     }
 
-    pub fn get(&self, key: &K, record: &mut SeekRecord<K, V, C>, cs: &C) -> bool {
+    pub fn get(&self, key: &K, record: &mut SeekRecord<K, V>, cs: &CsHP) -> bool {
         self.seek_leaf(key, record, cs);
         Snapshot::swap(&mut record.leaf, &mut record.found);
         let leaf_node = unsafe { record.found.deref() };
         leaf_node.key.cmp(key) == cmp::Ordering::Equal
     }
 
-    pub fn insert(&self, key: K, value: V, record: &mut SeekRecord<K, V, C>, cs: &C) -> bool {
+    pub fn insert(&self, key: K, value: V, record: &mut SeekRecord<K, V>, cs: &CsHP) -> bool {
         let mut new_leaf = Rc::new(Node::new_leaf(Key::Fin(key.clone()), Some(value)));
 
         let mut new_internal = Rc::new(Node {
@@ -433,7 +430,7 @@ where
         }
     }
 
-    pub fn remove(&self, key: &K, record: &mut SeekRecord<K, V, C>, cs: &C) -> bool {
+    pub fn remove(&self, key: &K, record: &mut SeekRecord<K, V>, cs: &CsHP) -> bool {
         // `leaf` and `value` are the snapshot of the node to be deleted.
         // NOTE: The paper version uses one big loop for both phases.
         // injection phase
@@ -497,45 +494,39 @@ where
     }
 }
 
-impl<K, V, C> ConcurrentMap<K, V, C> for NMTreeMap<K, V, C>
+impl<K, V> ConcurrentMap<K, V> for NMTreeMap<K, V>
 where
     K: Ord + Clone,
     V: Clone,
-    C: Cs,
 {
-    type Output = SeekRecord<K, V, C>;
+    type Output = SeekRecord<K, V>;
 
     fn new() -> Self {
         Self::new()
     }
 
     #[inline(always)]
-    fn get(&self, key: &K, output: &mut Self::Output, cs: &C) -> bool {
+    fn get(&self, key: &K, output: &mut Self::Output, cs: &CsHP) -> bool {
         self.get(key, output, cs)
     }
     #[inline(always)]
-    fn insert(&self, key: K, value: V, output: &mut Self::Output, cs: &C) -> bool {
+    fn insert(&self, key: K, value: V, output: &mut Self::Output, cs: &CsHP) -> bool {
         self.insert(key, value, output, cs)
     }
     #[inline(always)]
-    fn remove<'g>(&'g self, key: &K, output: &mut Self::Output, cs: &'g C) -> bool {
+    fn remove<'g>(&'g self, key: &K, output: &mut Self::Output, cs: &'g CsHP) -> bool {
         self.remove(key, output, cs)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::NMTreeMap;
-    use crate::circ::concurrent_map;
-    use circ::CsEBR;
+    // use super::NMTreeMap;
+    // use crate::circ_hp::concurrent_map;
+    // use circ::CsEBR;
 
     #[test]
-    fn smoke_nm_tree_ebr() {
-        concurrent_map::tests::smoke::<CsEBR, NMTreeMap<i32, String, CsEBR>>();
-    }
-
-    #[test]
-    fn smoke_nm_tree_hp() {
+    fn smoke_nm_tree() {
         // TODO: Implement CIRCL for HP and uncomment
         // concurrent_map::tests::smoke::<CsHP, NMTreeMap<i32, String, CsHP>>();
     }

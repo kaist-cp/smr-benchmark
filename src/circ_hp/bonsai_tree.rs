@@ -1,4 +1,4 @@
-use circ::{AtomicRc, Cs, Pointer, Rc, Snapshot, StrongPtr, TaggedCnt};
+use circ::{AtomicRc, CsHP, Pointer, Rc, Snapshot, StrongPtr, TaggedCnt};
 
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 
@@ -31,31 +31,30 @@ impl Retired {
 
 /// a real node in tree or a wrapper of State node
 /// Retired node if Shared ptr of Node has RETIRED tag.
-struct Node<K, V, C: Cs> {
+struct Node<K, V> {
     key: K,
     value: V,
     size: usize,
-    left: AtomicRc<Node<K, V, C>, C>,
-    right: AtomicRc<Node<K, V, C>, C>,
+    left: AtomicRc<Node<K, V>, CsHP>,
+    right: AtomicRc<Node<K, V>, CsHP>,
 }
 
-impl<K, V, C> Node<K, V, C>
+impl<K, V> Node<K, V>
 where
     K: Ord + Clone,
     V: Clone,
-    C: Cs,
 {
-    fn retired_node() -> Rc<Self, C> {
+    fn retired_node() -> Rc<Self, CsHP> {
         Rc::null().with_tag(Retired::new(true).bits())
     }
 
-    fn is_retired(node: TaggedCnt<Node<K, V, C>>) -> bool {
+    fn is_retired(node: TaggedCnt<Node<K, V>>) -> bool {
         Retired::from_bits_truncate(node.tag()).retired()
     }
 
     fn is_retired_spot<P>(node: &P) -> bool
     where
-        P: StrongPtr<Node<K, V, C>, C>,
+        P: StrongPtr<Node<K, V>, CsHP>,
     {
         if Self::is_retired(node.as_ptr()) {
             return true;
@@ -71,7 +70,7 @@ where
 
     fn node_size<P>(node: &P) -> usize
     where
-        P: StrongPtr<Node<K, V, C>, C>,
+        P: StrongPtr<Node<K, V>, CsHP>,
     {
         debug_assert!(!Self::is_retired(node.as_ptr()));
         if let Some(node_ref) = node.as_ref() {
@@ -81,7 +80,7 @@ where
         }
     }
 
-    fn load_children(&self, cs: &C) -> (Snapshot<Self, C>, Snapshot<Self, C>) {
+    fn load_children(&self, cs: &CsHP) -> (Snapshot<Self, CsHP>, Snapshot<Self, CsHP>) {
         let mut left = Snapshot::new();
         left.load(&self.left, cs);
         let mut right = Snapshot::new();
@@ -90,26 +89,26 @@ where
     }
 }
 
-pub struct Holder<K, V, C: Cs> {
-    root: TaggedCnt<Node<K, V, C>>,
-    curr: Snapshot<Node<K, V, C>, C>,
-    temp: Snapshot<Node<K, V, C>, C>,
+pub struct Holder<K, V> {
+    root: TaggedCnt<Node<K, V>>,
+    curr: Snapshot<Node<K, V>, CsHP>,
+    temp: Snapshot<Node<K, V>, CsHP>,
     found: Option<V>,
 }
 
 /// Each op creates a new local state and tries to update (CAS) the tree with it.
-struct State<'g, K, V, C: Cs> {
-    root_link: &'g AtomicRc<Node<K, V, C>, C>,
-    holder: &'g mut Holder<K, V, C>,
+struct State<'g, K, V> {
+    root_link: &'g AtomicRc<Node<K, V>, CsHP>,
+    holder: &'g mut Holder<K, V>,
 }
 
-pub struct Cursor<K, V, C: Cs> {
-    holder: Holder<K, V, C>,
+pub struct Cursor<K, V> {
+    holder: Holder<K, V>,
     /// Temp snapshot to create Rc.
-    root_snapshot: Snapshot<Node<K, V, C>, C>,
+    root_snapshot: Snapshot<Node<K, V>, CsHP>,
 }
 
-impl<K, V, C: Cs> OutputHolder<V> for Cursor<K, V, C> {
+impl<K, V> OutputHolder<V> for Cursor<K, V> {
     fn default() -> Self {
         Self {
             holder: Holder {
@@ -127,13 +126,12 @@ impl<K, V, C: Cs> OutputHolder<V> for Cursor<K, V, C> {
     }
 }
 
-impl<'g, K, V, C> State<'g, K, V, C>
+impl<'g, K, V> State<'g, K, V>
 where
     K: Ord + Clone,
     V: Clone,
-    C: Cs,
 {
-    fn new(root_link: &'g AtomicRc<Node<K, V, C>, C>, holder: &'g mut Holder<K, V, C>) -> Self {
+    fn new(root_link: &'g AtomicRc<Node<K, V>, CsHP>, holder: &'g mut Holder<K, V>) -> Self {
         Self { root_link, holder }
     }
 
@@ -144,11 +142,11 @@ where
         right: P2,
         key: K,
         value: V,
-        _: &C,
-    ) -> Rc<Node<K, V, C>, C>
+        _: &CsHP,
+    ) -> Rc<Node<K, V>, CsHP>
     where
-        P1: StrongPtr<Node<K, V, C>, C>,
-        P2: StrongPtr<Node<K, V, C>, C>,
+        P1: StrongPtr<Node<K, V>, CsHP>,
+        P2: StrongPtr<Node<K, V>, CsHP>,
     {
         if Node::is_retired_spot(&left) || Node::is_retired_spot(&right) {
             return Node::retired_node();
@@ -172,12 +170,12 @@ where
         cur: &P1,
         left: P2,
         right: P3,
-        cs: &C,
-    ) -> Rc<Node<K, V, C>, C>
+        cs: &CsHP,
+    ) -> Rc<Node<K, V>, CsHP>
     where
-        P1: StrongPtr<Node<K, V, C>, C>,
-        P2: StrongPtr<Node<K, V, C>, C>,
-        P3: StrongPtr<Node<K, V, C>, C>,
+        P1: StrongPtr<Node<K, V>, CsHP>,
+        P2: StrongPtr<Node<K, V>, CsHP>,
+        P3: StrongPtr<Node<K, V>, CsHP>,
     {
         if Node::is_retired_spot(cur)
             || Node::is_retired_spot(&left)
@@ -213,11 +211,11 @@ where
         right: P2,
         key: K,
         value: V,
-        cs: &C,
-    ) -> Rc<Node<K, V, C>, C>
+        cs: &CsHP,
+    ) -> Rc<Node<K, V>, CsHP>
     where
-        P1: StrongPtr<Node<K, V, C>, C>,
-        P2: StrongPtr<Node<K, V, C>, C>,
+        P1: StrongPtr<Node<K, V>, CsHP>,
+        P2: StrongPtr<Node<K, V>, CsHP>,
     {
         let right_ref = unsafe { right.deref() };
         let (right_left, right_right) = right_ref.load_children(cs);
@@ -247,13 +245,13 @@ where
         right_right: P4,
         key: K,
         value: V,
-        cs: &C,
-    ) -> Rc<Node<K, V, C>, C>
+        cs: &CsHP,
+    ) -> Rc<Node<K, V>, CsHP>
     where
-        P1: StrongPtr<Node<K, V, C>, C>,
-        P2: StrongPtr<Node<K, V, C>, C>,
-        P3: StrongPtr<Node<K, V, C>, C>,
-        P4: StrongPtr<Node<K, V, C>, C>,
+        P1: StrongPtr<Node<K, V>, CsHP>,
+        P2: StrongPtr<Node<K, V>, CsHP>,
+        P3: StrongPtr<Node<K, V>, CsHP>,
+        P4: StrongPtr<Node<K, V>, CsHP>,
     {
         let right_ref = unsafe { right.deref() };
         let new_left = self.mk_node(left, right_left, key, value, cs);
@@ -276,13 +274,13 @@ where
         right_right: P4,
         key: K,
         value: V,
-        cs: &C,
-    ) -> Rc<Node<K, V, C>, C>
+        cs: &CsHP,
+    ) -> Rc<Node<K, V>, CsHP>
     where
-        P1: StrongPtr<Node<K, V, C>, C>,
-        P2: StrongPtr<Node<K, V, C>, C>,
-        P3: StrongPtr<Node<K, V, C>, C>,
-        P4: StrongPtr<Node<K, V, C>, C>,
+        P1: StrongPtr<Node<K, V>, CsHP>,
+        P2: StrongPtr<Node<K, V>, CsHP>,
+        P3: StrongPtr<Node<K, V>, CsHP>,
+        P4: StrongPtr<Node<K, V>, CsHP>,
     {
         let right_ref = unsafe { right.deref() };
         let right_left_ref = unsafe { right_left.deref() };
@@ -320,11 +318,11 @@ where
         right: P2,
         key: K,
         value: V,
-        cs: &C,
-    ) -> Rc<Node<K, V, C>, C>
+        cs: &CsHP,
+    ) -> Rc<Node<K, V>, CsHP>
     where
-        P1: StrongPtr<Node<K, V, C>, C>,
-        P2: StrongPtr<Node<K, V, C>, C>,
+        P1: StrongPtr<Node<K, V>, CsHP>,
+        P2: StrongPtr<Node<K, V>, CsHP>,
     {
         let left_ref = unsafe { left.deref() };
         let (left_left, left_right) = left_ref.load_children(cs);
@@ -353,13 +351,13 @@ where
         left_left: P4,
         key: K,
         value: V,
-        cs: &C,
-    ) -> Rc<Node<K, V, C>, C>
+        cs: &CsHP,
+    ) -> Rc<Node<K, V>, CsHP>
     where
-        P1: StrongPtr<Node<K, V, C>, C>,
-        P2: StrongPtr<Node<K, V, C>, C>,
-        P3: StrongPtr<Node<K, V, C>, C>,
-        P4: StrongPtr<Node<K, V, C>, C>,
+        P1: StrongPtr<Node<K, V>, CsHP>,
+        P2: StrongPtr<Node<K, V>, CsHP>,
+        P3: StrongPtr<Node<K, V>, CsHP>,
+        P4: StrongPtr<Node<K, V>, CsHP>,
     {
         let left_ref = unsafe { left.deref() };
         let new_right = self.mk_node(left_right, right, key, value, cs);
@@ -382,13 +380,13 @@ where
         left_left: P4,
         key: K,
         value: V,
-        cs: &C,
-    ) -> Rc<Node<K, V, C>, C>
+        cs: &CsHP,
+    ) -> Rc<Node<K, V>, CsHP>
     where
-        P1: StrongPtr<Node<K, V, C>, C>,
-        P2: StrongPtr<Node<K, V, C>, C>,
-        P3: StrongPtr<Node<K, V, C>, C>,
-        P4: StrongPtr<Node<K, V, C>, C>,
+        P1: StrongPtr<Node<K, V>, CsHP>,
+        P2: StrongPtr<Node<K, V>, CsHP>,
+        P3: StrongPtr<Node<K, V>, CsHP>,
+        P4: StrongPtr<Node<K, V>, CsHP>,
     {
         let left_ref = unsafe { left.deref() };
         let left_right_ref = unsafe { left_right.deref() };
@@ -420,9 +418,15 @@ where
     }
 
     #[inline]
-    fn do_insert<P>(&mut self, node: P, key: &K, value: &V, cs: &C) -> (Rc<Node<K, V, C>, C>, bool)
+    fn do_insert<P>(
+        &mut self,
+        node: P,
+        key: &K,
+        value: &V,
+        cs: &CsHP,
+    ) -> (Rc<Node<K, V>, CsHP>, bool)
     where
-        P: StrongPtr<Node<K, V, C>, C>,
+        P: StrongPtr<Node<K, V>, CsHP>,
     {
         if Node::is_retired_spot(&node) {
             return (Node::retired_node(), false);
@@ -456,9 +460,9 @@ where
     }
 
     #[inline]
-    fn do_remove<P>(&mut self, node: P, key: &K, cs: &C) -> (Rc<Node<K, V, C>, C>, bool)
+    fn do_remove<P>(&mut self, node: P, key: &K, cs: &CsHP) -> (Rc<Node<K, V>, CsHP>, bool)
     where
-        P: StrongPtr<Node<K, V, C>, C>,
+        P: StrongPtr<Node<K, V>, CsHP>,
     {
         if Node::is_retired_spot(&node) {
             return (Node::retired_node(), false);
@@ -500,9 +504,13 @@ where
         }
     }
 
-    fn pull_leftmost<P>(&mut self, node: P, cs: &C) -> (Rc<Node<K, V, C>, C>, Rc<Node<K, V, C>, C>)
+    fn pull_leftmost<P>(
+        &mut self,
+        node: P,
+        cs: &CsHP,
+    ) -> (Rc<Node<K, V>, CsHP>, Rc<Node<K, V>, CsHP>)
     where
-        P: StrongPtr<Node<K, V, C>, C>,
+        P: StrongPtr<Node<K, V>, CsHP>,
     {
         if Node::is_retired_spot(&node) {
             return (Node::retired_node(), Node::retired_node());
@@ -530,9 +538,13 @@ where
         return (right.into_rc(), succ);
     }
 
-    fn pull_rightmost<P>(&mut self, node: P, cs: &C) -> (Rc<Node<K, V, C>, C>, Rc<Node<K, V, C>, C>)
+    fn pull_rightmost<P>(
+        &mut self,
+        node: P,
+        cs: &CsHP,
+    ) -> (Rc<Node<K, V>, CsHP>, Rc<Node<K, V>, CsHP>)
     where
-        P: StrongPtr<Node<K, V, C>, C>,
+        P: StrongPtr<Node<K, V>, CsHP>,
     {
         if Node::is_retired_spot(&node) {
             return (Node::retired_node(), Node::retired_node());
@@ -565,15 +577,14 @@ where
     }
 }
 
-pub struct BonsaiTreeMap<K, V, C: Cs> {
-    root: AtomicRc<Node<K, V, C>, C>,
+pub struct BonsaiTreeMap<K, V> {
+    root: AtomicRc<Node<K, V>, CsHP>,
 }
 
-impl<K, V, C> BonsaiTreeMap<K, V, C>
+impl<K, V> BonsaiTreeMap<K, V>
 where
     K: Ord + Clone,
     V: Clone,
-    C: Cs,
 {
     pub fn new() -> Self {
         Self {
@@ -581,7 +592,7 @@ where
         }
     }
 
-    pub fn get(&self, key: &K, holder: &mut Holder<K, V, C>, cs: &C) -> bool {
+    pub fn get(&self, key: &K, holder: &mut Holder<K, V>, cs: &CsHP) -> bool {
         loop {
             // NOTE: In this context, `holder.curr` and `holder.temp` is similar
             // to `curr` and `next` in a HHSList traversal.
@@ -610,7 +621,7 @@ where
         }
     }
 
-    pub fn insert(&self, key: K, value: V, cursor: &mut Cursor<K, V, C>, cs: &C) -> bool {
+    pub fn insert(&self, key: K, value: V, cursor: &mut Cursor<K, V>, cs: &CsHP) -> bool {
         let mut state = State::new(&self.root, &mut cursor.holder);
         loop {
             cursor.root_snapshot.load(&self.root, cs);
@@ -637,7 +648,7 @@ where
         }
     }
 
-    pub fn remove(&self, key: &K, cursor: &mut Cursor<K, V, C>, cs: &C) -> bool {
+    pub fn remove(&self, key: &K, cursor: &mut Cursor<K, V>, cs: &CsHP) -> bool {
         let mut state = State::new(&self.root, &mut cursor.holder);
         loop {
             cursor.root_snapshot.load(&self.root, cs);
@@ -665,27 +676,26 @@ where
     }
 }
 
-impl<K, V, C> ConcurrentMap<K, V, C> for BonsaiTreeMap<K, V, C>
+impl<K, V> ConcurrentMap<K, V> for BonsaiTreeMap<K, V>
 where
     K: Ord + Clone,
     V: Clone,
-    C: Cs,
 {
-    type Output = Cursor<K, V, C>;
+    type Output = Cursor<K, V>;
 
     fn new() -> Self {
         BonsaiTreeMap::new()
     }
 
-    fn get(&self, key: &K, output: &mut Self::Output, cs: &C) -> bool {
+    fn get(&self, key: &K, output: &mut Self::Output, cs: &CsHP) -> bool {
         self.get(key, &mut output.holder, cs)
     }
 
-    fn insert(&self, key: K, value: V, output: &mut Self::Output, cs: &C) -> bool {
+    fn insert(&self, key: K, value: V, output: &mut Self::Output, cs: &CsHP) -> bool {
         self.insert(key, value, output, cs)
     }
 
-    fn remove(&self, key: &K, output: &mut Self::Output, cs: &C) -> bool {
+    fn remove(&self, key: &K, output: &mut Self::Output, cs: &CsHP) -> bool {
         self.remove(key, output, cs)
     }
 }
@@ -693,16 +703,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::BonsaiTreeMap;
-    use crate::circ::concurrent_map;
-    use circ::{CsEBR, CsHP};
+    use crate::circ_hp::concurrent_map;
 
     #[test]
-    fn smoke_bonsai_tree_ebr() {
-        concurrent_map::tests::smoke::<CsEBR, BonsaiTreeMap<i32, String, CsEBR>>();
-    }
-
-    #[test]
-    fn smoke_bonsai_tree_hp() {
-        concurrent_map::tests::smoke::<CsHP, BonsaiTreeMap<i32, String, CsHP>>();
+    fn smoke_bonsai_tree() {
+        concurrent_map::tests::smoke::<BonsaiTreeMap<i32, String>>();
     }
 }

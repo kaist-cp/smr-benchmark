@@ -1,5 +1,5 @@
 use bitflags::bitflags;
-use circ::{AtomicRc, CompareExchangeErrorRc, Cs, Pointer, Rc, Snapshot, StrongPtr, Weak};
+use circ::{AtomicRc, CompareExchangeErrorRc, CsHP, Pointer, Rc, Snapshot, StrongPtr, Weak};
 use std::{mem::swap, sync::atomic::Ordering};
 
 use super::{concurrent_map::OutputHolder, ConcurrentMap};
@@ -82,28 +82,28 @@ where
     }
 }
 
-pub struct Node<K, V, C: Cs> {
+pub struct Node<K, V> {
     key: Key<K>,
     value: Option<V>,
     // tag on low bits: {Clean, DFlag, IFlag, Mark}
-    update: AtomicRc<Update<K, V, C>, C>,
-    left: AtomicRc<Node<K, V, C>, C>,
-    right: AtomicRc<Node<K, V, C>, C>,
+    update: AtomicRc<Update<K, V>, CsHP>,
+    left: AtomicRc<Node<K, V>, CsHP>,
+    right: AtomicRc<Node<K, V>, CsHP>,
     is_leaf: bool,
 }
 
-pub struct Update<K, V, C: Cs> {
-    gp: Weak<Node<K, V, C>, C>,
+pub struct Update<K, V> {
+    gp: Weak<Node<K, V>, CsHP>,
     gp_p_dir: Direction,
-    p: Weak<Node<K, V, C>, C>,
+    p: Weak<Node<K, V>, CsHP>,
     p_l_dir: Direction,
-    l: Rc<Node<K, V, C>, C>,
-    l_other: Rc<Node<K, V, C>, C>,
-    pupdate: Rc<Update<K, V, C>, C>,
-    new_internal: Rc<Node<K, V, C>, C>,
+    l: Rc<Node<K, V>, CsHP>,
+    l_other: Rc<Node<K, V>, CsHP>,
+    pupdate: Rc<Update<K, V>, CsHP>,
+    new_internal: Rc<Node<K, V>, CsHP>,
 }
 
-impl<K, V, C: Cs> Node<K, V, C> {
+impl<K, V> Node<K, V> {
     pub fn internal(key: Key<K>, value: Option<V>, left: Self, right: Self) -> Self {
         Self {
             key,
@@ -126,7 +126,7 @@ impl<K, V, C: Cs> Node<K, V, C> {
         }
     }
 
-    pub fn child(&self, dir: Direction) -> &AtomicRc<Node<K, V, C>, C> {
+    pub fn child(&self, dir: Direction) -> &AtomicRc<Node<K, V>, CsHP> {
         match dir {
             Direction::L => &self.left,
             Direction::R => &self.right,
@@ -134,19 +134,19 @@ impl<K, V, C: Cs> Node<K, V, C> {
     }
 }
 
-pub struct Finder<K, V, C: Cs> {
-    gp: Snapshot<Node<K, V, C>, C>,
+pub struct Finder<K, V> {
+    gp: Snapshot<Node<K, V>, CsHP>,
     gp_p_dir: Direction,
-    p: Snapshot<Node<K, V, C>, C>,
+    p: Snapshot<Node<K, V>, CsHP>,
     p_l_dir: Direction,
-    l: Snapshot<Node<K, V, C>, C>,
-    l_other: Snapshot<Node<K, V, C>, C>,
-    pupdate: Snapshot<Update<K, V, C>, C>,
-    gpupdate: Snapshot<Update<K, V, C>, C>,
-    new_update: Snapshot<Update<K, V, C>, C>,
+    l: Snapshot<Node<K, V>, CsHP>,
+    l_other: Snapshot<Node<K, V>, CsHP>,
+    pupdate: Snapshot<Update<K, V>, CsHP>,
+    gpupdate: Snapshot<Update<K, V>, CsHP>,
+    new_update: Snapshot<Update<K, V>, CsHP>,
 }
 
-impl<K, V, C: Cs> Finder<K, V, C> {
+impl<K, V> Finder<K, V> {
     fn new() -> Self {
         Self {
             gp: Snapshot::new(),
@@ -162,11 +162,10 @@ impl<K, V, C: Cs> Finder<K, V, C> {
     }
 }
 
-impl<K, V, C> Finder<K, V, C>
+impl<K, V> Finder<K, V>
 where
     K: Ord + Clone,
     V: Clone,
-    C: Cs,
 {
     /// Used by Insert, Delete and Find to traverse a branch of the BST.
     ///
@@ -181,7 +180,7 @@ where
     ///     - either gp → left has contained p (if k < gp → key) or gp → right has contained p (if k ≥ gp → key)
     ///     - gp → update has contained gpupdate
     #[inline]
-    fn search(&mut self, root: &AtomicRc<Node<K, V, C>, C>, key: &K, cs: &C) {
+    fn search(&mut self, root: &AtomicRc<Node<K, V>, CsHP>, key: &K, cs: &CsHP) {
         self.l.load(root, cs);
         loop {
             let l_node = unsafe { self.l.deref() };
@@ -204,12 +203,12 @@ where
     }
 }
 
-pub struct Helper<K, V, C: Cs> {
-    gp: Snapshot<Node<K, V, C>, C>,
-    p: Snapshot<Node<K, V, C>, C>,
+pub struct Helper<K, V> {
+    gp: Snapshot<Node<K, V>, CsHP>,
+    p: Snapshot<Node<K, V>, CsHP>,
 }
 
-impl<K, V, C: Cs> Helper<K, V, C> {
+impl<K, V> Helper<K, V> {
     fn new() -> Self {
         Self {
             gp: Snapshot::new(),
@@ -219,9 +218,9 @@ impl<K, V, C: Cs> Helper<K, V, C> {
 
     fn load_delete(
         &mut self,
-        op: &Snapshot<Update<K, V, C>, C>,
-        cs: &C,
-    ) -> Option<(&Update<K, V, C>, &Node<K, V, C>, &Node<K, V, C>)> {
+        op: &Snapshot<Update<K, V>, CsHP>,
+        cs: &CsHP,
+    ) -> Option<(&Update<K, V>, &Node<K, V>, &Node<K, V>)> {
         let op_ref = unsafe { op.deref() };
 
         let gp_ref = if self.gp.protect_weak(&op_ref.gp, cs) {
@@ -248,14 +247,14 @@ impl<K, V, C: Cs> Helper<K, V, C> {
     }
 }
 
-pub struct Cursor<K, V, C: Cs> {
-    finder: Finder<K, V, C>,
-    helper: Helper<K, V, C>,
-    helping_op1: Snapshot<Update<K, V, C>, C>,
-    helping_op2: Snapshot<Update<K, V, C>, C>,
+pub struct Cursor<K, V> {
+    finder: Finder<K, V>,
+    helper: Helper<K, V>,
+    helping_op1: Snapshot<Update<K, V>, CsHP>,
+    helping_op2: Snapshot<Update<K, V>, CsHP>,
 }
 
-impl<K, V, C: Cs> OutputHolder<V> for Cursor<K, V, C> {
+impl<K, V> OutputHolder<V> for Cursor<K, V> {
     fn default() -> Self {
         Self {
             finder: Finder::new(),
@@ -270,11 +269,11 @@ impl<K, V, C: Cs> OutputHolder<V> for Cursor<K, V, C> {
     }
 }
 
-pub struct EFRBTree<K, V, C: Cs> {
-    root: AtomicRc<Node<K, V, C>, C>,
+pub struct EFRBTree<K, V> {
+    root: AtomicRc<Node<K, V>, CsHP>,
 }
 
-impl<K, V, C: Cs> EFRBTree<K, V, C> {
+impl<K, V> EFRBTree<K, V> {
     pub fn new() -> Self {
         Self {
             root: AtomicRc::new(Node::internal(
@@ -287,19 +286,18 @@ impl<K, V, C: Cs> EFRBTree<K, V, C> {
     }
 }
 
-impl<K, V, C> EFRBTree<K, V, C>
+impl<K, V> EFRBTree<K, V>
 where
     K: Ord + Clone,
     V: Clone,
-    C: Cs,
 {
-    pub fn find(&self, key: &K, cursor: &mut Cursor<K, V, C>, cs: &C) -> bool {
+    pub fn find(&self, key: &K, cursor: &mut Cursor<K, V>, cs: &CsHP) -> bool {
         cursor.finder.search(&self.root, key, cs);
         let l_node = cursor.finder.l.as_ref().unwrap();
         l_node.key.eq(key)
     }
 
-    pub fn insert(&self, key: K, value: V, cursor: &mut Cursor<K, V, C>, cs: &C) -> bool {
+    pub fn insert(&self, key: K, value: V, cursor: &mut Cursor<K, V>, cs: &CsHP) -> bool {
         loop {
             let finder = &mut cursor.finder;
             finder.search(&self.root, &key, cs);
@@ -375,7 +373,7 @@ where
         }
     }
 
-    pub fn delete(&self, key: &K, cursor: &mut Cursor<K, V, C>, cs: &C) -> bool {
+    pub fn delete(&self, key: &K, cursor: &mut Cursor<K, V>, cs: &CsHP) -> bool {
         loop {
             let finder = &mut cursor.finder;
             finder.search(&self.root, key, cs);
@@ -459,10 +457,10 @@ where
     #[inline]
     fn help(
         &self,
-        op: &mut Snapshot<Update<K, V, C>, C>,
-        aux: &mut Snapshot<Update<K, V, C>, C>,
-        helper: &mut Helper<K, V, C>,
-        cs: &C,
+        op: &mut Snapshot<Update<K, V>, CsHP>,
+        aux: &mut Snapshot<Update<K, V>, CsHP>,
+        helper: &mut Helper<K, V>,
+        cs: &CsHP,
     ) {
         match UpdateTag::from_bits_truncate(op.tag()) {
             UpdateTag::IFLAG => self.help_insert(op, helper, cs),
@@ -476,10 +474,10 @@ where
 
     fn help_delete(
         &self,
-        op: &mut Snapshot<Update<K, V, C>, C>,
-        aux: &mut Snapshot<Update<K, V, C>, C>,
-        helper: &mut Helper<K, V, C>,
-        cs: &C,
+        op: &mut Snapshot<Update<K, V>, CsHP>,
+        aux: &mut Snapshot<Update<K, V>, CsHP>,
+        helper: &mut Helper<K, V>,
+        cs: &CsHP,
     ) -> bool {
         // Precondition: op points to a DInfo record (i.e., it is not ⊥)
         let (op_ref, gp_ref, p_ref) = some_or!(helper.load_delete(op, cs), return false);
@@ -520,7 +518,7 @@ where
         }
     }
 
-    fn help_marked(&self, op: &Snapshot<Update<K, V, C>, C>, helper: &mut Helper<K, V, C>, cs: &C) {
+    fn help_marked(&self, op: &Snapshot<Update<K, V>, CsHP>, helper: &mut Helper<K, V>, cs: &CsHP) {
         // Precondition: op points to a DInfo record (i.e., it is not ⊥)
         let (op_ref, gp_ref, _) = some_or!(helper.load_delete(op, cs), return);
 
@@ -543,7 +541,7 @@ where
         );
     }
 
-    fn help_insert(&self, op: &Snapshot<Update<K, V, C>, C>, helper: &mut Helper<K, V, C>, cs: &C) {
+    fn help_insert(&self, op: &Snapshot<Update<K, V>, CsHP>, helper: &mut Helper<K, V>, cs: &CsHP) {
         // Precondition: op points to a IInfo record (i.e., it is not ⊥)
         let op_ref = unsafe { op.deref() };
         if !helper.p.protect_weak(&op_ref.p, cs) {
@@ -572,30 +570,29 @@ where
     }
 }
 
-impl<K, V, C> ConcurrentMap<K, V, C> for EFRBTree<K, V, C>
+impl<K, V> ConcurrentMap<K, V> for EFRBTree<K, V>
 where
     K: Ord + Clone,
     V: Clone,
-    C: Cs,
 {
-    type Output = Cursor<K, V, C>;
+    type Output = Cursor<K, V>;
 
     fn new() -> Self {
         EFRBTree::new()
     }
 
     #[inline(always)]
-    fn get(&self, key: &K, output: &mut Self::Output, cs: &C) -> bool {
+    fn get(&self, key: &K, output: &mut Self::Output, cs: &CsHP) -> bool {
         self.find(key, output, cs)
     }
 
     #[inline(always)]
-    fn insert(&self, key: K, value: V, output: &mut Self::Output, cs: &C) -> bool {
+    fn insert(&self, key: K, value: V, output: &mut Self::Output, cs: &CsHP) -> bool {
         self.insert(key, value, output, cs)
     }
 
     #[inline(always)]
-    fn remove(&self, key: &K, output: &mut Self::Output, cs: &C) -> bool {
+    fn remove(&self, key: &K, output: &mut Self::Output, cs: &CsHP) -> bool {
         self.delete(key, output, cs)
     }
 }
@@ -603,16 +600,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::EFRBTree;
-    use crate::circ::concurrent_map;
-    use circ::{CsEBR, CsHP};
+    use crate::circ_hp::concurrent_map;
 
     #[test]
-    fn smoke_efrb_tree_ebr() {
-        concurrent_map::tests::smoke::<CsEBR, EFRBTree<i32, String, CsEBR>>();
-    }
-
-    #[test]
-    fn smoke_efrb_tree_hp() {
-        concurrent_map::tests::smoke::<CsHP, EFRBTree<i32, String, CsHP>>();
+    fn smoke_efrb_tree() {
+        concurrent_map::tests::smoke::<EFRBTree<i32, String>>();
     }
 }
