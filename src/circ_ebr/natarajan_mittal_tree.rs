@@ -1,8 +1,7 @@
-use circ::{AtomicRc, CompareExchangeErrorRc, CsEBR, Pointer, Rc, Snapshot, StrongPtr, TaggedCnt};
+use circ::{AtomicRc, CompareExchangeErrorRc, CsEBR, Pointer, Rc, Snapshot, StrongPtr};
 
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use std::cmp;
-use std::mem::swap;
 use std::sync::atomic::Ordering;
 
 bitflags! {
@@ -135,8 +134,7 @@ pub struct SeekRecord<K, V> {
     /// Parent of `successor`
     ancestor: Snapshot<Node<K, V>, CsEBR>,
     /// The first internal node with a marked outgoing edge.
-    /// As we do not dereference the successor, It is okay to maintain a raw pointer.
-    successor: TaggedCnt<Node<K, V>>,
+    successor: Snapshot<Node<K, V>, CsEBR>,
     /// The direction of successor from ancestor.
     successor_dir: Direction,
     /// Parent of `leaf`
@@ -145,12 +143,6 @@ pub struct SeekRecord<K, V> {
     leaf: Snapshot<Node<K, V>, CsEBR>,
     /// The direction of leaf from parent.
     leaf_dir: Direction,
-    /// The next node of the access path.
-    curr: Snapshot<Node<K, V>, CsEBR>,
-    /// The direction of curr from leaf.
-    curr_dir: Direction,
-    /// The found node for Get and Remove operation.
-    found: Snapshot<Node<K, V>, CsEBR>,
 }
 
 impl<K, V> OutputHolder<V> for SeekRecord<K, V> {
@@ -162,14 +154,11 @@ impl<K, V> OutputHolder<V> for SeekRecord<K, V> {
             parent: Default::default(),
             leaf: Default::default(),
             leaf_dir: Default::default(),
-            curr: Default::default(),
-            curr_dir: Default::default(),
-            found: Default::default(),
         }
     }
 
     fn output(&self) -> &V {
-        unsafe { self.found.deref() }.value.as_ref().unwrap()
+        unsafe { self.leaf.deref() }.value.as_ref().unwrap()
     }
 }
 
@@ -186,6 +175,13 @@ impl<K, V> SeekRecord<K, V> {
         match self.leaf_dir {
             Direction::L => &unsafe { self.parent.deref() }.left,
             Direction::R => &unsafe { self.parent.deref() }.right,
+        }
+    }
+
+    fn leaf_sibling_addr(&self) -> &AtomicRc<Node<K, V>, CsEBR> {
+        match self.leaf_dir {
+            Direction::L => &unsafe { self.parent.deref() }.right,
+            Direction::R => &unsafe { self.parent.deref() }.left,
         }
     }
 }
@@ -229,76 +225,84 @@ where
     }
 
     // All `Shared<_>` fields are unmarked.
-    fn seek(&self, key: &K, record: &mut SeekRecord<K, V>, cs: &CsEBR) {
-        record.ancestor.load(&self.r, cs);
-        record
-            .parent
-            .load(&unsafe { record.ancestor.deref() }.left, cs);
-        record.successor = record.parent.as_ptr();
-        record.leaf.load(&unsafe { record.parent.deref() }.left, cs);
-        record.leaf.set_tag(Marks::empty().bits());
-        record.successor_dir = Direction::L;
-        record.leaf_dir = Direction::L;
-        let leaf_node = unsafe { record.leaf.deref() };
+    fn seek(&self, key: &K, cs: &CsEBR) -> SeekRecord<K, V> {
+        let r = self.r.load_ss(cs);
+        let s = unsafe { r.deref() }.left.load_ss(cs);
+        let mut leaf = unsafe { s.deref() }.left.load_ss(cs);
+        leaf.set_tag(Marks::empty().bits());
 
-        let mut prev_tag = Marks::from_bits_truncate(record.leaf.tag()).tag();
-        record.curr_dir = Direction::L;
-        record.curr.load(&leaf_node.left, cs);
+        let mut record = SeekRecord {
+            ancestor: r,
+            successor: s,
+            successor_dir: Direction::L,
+            parent: s,
+            leaf,
+            leaf_dir: Direction::L,
+        };
 
-        while !record.curr.is_null() {
-            // Safety of deref: Even if `record.curr` is mutated by `swap`, `curr_node` is
-            // protected by `record.leaf`.
-            let curr_node = unsafe { record.curr.deref() };
+        let mut prev_tag = Marks::from_bits_truncate(leaf.tag()).tag();
+        let mut curr_dir = Direction::L;
+        let mut curr = unsafe { leaf.deref() }.left.load_ss(cs);
+
+        while let Some(curr_node) = curr.as_ref() {
             if !prev_tag {
                 // untagged edge: advance ancestor and successor pointers
-                Snapshot::swap(&mut record.ancestor, &mut record.parent);
-                record.successor = record.leaf.as_ptr();
+                record.ancestor = record.parent;
+                record.successor = record.leaf;
                 record.successor_dir = record.leaf_dir;
             }
 
-            let curr_tag = record.curr.tag();
-
             // advance parent and leaf pointers
-            Snapshot::swap(&mut record.parent, &mut record.leaf);
-            Snapshot::swap(&mut record.leaf, &mut record.curr);
-            swap(&mut record.leaf_dir, &mut record.curr_dir);
+            record.parent = record.leaf;
+            record.leaf = curr;
             record.leaf.set_tag(Marks::empty().bits());
+            record.leaf_dir = curr_dir;
 
             // update other variables
-            prev_tag = Marks::from_bits_truncate(curr_tag).tag();
+            prev_tag = Marks::from_bits_truncate(curr.tag()).tag();
             if curr_node.key.cmp(key) == cmp::Ordering::Greater {
-                record.curr_dir = Direction::L;
-                record.curr.load(&curr_node.left, cs);
+                curr_dir = Direction::L;
+                curr = curr_node.left.load_ss(cs);
             } else {
-                record.curr_dir = Direction::R;
-                record.curr.load(&curr_node.right, cs);
+                curr_dir = Direction::R;
+                curr = curr_node.right.load_ss(cs);
             }
         }
+
+        record
     }
 
     /// Similar to `seek`, but traverse the tree with only two pointers
-    fn seek_leaf(&self, key: &K, record: &mut SeekRecord<K, V>, cs: &CsEBR) {
-        record.ancestor.load(&self.r, cs);
-        record
-            .parent
-            .load(&unsafe { record.ancestor.deref() }.left, cs);
-        record.leaf.load(&unsafe { record.parent.deref() }.left, cs);
-        record.curr.load(&unsafe { record.leaf.deref() }.left, cs);
-        record.curr.set_tag(Marks::empty().bits());
+    fn seek_leaf(&self, key: &K, cs: &CsEBR) -> SeekRecord<K, V> {
+        let r = self.r.load_ss(cs);
+        let s = unsafe { r.deref() }.left.load_ss(cs);
+        let mut leaf = unsafe { s.deref() }.left.load_ss(cs);
+        leaf.set_tag(0);
 
-        while !record.curr.is_null() {
-            // Safety of deref: Even if `record.curr` is mutated by `swap`, `curr_node` is
-            // protected by `record.leaf`.
-            let curr_node = unsafe { record.curr.deref() };
-            Snapshot::swap(&mut record.leaf, &mut record.curr);
+        let mut record = SeekRecord {
+            ancestor: Snapshot::new(),
+            successor: Snapshot::new(),
+            successor_dir: Direction::L,
+            parent: s,
+            leaf,
+            leaf_dir: Direction::L,
+        };
+
+        let mut curr = unsafe { record.leaf.deref() }.left.load_ss(cs);
+        curr.set_tag(0);
+
+        while let Some(curr_node) = curr.as_ref() {
+            record.leaf = curr;
 
             if curr_node.key.cmp(key) == cmp::Ordering::Greater {
-                record.curr.load(&curr_node.left, cs);
+                curr = curr_node.left.load_ss(cs);
             } else {
-                record.curr.load(&curr_node.right, cs);
+                curr = curr_node.right.load_ss(cs);
             }
-            record.curr.set_tag(Marks::empty().bits());
+            curr.set_tag(0);
         }
+
+        record
     }
 
     /// Physically removes node.
@@ -309,15 +313,9 @@ where
         let leaf_marked = record.leaf_addr().load(Ordering::Acquire);
         let leaf_flag = Marks::from_bits_truncate(leaf_marked.tag()).flag();
         let target_sibling_addr = if leaf_flag {
-            match record.leaf_dir {
-                Direction::L => &unsafe { record.parent.deref() }.right,
-                Direction::R => &unsafe { record.parent.deref() }.left,
-            }
+            record.leaf_sibling_addr()
         } else {
-            match record.leaf_dir {
-                Direction::L => &unsafe { record.parent.deref() }.left,
-                Direction::R => &unsafe { record.parent.deref() }.right,
-            }
+            record.leaf_addr()
         };
 
         // NOTE: the ibr implementation uses CAS
@@ -327,13 +325,12 @@ where
         // Try to replace (ancestor, successor) w/ (ancestor, sibling).
         // Since (parent, sibling) might have been concurrently flagged, copy
         // the flag to the new edge (ancestor, sibling).
-        record.curr.load(target_sibling_addr, cs);
-        let target_sibling = &record.curr;
+        let target_sibling = target_sibling_addr.load_ss(cs);
         let flag = Marks::from_bits_truncate(target_sibling.tag()).flag();
         record
             .successor_addr()
             .compare_exchange(
-                record.successor,
+                record.successor.as_ptr(),
                 target_sibling.with_tag(Marks::new(flag, false).bits()),
                 Ordering::AcqRel,
                 Ordering::Acquire,
@@ -343,9 +340,8 @@ where
     }
 
     pub fn get(&self, key: &K, record: &mut SeekRecord<K, V>, cs: &CsEBR) -> bool {
-        self.seek_leaf(key, record, cs);
-        Snapshot::swap(&mut record.leaf, &mut record.found);
-        let leaf_node = unsafe { record.found.deref() };
+        *record = self.seek_leaf(key, cs);
+        let leaf_node = unsafe { record.leaf.deref() };
         leaf_node.key.cmp(key) == cmp::Ordering::Equal
     }
 
@@ -360,7 +356,7 @@ where
         });
 
         loop {
-            self.seek(&key, record, cs);
+            *record = self.seek(&key, cs);
             let new_internal_node = unsafe { new_internal.deref_mut() };
 
             let (leaf_rc, leaf_dt) = record.leaf.loan();
@@ -434,8 +430,8 @@ where
         // `leaf` and `value` are the snapshot of the node to be deleted.
         // NOTE: The paper version uses one big loop for both phases.
         // injection phase
-        let leaf = loop {
-            self.seek(key, record, cs);
+        loop {
+            *record = self.seek(key, cs);
 
             // candidates
             let leaf_node = record.leaf.as_ref().unwrap();
@@ -455,13 +451,10 @@ where
                 Ok(_) => {
                     // Finalize the node to be removed
                     if self.cleanup(record, cs) {
-                        Snapshot::swap(&mut record.leaf, &mut record.found);
                         return true;
                     }
                     // In-place cleanup failed. Enter the cleanup phase.
-                    let leaf = record.leaf.as_ptr();
-                    Snapshot::swap(&mut record.leaf, &mut record.found);
-                    break leaf;
+                    break;
                 }
                 Err(e) => match e {
                     CompareExchangeErrorRc::Changed { current, .. } => {
@@ -476,12 +469,12 @@ where
                     CompareExchangeErrorRc::Closed { .. } => unreachable!(),
                 },
             }
-        };
+        }
 
         // cleanup phase
         loop {
-            self.seek(key, record, cs);
-            if record.leaf.as_ptr() != leaf {
+            let next_record = self.seek(key, cs);
+            if next_record.leaf != record.leaf {
                 // The edge to leaf flagged for deletion was removed by a helping thread
                 return true;
             }
@@ -521,13 +514,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    // use super::NMTreeMap;
-    // use crate::circ_hp::concurrent_map;
-    // use circ::CsEBR;
+    use super::NMTreeMap;
+    use crate::circ_ebr::concurrent_map;
 
     #[test]
     fn smoke_nm_tree() {
-        // TODO: Implement CIRCL for HP and uncomment
-        // concurrent_map::tests::smoke::<CsEBR, NMTreeMap<i32, String, CsEBR>>();
+        concurrent_map::tests::smoke::<NMTreeMap<i32, String>>();
     }
 }

@@ -79,13 +79,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    // use super::HashMap;
-    // use crate::circ_hp::concurrent_map;
-    // use circ::CsEBR;
+    use super::HashMap;
+    use crate::circ_ebr::concurrent_map;
 
     #[test]
     fn smoke_hashmap() {
-        // TODO: Implement CIRCL for HP and uncomment
-        // concurrent_map::tests::smoke::<CsEBR, HashMap<i32, String, CsEBR>>();
+        concurrent_map::tests::smoke::<HashMap<i32, String>>();
     }
 }

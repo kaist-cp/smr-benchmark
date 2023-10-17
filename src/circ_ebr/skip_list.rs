@@ -122,10 +122,9 @@ impl<K, V> OutputHolder<V> for Cursor<K, V> {
 
 impl<K, V> Cursor<K, V> {
     fn initialize(&mut self, head: &AtomicRc<Node<K, V>, CsEBR>, cs: &CsEBR) {
-        self.preds[MAX_HEIGHT - 1].load(head, cs);
-        for succ in &mut self.succs {
-            succ.clear();
-        }
+        let head = head.load_ss(cs);
+        self.preds.fill(head);
+        self.succs.fill(Snapshot::new());
     }
 }
 
@@ -144,12 +143,8 @@ where
         }
     }
 
-    /// Returns `None` if the key is not found. Otherwise, returns `Some(found level)`.
-    pub fn find_optimistic(&self, key: &K, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> Option<usize> {
-        let mut pred = Snapshot::new();
-        let mut succ = Snapshot::new();
-        pred.load(&self.head, cs);
-
+    fn find_optimistic(&self, key: &K, cs: &CsEBR) -> Option<Snapshot<Node<K, V>, CsEBR>> {
+        let mut pred = self.head.load_ss(cs);
         let mut level = MAX_HEIGHT;
         while level >= 1
             && unsafe { pred.deref() }.next[level - 1]
@@ -161,20 +156,18 @@ where
 
         while level >= 1 {
             level -= 1;
-            succ.load(&unsafe { pred.deref() }.next[level], cs);
+            let mut curr = unsafe { pred.deref() }.next[level].load_ss(cs);
 
             loop {
-                let curr_node = some_or!(succ.as_ref(), break);
+                let curr_node = some_or!(curr.as_ref(), break);
                 match curr_node.key.cmp(key) {
                     std::cmp::Ordering::Less => {
-                        Snapshot::swap(&mut pred, &mut succ);
-                        succ.load(&unsafe { pred.deref() }.next[level], cs);
+                        pred = curr;
+                        curr = curr_node.next[level].load_ss(cs);
                     }
                     std::cmp::Ordering::Equal => {
-                        let clean = curr_node.next[level].load(Ordering::Acquire).tag() == 0;
-                        if clean {
-                            cursor.succs[0] = succ;
-                            return Some(0);
+                        if curr_node.next[level].load(Ordering::Acquire).tag() == 0 {
+                            return Some(curr);
                         }
                         return None;
                     }
@@ -186,45 +179,38 @@ where
         return None;
     }
 
-    /// Returns `None` if the key is not found. Otherwise, returns `Some(found level)`.
     fn find(&self, key: &K, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> Option<usize> {
         'search: loop {
             cursor.initialize(&self.head, cs);
+            let head = cursor.preds[0];
 
             let mut level = MAX_HEIGHT;
             while level >= 1
-                && unsafe { cursor.preds[level - 1].deref() }.next[level - 1]
+                && unsafe { head.deref() }.next[level - 1]
                     .load(Ordering::Relaxed)
                     .is_null()
             {
-                if level > 1 {
-                    let (lower, upper) = cursor.preds.split_at_mut(level - 1);
-                    unsafe { upper[0].copy_to(&mut lower[level - 2]) };
-                }
                 level -= 1;
             }
 
             let mut found_level = None;
-            let mut pred = Snapshot::new();
-            unsafe { cursor.preds[MAX_HEIGHT - 1].copy_to(&mut pred) };
+            let mut pred = head;
             while level >= 1 {
                 level -= 1;
-                let mut succ = unsafe { pred.deref() }.next[level].load_ss(cs);
-
+                let mut curr = unsafe { pred.deref() }.next[level].load_ss(cs);
                 // If the next node of `pred` is marked, that means `pred` is removed and we have
                 // to restart the search.
-                if succ.tag() == 1 {
+                if curr.tag() == 1 {
                     continue 'search;
                 }
 
-                // Order of snapshots: pred[i] -> succ[i] -> next
-                while let Some(succ_ref) = succ.as_ref() {
-                    let mut next = succ_ref.next[level].load_ss(cs);
+                while let Some(curr_ref) = curr.as_ref() {
+                    let mut succ = curr_ref.next[level].load_ss(cs);
 
-                    if next.tag() == 1 {
-                        next.set_tag(0);
-                        if self.help_unlink(&pred, &succ, &next, level, cs) {
-                            succ = next;
+                    if succ.tag() == 1 {
+                        succ.set_tag(0);
+                        if self.help_unlink(&pred, &curr, &succ, level, cs) {
+                            curr = succ;
                             continue;
                         } else {
                             // On failure, we cannot do anything reasonable to continue
@@ -235,7 +221,7 @@ where
 
                     // If `succ` contains a key that is greater than or equal to `key`, we're
                     // done with this level.
-                    match succ_ref.key.cmp(key) {
+                    match curr_ref.key.cmp(key) {
                         std::cmp::Ordering::Greater => break,
                         std::cmp::Ordering::Equal => {
                             found_level = Some(level);
@@ -245,14 +231,12 @@ where
                     }
 
                     // Move one step forward.
-                    pred = succ;
-                    succ = next;
+                    pred = curr;
+                    curr = succ;
                 }
 
                 cursor.preds[level] = pred;
-                cursor.succs[level] = succ;
-                pred = Snapshot::new();
-                unsafe { cursor.preds[level].copy_to(&mut pred) };
+                cursor.succs[level] = curr;
             }
 
             return found_level;
@@ -262,28 +246,28 @@ where
     fn help_unlink(
         &self,
         pred: &Snapshot<Node<K, V>, CsEBR>,
+        curr: &Snapshot<Node<K, V>, CsEBR>,
         succ: &Snapshot<Node<K, V>, CsEBR>,
-        next: &Snapshot<Node<K, V>, CsEBR>,
         level: usize,
         cs: &CsEBR,
     ) -> bool {
+        debug_assert!(curr.tag() == 0);
         debug_assert!(succ.tag() == 0);
-        debug_assert!(next.tag() == 0);
-        let (next_rc, next_dt) = next.loan();
+        let (succ_rc, succ_dt) = succ.loan();
 
         match unsafe { pred.deref() }.next[level].compare_exchange(
-            succ.as_ptr().with_tag(0),
-            next_rc,
+            curr.as_ptr().with_tag(0),
+            succ_rc,
             Ordering::Release,
             Ordering::Relaxed,
             cs,
         ) {
             Ok(_) => {
-                next_dt.repay_frontier(&unsafe { succ.deref() }.next[level], 1, cs);
+                succ_dt.repay_frontier(&unsafe { curr.deref() }.next[level], 1, cs);
                 true
             }
             Err(e) => {
-                next_dt.repay(e.desired());
+                succ_dt.repay(e.desired());
                 false
             }
         }
@@ -455,11 +439,11 @@ where
     }
 
     fn get(&self, key: &K, output: &mut Self::Output, cs: &CsEBR) -> bool {
-        let found_level = self.find_optimistic(key, output, cs);
-        if let Some(level) = found_level {
-            output.found_value = Some(unsafe { output.succs[level].deref() }.value.clone());
+        if let Some(found) = self.find_optimistic(key, cs) {
+            output.found_value = Some(unsafe { found.deref().value.clone() });
+            return true;
         }
-        found_level.is_some()
+        false
     }
 
     fn insert(&self, key: K, value: V, output: &mut Self::Output, cs: &CsEBR) -> bool {
@@ -473,12 +457,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    // use super::SkipList;
-    // use crate::circ_hp::concurrent_map;
+    use super::SkipList;
+    use crate::circ_ebr::concurrent_map;
 
     #[test]
     fn smoke_skip_list() {
-        // TODO: Implement CIRCL for HP and uncomment
-        // concurrent_map::tests::smoke::<CsEBR, SkipList<i32, String, CsEBR>>();
+        concurrent_map::tests::smoke::<SkipList<i32, String>>();
     }
 }

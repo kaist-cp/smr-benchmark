@@ -55,11 +55,6 @@ pub struct Cursor<K, V> {
     // Tag of `curr` should always be zero so when `curr` is stored in a `prev`, we don't store a
     // tagged pointer and cause cleanup to fail.
     curr: Snapshot<Node<K, V>, CsEBR>,
-    next: Snapshot<Node<K, V>, CsEBR>,
-
-    // Additional fields for HList.
-    anchor: Snapshot<Node<K, V>, CsEBR>,
-    anchor_next: Snapshot<Node<K, V>, CsEBR>,
 }
 
 impl<K, V> OutputHolder<V> for Cursor<K, V> {
@@ -77,9 +72,6 @@ impl<K, V> Cursor<K, V> {
         Self {
             prev: Snapshot::new(),
             curr: Snapshot::new(),
-            next: Snapshot::new(),
-            anchor: Snapshot::new(),
-            anchor_next: Snapshot::new(),
         }
     }
 
@@ -87,8 +79,6 @@ impl<K, V> Cursor<K, V> {
     fn initialize(&mut self, head: &AtomicRc<Node<K, V>, CsEBR>, cs: &CsEBR) {
         self.prev.load(head, cs);
         self.curr.load(&unsafe { self.prev.deref() }.next, cs);
-        self.anchor.clear();
-        self.anchor_next.clear();
     }
 }
 
@@ -96,63 +86,39 @@ impl<K: Ord, V> Cursor<K, V> {
     /// Clean up a chain of logically removed nodes in each traversal.
     #[inline]
     fn find_harris(&mut self, key: &K, cs: &CsEBR) -> Result<bool, ()> {
+        let mut prev_next = self.curr;
         let found = loop {
-            // * 0 deleted: <prev> -> <curr>
-            // * 1 deleted: <anchor> -> <prev> -x-> <curr>
-            // * 2 deleted: <anchor> -> <anchor_next> -x-> <prev> -x-> <curr>
-            // * n deleted: <anchor> -> <anchor_next> -x> (...) -x-> <prev> -x-> <curr>
             let curr_node = some_or!(self.curr.as_ref(), break false);
-            self.next.load(&curr_node.next, cs);
+            let mut next = curr_node.next.load_ss(cs);
 
-            if self.next.tag() != 0 {
+            if next.tag() != 0 {
                 // We add a 0 tag here so that `self.curr`s tag is always 0.
-                self.next.set_tag(0);
-
-                // <prev> -?-> <curr> -x-> <next>
-                Snapshot::swap(&mut self.next, &mut self.curr);
-                // <prev> -?-> <next> -x-> <curr>
-                Snapshot::swap(&mut self.next, &mut self.prev);
-                // <next> -?-> <prev> -x-> <curr>
-
-                if self.anchor.is_null() {
-                    // <next> -> <prev> -x-> <curr>, anchor = null, anchor_next = null
-                    debug_assert!(self.anchor_next.is_null());
-                    Snapshot::swap(&mut self.next, &mut self.anchor);
-                    // <anchor> -> <prev> -x-> <curr>
-                } else if self.anchor_next.is_null() {
-                    // <anchor> -> <next> -x-> <prev> -x-> <curr>, anchor_next = null
-                    Snapshot::swap(&mut self.next, &mut self.anchor_next);
-                    // <anchor> -> <anchor_next> -x-> <prev> -x-> <curr>
-                }
+                next.set_tag(0);
+                self.curr = next;
                 continue;
             }
 
             match curr_node.key.cmp(key) {
                 Less => {
-                    Snapshot::swap(&mut self.prev, &mut self.curr);
-                    Snapshot::swap(&mut self.curr, &mut self.next);
-                    self.anchor.clear();
-                    self.anchor_next.clear();
+                    self.prev = self.curr;
+                    self.curr = next;
+                    prev_next = next;
                 }
                 Equal => break true,
                 Greater => break false,
             }
         };
 
-        // If the anchor is not installed, no need to clean up
-        if self.anchor.is_null() {
+        // If prev and curr WERE adjacent, no need to clean up
+        if prev_next == self.curr {
             return Ok(found);
         }
 
         // cleanup tagged nodes between anchor and curr
-        unsafe { self.anchor.deref() }
+        unsafe { self.prev.deref() }
             .next
             .compare_exchange(
-                if self.anchor_next.is_null() {
-                    self.prev.as_ptr()
-                } else {
-                    self.anchor_next.as_ptr()
-                },
+                prev_next.as_ptr(),
                 &self.curr,
                 Ordering::Release,
                 Ordering::Relaxed,
@@ -160,7 +126,6 @@ impl<K: Ord, V> Cursor<K, V> {
             )
             .map_err(|_| ())?;
 
-        Snapshot::swap(&mut self.anchor, &mut self.prev);
         Ok(found)
     }
 
@@ -171,21 +136,21 @@ impl<K: Ord, V> Cursor<K, V> {
             debug_assert_eq!(self.curr.tag(), 0);
 
             let curr_node = some_or!(self.curr.as_ref(), return Ok(false));
-            self.next.load(&curr_node.next, cs);
+            let mut next = curr_node.next.load_ss(cs);
 
             // NOTE: original version aborts here if self.prev is tagged
 
-            if self.next.tag() != 0 {
-                self.next.set_tag(0);
-                self.try_unlink_curr(cs).map_err(|_| ())?;
-                Snapshot::swap(&mut self.curr, &mut self.next);
+            if next.tag() != 0 {
+                next.set_tag(0);
+                self.try_unlink_curr(next, cs).map_err(|_| ())?;
+                self.curr = next;
                 continue;
             }
 
             match curr_node.key.cmp(key) {
                 Less => {
-                    Snapshot::swap(&mut self.prev, &mut self.curr);
-                    Snapshot::swap(&mut self.curr, &mut self.next);
+                    self.prev = self.curr;
+                    self.curr = next;
                 }
                 Equal => return Ok(true),
                 Greater => return Ok(false),
@@ -198,22 +163,22 @@ impl<K: Ord, V> Cursor<K, V> {
     fn find_harris_herlihy_shavit(&mut self, key: &K, cs: &CsEBR) -> Result<bool, ()> {
         Ok(loop {
             let curr_node = some_or!(self.curr.as_ref(), break false);
-            self.next.load(&curr_node.next, cs);
+            let next = curr_node.next.load_ss(cs);
             match curr_node.key.cmp(key) {
-                Less => Snapshot::swap(&mut self.curr, &mut self.next),
-                Equal => break self.next.tag() == 0,
+                Less => self.curr = next,
+                Equal => break next.tag() == 0,
                 Greater => break false,
             }
         })
     }
 
     #[inline]
-    fn try_unlink_curr(&mut self, cs: &CsEBR) -> Result<(), ()> {
+    fn try_unlink_curr(&mut self, next: Snapshot<Node<K, V>, CsEBR>, cs: &CsEBR) -> Result<(), ()> {
         unsafe { self.prev.deref() }
             .next
             .compare_exchange(
                 self.curr.as_ptr(),
-                &self.next,
+                &next,
                 Ordering::Release,
                 Ordering::Relaxed,
                 cs,
@@ -261,19 +226,13 @@ impl<K: Ord, V> Cursor<K, V> {
     pub fn remove(&mut self, cs: &CsEBR) -> Result<(), ()> {
         let curr_node = unsafe { self.curr.deref() };
 
-        self.next.load(&curr_node.next, cs);
+        let next = curr_node.next.load_ss(cs);
         curr_node
             .next
-            .compare_exchange_tag(
-                self.next.with_tag(0),
-                1,
-                Ordering::AcqRel,
-                Ordering::Relaxed,
-                cs,
-            )
+            .compare_exchange_tag(next.with_tag(0), 1, Ordering::AcqRel, Ordering::Relaxed, cs)
             .map_err(|_| ())?;
 
-        let _ = self.try_unlink_curr(cs);
+        let _ = self.try_unlink_curr(next, cs);
 
         Ok(())
     }
@@ -522,44 +481,39 @@ where
 
 #[cfg(test)]
 mod tests {
-    // use super::{HHSList, HList, HMList};
-    // use crate::circ_hp::concurrent_map;
-    // use circ::CsEBR;
+    use super::{HHSList, HList, HMList};
+    use crate::circ_ebr::concurrent_map;
 
     #[test]
     fn smoke_h_list() {
-        // TODO: Implement CIRCL for HP and uncomment
-        // concurrent_map::tests::smoke::<CsEBR, HList<i32, String, CsEBR>>();
+        concurrent_map::tests::smoke::<HList<i32, String>>();
     }
 
     #[test]
     fn smoke_hm_list() {
-        // TODO: Implement CIRCL for HP and uncomment
-        // concurrent_map::tests::smoke::<CsEBR, HMList<i32, String, CsEBR>>();
+        concurrent_map::tests::smoke::<HMList<i32, String>>();
     }
 
     #[test]
     fn smoke_hhs_list() {
-        // TODO: Implement CIRCL for HP and uncomment
-        // concurrent_map::tests::smoke::<CsEBR, HHSList<i32, String, CsEBR>>();
+        concurrent_map::tests::smoke::<HHSList<i32, String>>();
     }
 
     #[test]
     fn litmus_hhs_pop() {
-        // TODO: Implement CIRCL for HP and uncomment
-        // use circ::Cs;
-        // use concurrent_map::ConcurrentMap;
-        // let map = HHSList::new();
+        use circ::{Cs, CsEBR};
+        use concurrent_map::ConcurrentMap;
+        let map = HHSList::new();
 
-        // let output = &mut HHSList::empty_output();
-        // let cs = &CsEBR::new();
-        // map.insert(1, "1", output, cs);
-        // map.insert(2, "2", output, cs);
-        // map.insert(3, "3", output, cs);
+        let output = &mut HHSList::empty_output();
+        let cs = &CsEBR::new();
+        map.insert(1, "1", output, cs);
+        map.insert(2, "2", output, cs);
+        map.insert(3, "3", output, cs);
 
-        // assert!(map.pop(output, cs));
-        // assert!(map.pop(output, cs));
-        // assert!(map.pop(output, cs));
-        // assert!(!map.pop(output, cs));
+        assert!(map.pop(output, cs));
+        assert!(map.pop(output, cs));
+        assert!(map.pop(output, cs));
+        assert!(!map.pop(output, cs));
     }
 }
