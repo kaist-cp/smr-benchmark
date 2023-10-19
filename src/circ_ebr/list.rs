@@ -49,22 +49,18 @@ where
     }
 }
 
+impl<K, V> OutputHolder<V> for Snapshot<Node<K, V>, CsEBR> {
+    fn output(&self) -> &V {
+        self.as_ref().map(|node| &node.value).unwrap()
+    }
+}
+
 pub struct Cursor<K, V> {
     // The previous node of `curr`.
     prev: Snapshot<Node<K, V>, CsEBR>,
     // Tag of `curr` should always be zero so when `curr` is stored in a `prev`, we don't store a
     // tagged pointer and cause cleanup to fail.
     curr: Snapshot<Node<K, V>, CsEBR>,
-}
-
-impl<K, V> OutputHolder<V> for Cursor<K, V> {
-    fn default() -> Self {
-        Cursor::new()
-    }
-
-    fn output(&self) -> &V {
-        &unsafe { self.curr.deref() }.value
-    }
 }
 
 impl<K, V> Cursor<K, V> {
@@ -173,7 +169,7 @@ impl<K: Ord, V> Cursor<K, V> {
     }
 
     #[inline]
-    fn try_unlink_curr(&mut self, next: Snapshot<Node<K, V>, CsEBR>, cs: &CsEBR) -> Result<(), ()> {
+    fn try_unlink_curr(&self, next: Snapshot<Node<K, V>, CsEBR>, cs: &CsEBR) -> Result<(), ()> {
         unsafe { self.prev.deref() }
             .next
             .compare_exchange(
@@ -190,7 +186,7 @@ impl<K: Ord, V> Cursor<K, V> {
     /// Inserts a value.
     #[inline]
     pub fn insert(
-        &mut self,
+        &self,
         node: Rc<Node<K, V>, CsEBR>,
         cs: &CsEBR,
     ) -> Result<(), Rc<Node<K, V>, CsEBR>> {
@@ -223,7 +219,7 @@ impl<K: Ord, V> Cursor<K, V> {
 
     /// removes the current node.
     #[inline]
-    pub fn remove(&mut self, cs: &CsEBR) -> Result<(), ()> {
+    pub fn remove(&self, cs: &CsEBR) -> Result<(), ()> {
         let curr_node = unsafe { self.curr.deref() };
 
         let next = curr_node.next.load_ss(cs);
@@ -251,26 +247,27 @@ where
     }
 
     #[inline]
-    fn get<F>(&self, key: &K, find: F, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> bool
+    fn get<F>(&self, key: &K, find: F, cs: &CsEBR) -> (Cursor<K, V>, bool)
     where
         F: Fn(&mut Cursor<K, V>, &K, &CsEBR) -> Result<bool, ()>,
     {
         loop {
+            let mut cursor = Cursor::new();
             cursor.initialize(&self.head, cs);
-            if let Ok(r) = find(cursor, key, cs) {
-                return r;
+            if let Ok(r) = find(&mut cursor, key, cs) {
+                return (cursor, r);
             }
         }
     }
 
     #[inline]
-    fn insert<F>(&self, key: K, value: V, find: F, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> bool
+    fn insert<F>(&self, key: K, value: V, find: F, cs: &CsEBR) -> bool
     where
         F: Fn(&mut Cursor<K, V>, &K, &CsEBR) -> Result<bool, ()>,
     {
         let mut node = Rc::new(Node::new(key, value));
         loop {
-            let found = self.get(&unsafe { node.deref() }.key, &find, cursor, cs);
+            let (cursor, found) = self.get(&unsafe { node.deref() }.key, &find, cs);
             if found {
                 drop(unsafe { node.into_inner() });
                 return false;
@@ -284,82 +281,95 @@ where
     }
 
     #[inline]
-    fn remove<F>(&self, key: &K, find: F, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> bool
+    fn remove<F>(&self, key: &K, find: F, cs: &CsEBR) -> Option<Snapshot<Node<K, V>, CsEBR>>
     where
         F: Fn(&mut Cursor<K, V>, &K, &CsEBR) -> Result<bool, ()>,
     {
         loop {
-            let found = self.get(key, &find, cursor, cs);
+            let (cursor, found) = self.get(key, &find, cs);
             if !found {
-                return false;
+                return None;
             }
 
             match cursor.remove(cs) {
                 Err(()) => continue,
-                Ok(_) => return true,
+                Ok(_) => return Some(cursor.curr),
             }
         }
     }
 
     #[inline]
-    fn pop(&self, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> bool {
+    fn pop(&self, cs: &CsEBR) -> Option<Snapshot<Node<K, V>, CsEBR>> {
         loop {
+            let mut cursor = Cursor::new();
             cursor.initialize(&self.head, cs);
             if cursor.curr.is_null() {
-                return false;
+                return None;
             }
 
             match cursor.remove(cs) {
                 Err(()) => continue,
-                Ok(_) => return true,
+                Ok(_) => return Some(cursor.curr),
             }
         }
     }
 
     /// Omitted
-    pub fn harris_get(&self, key: &K, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> bool {
-        self.get(key, Cursor::find_harris, cursor, cs)
+    pub fn harris_get(&self, key: &K, cs: &CsEBR) -> Option<Snapshot<Node<K, V>, CsEBR>> {
+        let (cursor, found) = self.get(key, Cursor::find_harris, cs);
+        if found {
+            Some(cursor.curr)
+        } else {
+            None
+        }
     }
 
     /// Omitted
-    pub fn harris_insert(&self, key: K, value: V, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> bool {
-        self.insert(key, value, Cursor::find_harris, cursor, cs)
+    pub fn harris_insert(&self, key: K, value: V, cs: &CsEBR) -> bool {
+        self.insert(key, value, Cursor::find_harris, cs)
     }
 
     /// Omitted
-    pub fn harris_remove(&self, key: &K, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> bool {
-        self.remove(key, Cursor::find_harris, cursor, cs)
+    pub fn harris_remove(&self, key: &K, cs: &CsEBR) -> Option<Snapshot<Node<K, V>, CsEBR>> {
+        self.remove(key, Cursor::find_harris, cs)
     }
 
     /// Omitted
-    pub fn harris_michael_get(&self, key: &K, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> bool {
-        self.get(key, Cursor::find_harris_michael, cursor, cs)
+    pub fn harris_michael_get(&self, key: &K, cs: &CsEBR) -> Option<Snapshot<Node<K, V>, CsEBR>> {
+        let (cursor, found) = self.get(key, Cursor::find_harris_michael, cs);
+        if found {
+            Some(cursor.curr)
+        } else {
+            None
+        }
     }
 
     /// Omitted
-    pub fn harris_michael_insert(
+    pub fn harris_michael_insert(&self, key: K, value: V, cs: &CsEBR) -> bool {
+        self.insert(key, value, Cursor::find_harris_michael, cs)
+    }
+
+    /// Omitted
+    pub fn harris_michael_remove(
         &self,
-        key: K,
-        value: V,
-        cursor: &mut Cursor<K, V>,
+        key: &K,
         cs: &CsEBR,
-    ) -> bool {
-        self.insert(key, value, Cursor::find_harris_michael, cursor, cs)
-    }
-
-    /// Omitted
-    pub fn harris_michael_remove(&self, key: &K, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> bool {
-        self.remove(key, Cursor::find_harris_michael, cursor, cs)
+    ) -> Option<Snapshot<Node<K, V>, CsEBR>> {
+        self.remove(key, Cursor::find_harris_michael, cs)
     }
 
     /// Omitted
     pub fn harris_herlihy_shavit_get(
         &self,
         key: &K,
-        cursor: &mut Cursor<K, V>,
         cs: &CsEBR,
-    ) -> bool {
-        self.get(key, Cursor::find_harris_herlihy_shavit, cursor, cs)
+    ) -> Option<Snapshot<Node<K, V>, CsEBR>> {
+        let (cursor, found) = self.get(key, Cursor::find_harris_herlihy_shavit, cs);
+        if found {
+            Some(cursor.curr)
+        } else {
+            None
+        }
     }
 }
 
@@ -372,23 +382,23 @@ where
     K: Ord + Default,
     V: Default,
 {
-    type Output = Cursor<K, V>;
+    type Output = Snapshot<Node<K, V>, CsEBR>;
 
     fn new() -> Self {
         HList { inner: List::new() }
     }
 
     #[inline(always)]
-    fn get(&self, key: &K, output: &mut Self::Output, cs: &CsEBR) -> bool {
-        self.inner.harris_get(key, output, cs)
+    fn get(&self, key: &K, cs: &CsEBR) -> Option<Self::Output> {
+        self.inner.harris_get(key, cs)
     }
     #[inline(always)]
-    fn insert(&self, key: K, value: V, output: &mut Self::Output, cs: &CsEBR) -> bool {
-        self.inner.harris_insert(key, value, output, cs)
+    fn insert(&self, key: K, value: V, cs: &CsEBR) -> bool {
+        self.inner.harris_insert(key, value, cs)
     }
     #[inline(always)]
-    fn remove(&self, key: &K, output: &mut Self::Output, cs: &CsEBR) -> bool {
-        self.inner.harris_remove(key, output, cs)
+    fn remove(&self, key: &K, cs: &CsEBR) -> Option<Self::Output> {
+        self.inner.harris_remove(key, cs)
     }
 }
 
@@ -406,10 +416,9 @@ where
     pub fn get_harris_herlihy_shavit(
         &self,
         key: &K,
-        cursor: &mut Cursor<K, V>,
         cs: &CsEBR,
-    ) -> bool {
-        self.inner.harris_herlihy_shavit_get(key, cursor, cs)
+    ) -> Option<Snapshot<Node<K, V>, CsEBR>> {
+        self.inner.harris_herlihy_shavit_get(key, cs)
     }
 }
 
@@ -418,23 +427,23 @@ where
     K: Ord + Default,
     V: Default,
 {
-    type Output = Cursor<K, V>;
+    type Output = Snapshot<Node<K, V>, CsEBR>;
 
     fn new() -> Self {
         HMList { inner: List::new() }
     }
 
     #[inline(always)]
-    fn get(&self, key: &K, output: &mut Self::Output, cs: &CsEBR) -> bool {
-        self.inner.harris_michael_get(key, output, cs)
+    fn get(&self, key: &K, cs: &CsEBR) -> Option<Self::Output> {
+        self.inner.harris_michael_get(key, cs)
     }
     #[inline(always)]
-    fn insert(&self, key: K, value: V, output: &mut Self::Output, cs: &CsEBR) -> bool {
-        self.inner.harris_michael_insert(key, value, output, cs)
+    fn insert(&self, key: K, value: V, cs: &CsEBR) -> bool {
+        self.inner.harris_michael_insert(key, value, cs)
     }
     #[inline(always)]
-    fn remove(&self, key: &K, output: &mut Self::Output, cs: &CsEBR) -> bool {
-        self.inner.harris_michael_remove(key, output, cs)
+    fn remove(&self, key: &K, cs: &CsEBR) -> Option<Self::Output> {
+        self.inner.harris_michael_remove(key, cs)
     }
 }
 
@@ -449,8 +458,8 @@ where
 {
     /// Pop the first element efficiently.
     /// This method is used for only the fine grained benchmark (src/bin/long_running).
-    pub fn pop(&self, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> bool {
-        self.inner.pop(cursor, cs)
+    pub fn pop(&self, cs: &CsEBR) -> Option<Snapshot<Node<K, V>, CsEBR>> {
+        self.inner.pop(cs)
     }
 }
 
@@ -459,28 +468,29 @@ where
     K: Ord + Default,
     V: Default,
 {
-    type Output = Cursor<K, V>;
+    type Output = Snapshot<Node<K, V>, CsEBR>;
 
     fn new() -> Self {
         HHSList { inner: List::new() }
     }
 
     #[inline(always)]
-    fn get(&self, key: &K, output: &mut Self::Output, cs: &CsEBR) -> bool {
-        self.inner.harris_herlihy_shavit_get(key, output, cs)
+    fn get(&self, key: &K, cs: &CsEBR) -> Option<Self::Output> {
+        self.inner.harris_herlihy_shavit_get(key, cs)
     }
     #[inline(always)]
-    fn insert(&self, key: K, value: V, output: &mut Self::Output, cs: &CsEBR) -> bool {
-        self.inner.harris_insert(key, value, output, cs)
+    fn insert(&self, key: K, value: V, cs: &CsEBR) -> bool {
+        self.inner.harris_insert(key, value, cs)
     }
     #[inline(always)]
-    fn remove(&self, key: &K, output: &mut Self::Output, cs: &CsEBR) -> bool {
-        self.inner.harris_remove(key, output, cs)
+    fn remove(&self, key: &K, cs: &CsEBR) -> Option<Self::Output> {
+        self.inner.harris_remove(key, cs)
     }
 }
 
 #[cfg(test)]
 mod tests {
+
     use super::{HHSList, HList, HMList};
     use crate::circ_ebr::concurrent_map;
 
@@ -501,19 +511,18 @@ mod tests {
 
     #[test]
     fn litmus_hhs_pop() {
-        use circ::{Cs, CsEBR};
+        use circ::{Cs, CsEBR, StrongPtr};
         use concurrent_map::ConcurrentMap;
         let map = HHSList::new();
 
-        let output = &mut HHSList::empty_output();
         let cs = &CsEBR::new();
-        map.insert(1, "1", output, cs);
-        map.insert(2, "2", output, cs);
-        map.insert(3, "3", output, cs);
+        map.insert(1, "1", cs);
+        map.insert(2, "2", cs);
+        map.insert(3, "3", cs);
 
-        assert!(map.pop(output, cs));
-        assert!(map.pop(output, cs));
-        assert!(map.pop(output, cs));
-        assert!(!map.pop(output, cs));
+        assert_eq!(map.pop(cs).unwrap().as_ref().unwrap().value, "1");
+        assert_eq!(map.pop(cs).unwrap().as_ref().unwrap().value, "2");
+        assert_eq!(map.pop(cs).unwrap().as_ref().unwrap().value, "3");
+        assert!(map.pop(cs).is_none());
     }
 }

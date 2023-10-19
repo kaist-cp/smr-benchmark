@@ -31,7 +31,7 @@ impl Retired {
 
 /// a real node in tree or a wrapper of State node
 /// Retired node if Shared ptr of Node has RETIRED tag.
-struct Node<K, V> {
+pub struct Node<K, V> {
     key: K,
     value: V,
     size: usize,
@@ -89,40 +89,15 @@ where
     }
 }
 
-pub struct Holder<K, V> {
-    root: TaggedCnt<Node<K, V>>,
-    curr: Snapshot<Node<K, V>, CsEBR>,
-    temp: Snapshot<Node<K, V>, CsEBR>,
-    found: Option<V>,
-}
-
 /// Each op creates a new local state and tries to update (CAS) the tree with it.
 struct State<'g, K, V> {
     root_link: &'g AtomicRc<Node<K, V>, CsEBR>,
-    holder: &'g mut Holder<K, V>,
+    curr_root: TaggedCnt<Node<K, V>>,
 }
 
-pub struct Cursor<K, V> {
-    holder: Holder<K, V>,
-    /// Temp snapshot to create Rc.
-    root_snapshot: Snapshot<Node<K, V>, CsEBR>,
-}
-
-impl<K, V> OutputHolder<V> for Cursor<K, V> {
-    fn default() -> Self {
-        Self {
-            holder: Holder {
-                root: Default::default(),
-                curr: Default::default(),
-                temp: Default::default(),
-                found: None,
-            },
-            root_snapshot: Default::default(),
-        }
-    }
-
+impl<K, V> OutputHolder<V> for Snapshot<Node<K, V>, CsEBR> {
     fn output(&self) -> &V {
-        self.holder.found.as_ref().unwrap()
+        self.as_ref().map(|node| &node.value).unwrap()
     }
 }
 
@@ -131,8 +106,11 @@ where
     K: Ord + Clone,
     V: Clone,
 {
-    fn new(root_link: &'g AtomicRc<Node<K, V>, CsEBR>, holder: &'g mut Holder<K, V>) -> Self {
-        Self { root_link, holder }
+    fn new(root_link: &'g AtomicRc<Node<K, V>, CsEBR>, curr_root: TaggedCnt<Node<K, V>>) -> Self {
+        Self {
+            root_link,
+            curr_root,
+        }
     }
 
     // TODO get ref of K, V and clone here
@@ -460,45 +438,46 @@ where
     }
 
     #[inline]
-    fn do_remove<P>(&mut self, node: P, key: &K, cs: &CsEBR) -> (Rc<Node<K, V>, CsEBR>, bool)
-    where
-        P: StrongPtr<Node<K, V>, CsEBR>,
-    {
+    fn do_remove(
+        &mut self,
+        node: &Snapshot<Node<K, V>, CsEBR>,
+        key: &K,
+        cs: &CsEBR,
+    ) -> (Rc<Node<K, V>, CsEBR>, Option<Snapshot<Node<K, V>, CsEBR>>) {
         if Node::is_retired_spot(&node) {
-            return (Node::retired_node(), false);
+            return (Node::retired_node(), None);
         }
 
         if node.is_null() {
-            return (Rc::null(), false);
+            return (Rc::null(), None);
         }
 
         let node_ref = unsafe { node.deref() };
         let (left, right) = node_ref.load_children(cs);
 
         if !self.check_root() || Node::is_retired_spot(&left) || Node::is_retired_spot(&right) {
-            return (Node::retired_node(), false);
+            return (Node::retired_node(), None);
         }
 
         match node_ref.key.cmp(key) {
             cmp::Ordering::Equal => {
-                self.holder.found = Some(node_ref.value.clone());
                 if node_ref.size == 1 {
-                    return (Rc::null(), true);
+                    return (Rc::null(), Some(*node));
                 }
 
                 if !left.is_null() {
                     let (new_left, succ) = self.pull_rightmost(left, cs);
-                    return (self.mk_balanced(&succ, new_left, right, cs), true);
+                    return (self.mk_balanced(&succ, new_left, right, cs), Some(*node));
                 }
                 let (new_right, succ) = self.pull_leftmost(right, cs);
-                (self.mk_balanced(&succ, left, new_right, cs), true)
+                (self.mk_balanced(&succ, left, new_right, cs), Some(*node))
             }
             cmp::Ordering::Less => {
-                let (new_right, found) = self.do_remove(right, key, cs);
+                let (new_right, found) = self.do_remove(&right, key, cs);
                 (self.mk_balanced(&node, left, new_right, cs), found)
             }
             cmp::Ordering::Greater => {
-                let (new_left, found) = self.do_remove(left, key, cs);
+                let (new_left, found) = self.do_remove(&left, key, cs);
                 (self.mk_balanced(&node, new_left, right, cs), found)
             }
         }
@@ -573,7 +552,7 @@ where
     }
 
     pub fn check_root(&self) -> bool {
-        self.holder.root == self.root_link.load(Ordering::Acquire)
+        self.curr_root == self.root_link.load(Ordering::Acquire)
     }
 }
 
@@ -592,41 +571,35 @@ where
         }
     }
 
-    pub fn get(&self, key: &K, holder: &mut Holder<K, V>, cs: &CsEBR) -> bool {
+    pub fn get(&self, key: &K, cs: &CsEBR) -> Option<Snapshot<Node<K, V>, CsEBR>> {
         loop {
-            // NOTE: In this context, `holder.curr` and `holder.temp` is similar
-            // to `curr` and `next` in a HHSList traversal.
-            holder.curr.load(&self.root, cs);
-            loop {
-                let curr_node = some_or!(holder.curr.as_ref(), return false);
-                let next_link = match key.cmp(&curr_node.key) {
+            let mut node = self.root.load_ss(cs);
+            while !node.is_null() && !Node::is_retired(node.as_ptr()) {
+                let node_ref = unsafe { node.deref() };
+                match key.cmp(&node_ref.key) {
                     cmp::Ordering::Equal => break,
-                    cmp::Ordering::Less => &curr_node.left,
-                    cmp::Ordering::Greater => &curr_node.right,
-                };
-                holder.temp.load(next_link, cs);
-                Snapshot::swap(&mut holder.curr, &mut holder.temp);
+                    cmp::Ordering::Less => node = node_ref.left.load_ss(cs),
+                    cmp::Ordering::Greater => node = node_ref.right.load_ss(cs),
+                }
             }
 
-            if Node::is_retired_spot(&holder.curr) {
+            if Node::is_retired_spot(&node) {
                 continue;
             }
 
-            if holder.curr.is_null() {
-                return false;
+            if node.is_null() {
+                return None;
             }
 
-            holder.found = Some(unsafe { holder.curr.deref() }.value.clone());
-            return true;
+            return Some(node);
         }
     }
 
-    pub fn insert(&self, key: K, value: V, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> bool {
-        let mut state = State::new(&self.root, &mut cursor.holder);
+    pub fn insert(&self, key: K, value: V, cs: &CsEBR) -> bool {
         loop {
-            cursor.root_snapshot.load(&self.root, cs);
-            state.holder.root = cursor.root_snapshot.as_ptr();
-            let (new_root, inserted) = state.do_insert(&cursor.root_snapshot, &key, &value, cs);
+            let curr_root = self.root.load_ss(cs);
+            let mut state = State::new(&self.root, curr_root.as_ptr());
+            let (new_root, inserted) = state.do_insert(curr_root, &key, &value, cs);
 
             if Node::is_retired(new_root.as_ptr()) {
                 continue;
@@ -635,7 +608,7 @@ where
             if self
                 .root
                 .compare_exchange(
-                    cursor.root_snapshot.as_ptr(),
+                    curr_root.as_ptr(),
                     new_root,
                     Ordering::AcqRel,
                     Ordering::Acquire,
@@ -648,12 +621,11 @@ where
         }
     }
 
-    pub fn remove(&self, key: &K, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> bool {
-        let mut state = State::new(&self.root, &mut cursor.holder);
+    pub fn remove(&self, key: &K, cs: &CsEBR) -> Option<Snapshot<Node<K, V>, CsEBR>> {
         loop {
-            cursor.root_snapshot.load(&self.root, cs);
-            state.holder.root = cursor.root_snapshot.as_ptr();
-            let (new_root, found) = state.do_remove(&cursor.root_snapshot, key, cs);
+            let curr_root = self.root.load_ss(cs);
+            let mut state = State::new(&self.root, curr_root.as_ptr());
+            let (new_root, found) = state.do_remove(&curr_root, key, cs);
 
             if Node::is_retired(new_root.as_ptr()) {
                 continue;
@@ -662,7 +634,7 @@ where
             if self
                 .root
                 .compare_exchange(
-                    cursor.root_snapshot.as_ptr(),
+                    curr_root.as_ptr(),
                     new_root,
                     Ordering::AcqRel,
                     Ordering::Acquire,
@@ -681,22 +653,22 @@ where
     K: Ord + Clone,
     V: Clone,
 {
-    type Output = Cursor<K, V>;
+    type Output = Snapshot<Node<K, V>, CsEBR>;
 
     fn new() -> Self {
         BonsaiTreeMap::new()
     }
 
-    fn get(&self, key: &K, output: &mut Self::Output, cs: &CsEBR) -> bool {
-        self.get(key, &mut output.holder, cs)
+    fn get(&self, key: &K, cs: &CsEBR) -> Option<Self::Output> {
+        self.get(key, cs)
     }
 
-    fn insert(&self, key: K, value: V, output: &mut Self::Output, cs: &CsEBR) -> bool {
-        self.insert(key, value, output, cs)
+    fn insert(&self, key: K, value: V, cs: &CsEBR) -> bool {
+        self.insert(key, value, cs)
     }
 
-    fn remove(&self, key: &K, output: &mut Self::Output, cs: &CsEBR) -> bool {
-        self.remove(key, output, cs)
+    fn remove(&self, key: &K, cs: &CsEBR) -> Option<Self::Output> {
+        self.remove(key, cs)
     }
 }
 

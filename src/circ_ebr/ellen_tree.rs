@@ -1,6 +1,6 @@
 use bitflags::bitflags;
 use circ::{AtomicRc, CompareExchangeErrorRc, CsEBR, Pointer, Rc, Snapshot, StrongPtr, Weak};
-use std::{mem::swap, sync::atomic::Ordering};
+use std::sync::atomic::Ordering;
 
 use super::{concurrent_map::OutputHolder, ConcurrentMap};
 
@@ -89,16 +89,12 @@ pub struct Node<K, V> {
     update: AtomicRc<Update<K, V>, CsEBR>,
     left: AtomicRc<Node<K, V>, CsEBR>,
     right: AtomicRc<Node<K, V>, CsEBR>,
-    is_leaf: bool,
 }
 
 pub struct Update<K, V> {
     gp: Weak<Node<K, V>, CsEBR>,
-    gp_p_dir: Direction,
     p: Weak<Node<K, V>, CsEBR>,
-    p_l_dir: Direction,
     l: Rc<Node<K, V>, CsEBR>,
-    l_other: Rc<Node<K, V>, CsEBR>,
     pupdate: Rc<Update<K, V>, CsEBR>,
     new_internal: Rc<Node<K, V>, CsEBR>,
 }
@@ -111,7 +107,6 @@ impl<K, V> Node<K, V> {
             update: AtomicRc::null(),
             left: AtomicRc::new(left),
             right: AtomicRc::new(right),
-            is_leaf: false,
         }
     }
 
@@ -122,7 +117,6 @@ impl<K, V> Node<K, V> {
             update: AtomicRc::null(),
             left: AtomicRc::null(),
             right: AtomicRc::null(),
-            is_leaf: true,
         }
     }
 
@@ -132,37 +126,42 @@ impl<K, V> Node<K, V> {
             Direction::R => &self.right,
         }
     }
+
+    pub fn is_leaf(&self) -> bool {
+        self.left.load(Ordering::Acquire).is_null()
+    }
 }
 
-pub struct Finder<K, V> {
+impl<K, V> OutputHolder<V> for Snapshot<Node<K, V>, CsEBR> {
+    fn output(&self) -> &V {
+        self.as_ref()
+            .map(|node| node.value.as_ref().unwrap())
+            .unwrap()
+    }
+}
+
+pub struct Cursor<K, V> {
     gp: Snapshot<Node<K, V>, CsEBR>,
-    gp_p_dir: Direction,
     p: Snapshot<Node<K, V>, CsEBR>,
-    p_l_dir: Direction,
     l: Snapshot<Node<K, V>, CsEBR>,
-    l_other: Snapshot<Node<K, V>, CsEBR>,
     pupdate: Snapshot<Update<K, V>, CsEBR>,
     gpupdate: Snapshot<Update<K, V>, CsEBR>,
-    new_update: Snapshot<Update<K, V>, CsEBR>,
 }
 
-impl<K, V> Finder<K, V> {
-    fn new() -> Self {
+impl<K, V> Cursor<K, V> {
+    fn new(root: &AtomicRc<Node<K, V>, CsEBR>, cs: &CsEBR) -> Self {
+        let l = root.load_ss(cs);
         Self {
             gp: Snapshot::new(),
-            gp_p_dir: Direction::L,
             p: Snapshot::new(),
-            p_l_dir: Direction::L,
-            l: Snapshot::new(),
-            l_other: Snapshot::new(),
+            l,
             pupdate: Snapshot::new(),
             gpupdate: Snapshot::new(),
-            new_update: Snapshot::new(),
         }
     }
 }
 
-impl<K, V> Finder<K, V>
+impl<K, V> Cursor<K, V>
 where
     K: Ord + Clone,
     V: Clone,
@@ -180,25 +179,20 @@ where
     ///     - either gp → left has contained p (if k < gp → key) or gp → right has contained p (if k ≥ gp → key)
     ///     - gp → update has contained gpupdate
     #[inline]
-    fn search(&mut self, root: &AtomicRc<Node<K, V>, CsEBR>, key: &K, cs: &CsEBR) {
-        self.l.load(root, cs);
+    fn search(&mut self, key: &K, cs: &CsEBR) {
         loop {
             let l_node = unsafe { self.l.deref() };
-            if l_node.is_leaf {
+            if l_node.is_leaf() {
                 break;
             }
-            Snapshot::swap(&mut self.gp, &mut self.p);
-            swap(&mut self.gp_p_dir, &mut self.p_l_dir);
-            Snapshot::swap(&mut self.p, &mut self.l);
-            Snapshot::swap(&mut self.gpupdate, &mut self.pupdate);
-            self.pupdate.load(&l_node.update, cs);
-            let (l, l_other, dir) = match l_node.key.cmp(key) {
-                std::cmp::Ordering::Greater => (&l_node.left, &l_node.right, Direction::L),
-                _ => (&l_node.right, &l_node.left, Direction::R),
-            };
-            self.l.load(l, cs);
-            self.l_other.load(l_other, cs);
-            self.p_l_dir = dir;
+            self.gp = self.p;
+            self.p = self.l;
+            self.gpupdate = self.pupdate;
+            self.pupdate = l_node.update.load_ss(cs);
+            self.l = match l_node.key.cmp(key) {
+                std::cmp::Ordering::Greater => l_node.left.load_ss(cs),
+                _ => l_node.right.load_ss(cs),
+            }
         }
     }
 }
@@ -216,22 +210,16 @@ impl<K, V> Helper<K, V> {
         }
     }
 
-    fn load_delete(
-        &mut self,
-        op: &Snapshot<Update<K, V>, CsEBR>,
-        cs: &CsEBR,
-    ) -> Option<(&Update<K, V>, &Node<K, V>, &Node<K, V>)> {
+    fn load_delete(&mut self, op: Snapshot<Update<K, V>, CsEBR>, cs: &CsEBR) -> bool {
         let op_ref = unsafe { op.deref() };
 
         let gp_ref = if self.gp.protect_weak(&op_ref.gp, cs) {
             self.gp.as_ref().unwrap()
         } else {
-            return None;
+            return false;
         };
 
-        let p_ref = if self.p.protect_weak(&op_ref.p, cs) {
-            self.p.as_ref().unwrap()
-        } else {
+        if !self.p.protect_weak(&op_ref.p, cs) {
             // Unflag to preserve lock-freedom.
             let _ = gp_ref.update.compare_exchange_tag(
                 op.with_tag(UpdateTag::DFLAG.bits()),
@@ -240,32 +228,10 @@ impl<K, V> Helper<K, V> {
                 Ordering::Relaxed,
                 cs,
             );
-            return None;
-        };
-
-        Some((op_ref, gp_ref, p_ref))
-    }
-}
-
-pub struct Cursor<K, V> {
-    finder: Finder<K, V>,
-    helper: Helper<K, V>,
-    helping_op1: Snapshot<Update<K, V>, CsEBR>,
-    helping_op2: Snapshot<Update<K, V>, CsEBR>,
-}
-
-impl<K, V> OutputHolder<V> for Cursor<K, V> {
-    fn default() -> Self {
-        Self {
-            finder: Finder::new(),
-            helper: Helper::new(),
-            helping_op1: Snapshot::new(),
-            helping_op2: Snapshot::new(),
+            return false;
         }
-    }
 
-    fn output(&self) -> &V {
-        unsafe { self.finder.l.deref() }.value.as_ref().unwrap()
+        true
     }
 }
 
@@ -291,28 +257,28 @@ where
     K: Ord + Clone,
     V: Clone,
 {
-    pub fn find(&self, key: &K, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> bool {
-        cursor.finder.search(&self.root, key, cs);
-        let l_node = cursor.finder.l.as_ref().unwrap();
-        l_node.key.eq(key)
+    pub fn find(&self, key: &K, cs: &CsEBR) -> Option<Snapshot<Node<K, V>, CsEBR>> {
+        let mut cursor = Cursor::new(&self.root, cs);
+        cursor.search(key, cs);
+        let l_node = cursor.l.as_ref().unwrap();
+        if l_node.key.eq(key) {
+            Some(cursor.l)
+        } else {
+            None
+        }
     }
 
-    pub fn insert(&self, key: K, value: V, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> bool {
+    pub fn insert(&self, key: K, value: V, cs: &CsEBR) -> bool {
         loop {
-            let finder = &mut cursor.finder;
-            finder.search(&self.root, &key, cs);
-            let l_node = finder.l.as_ref().unwrap();
-            let p_node = finder.p.as_ref().unwrap();
+            let mut cursor = Cursor::new(&self.root, cs);
+            cursor.search(&key, cs);
+            let l_node = cursor.l.as_ref().unwrap();
+            let p_node = cursor.p.as_ref().unwrap();
 
             if l_node.key == key {
                 return false;
-            } else if finder.pupdate.tag() != UpdateTag::CLEAN.bits() {
-                self.help(
-                    &mut finder.pupdate,
-                    &mut cursor.helping_op2,
-                    &mut cursor.helper,
-                    cs,
-                );
+            } else if cursor.pupdate.tag() != UpdateTag::CLEAN.bits() {
+                self.help(cursor.pupdate, cs);
             } else {
                 let new = Node::leaf(Key::Fin(key.clone()), Some(value.clone()));
                 let new_sibling = Node::leaf(l_node.key.clone(), l_node.value.clone());
@@ -333,121 +299,93 @@ where
                 ));
 
                 let op = Update {
-                    p: Weak::from_strong(&finder.p),
-                    p_l_dir: finder.p_l_dir,
-                    l: Rc::from_snapshot(&finder.l),
-                    l_other: Rc::from_snapshot(&finder.l_other),
+                    p: Weak::from_strong(&cursor.p),
+                    l: Rc::from_snapshot(&cursor.l),
                     new_internal,
                     gp: Weak::null(),
-                    gp_p_dir: Direction::L,
                     pupdate: Rc::null(),
                 };
 
                 let new_pupdate = Rc::new(op).with_tag(UpdateTag::IFLAG.bits());
-                finder.new_update.protect(&new_pupdate, cs);
+                let mut new_update_ss = Snapshot::new();
+                let mut helping = Snapshot::new();
+                new_update_ss.protect(&new_pupdate, cs);
 
                 match p_node.update.compare_exchange_protecting_current(
-                    finder.pupdate.as_ptr(),
+                    cursor.pupdate.as_ptr(),
                     new_pupdate,
-                    &mut cursor.helping_op1,
+                    &mut helping,
                     Ordering::Release,
                     Ordering::Relaxed,
                     cs,
                 ) {
                     Ok(_) => {
-                        self.help_insert(&finder.new_update, &mut cursor.helper, cs);
+                        self.help_insert(new_update_ss, cs);
                         return true;
                     }
                     Err(e) => unsafe {
                         let new_pupdate = e.desired().into_inner().unwrap();
                         drop(new_pupdate.new_internal.into_inner().unwrap());
-                        self.help(
-                            &mut cursor.helping_op1,
-                            &mut cursor.helping_op2,
-                            &mut cursor.helper,
-                            cs,
-                        );
+                        self.help(helping, cs);
                     },
                 }
             }
         }
     }
 
-    pub fn delete(&self, key: &K, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> bool {
+    pub fn delete(&self, key: &K, cs: &CsEBR) -> Option<Snapshot<Node<K, V>, CsEBR>> {
         loop {
-            let finder = &mut cursor.finder;
-            finder.search(&self.root, key, cs);
+            let mut cursor = Cursor::new(&self.root, cs);
+            cursor.search(key, cs);
 
-            if finder.gp.is_null() {
+            if cursor.gp.is_null() {
                 // The tree is empty. There's no more things to do.
-                return false;
+                return None;
             }
 
-            let l_node = finder.l.as_ref().unwrap();
+            let l_node = cursor.l.as_ref().unwrap();
 
             if l_node.key != Key::Fin(key.clone()) {
-                return false;
+                return None;
             }
-            if finder.gpupdate.tag() != UpdateTag::CLEAN.bits() {
-                self.help(
-                    &mut finder.gpupdate,
-                    &mut cursor.helping_op2,
-                    &mut cursor.helper,
-                    cs,
-                );
-            } else if finder.pupdate.tag() != UpdateTag::CLEAN.bits() {
-                self.help(
-                    &mut finder.pupdate,
-                    &mut cursor.helping_op2,
-                    &mut cursor.helper,
-                    cs,
-                );
+            if cursor.gpupdate.tag() != UpdateTag::CLEAN.bits() {
+                self.help(cursor.gpupdate, cs);
+            } else if cursor.pupdate.tag() != UpdateTag::CLEAN.bits() {
+                self.help(cursor.pupdate, cs);
             } else {
                 let op = Update {
-                    gp: Weak::from_strong(&finder.gp),
-                    gp_p_dir: finder.gp_p_dir,
-                    p: Weak::from_strong(&finder.p),
-                    p_l_dir: finder.p_l_dir,
-                    l: Rc::from_snapshot(&finder.l),
-                    l_other: Rc::from_snapshot(&finder.l_other),
-                    pupdate: Rc::from_snapshot(&finder.pupdate),
+                    gp: Weak::from_strong(&cursor.gp),
+                    p: Weak::from_strong(&cursor.p),
+                    l: Rc::from_snapshot(&cursor.l),
+                    pupdate: Rc::from_snapshot(&cursor.pupdate),
                     new_internal: Rc::null(),
                 };
 
                 let new_update = Rc::new(op).with_tag(UpdateTag::DFLAG.bits());
-                finder.pupdate.protect(&new_update, cs);
+                cursor.pupdate.protect(&new_update, cs);
+                let mut helping = Snapshot::new();
 
-                match finder
+                match cursor
                     .gp
                     .as_ref()
                     .unwrap()
                     .update
                     .compare_exchange_protecting_current(
-                        finder.gpupdate.as_ptr(),
+                        cursor.gpupdate.as_ptr(),
                         new_update,
-                        &mut cursor.helping_op1,
+                        &mut helping,
                         Ordering::Release,
                         Ordering::Relaxed,
                         cs,
                     ) {
                     Ok(_) => {
-                        if self.help_delete(
-                            &mut finder.pupdate,
-                            &mut cursor.helping_op1,
-                            &mut cursor.helper,
-                            cs,
-                        ) {
-                            return true;
+                        if self.help_delete(cursor.pupdate, cs) {
+                            return Some(cursor.l);
                         }
                     }
                     Err(e) => unsafe {
                         drop(e.desired().into_inner().unwrap());
-                        self.help(
-                            &mut cursor.helping_op1,
-                            &mut cursor.helping_op2,
-                            &mut cursor.helper,
-                            cs,
-                        );
+                        self.help(helping, cs);
                     },
                 }
             }
@@ -455,51 +393,45 @@ where
     }
 
     #[inline]
-    fn help(
-        &self,
-        op: &mut Snapshot<Update<K, V>, CsEBR>,
-        aux: &mut Snapshot<Update<K, V>, CsEBR>,
-        helper: &mut Helper<K, V>,
-        cs: &CsEBR,
-    ) {
+    fn help(&self, op: Snapshot<Update<K, V>, CsEBR>, cs: &CsEBR) {
         match UpdateTag::from_bits_truncate(op.tag()) {
-            UpdateTag::IFLAG => self.help_insert(op, helper, cs),
-            UpdateTag::MARK => self.help_marked(op, helper, cs),
+            UpdateTag::IFLAG => self.help_insert(op, cs),
+            UpdateTag::MARK => self.help_marked(op, cs),
             UpdateTag::DFLAG => {
-                let _ = self.help_delete(op, aux, helper, cs);
+                let _ = self.help_delete(op, cs);
             }
             _ => {}
         }
     }
 
-    fn help_delete(
-        &self,
-        op: &mut Snapshot<Update<K, V>, CsEBR>,
-        aux: &mut Snapshot<Update<K, V>, CsEBR>,
-        helper: &mut Helper<K, V>,
-        cs: &CsEBR,
-    ) -> bool {
+    fn help_delete(&self, op: Snapshot<Update<K, V>, CsEBR>, cs: &CsEBR) -> bool {
         // Precondition: op points to a DInfo record (i.e., it is not ⊥)
-        let (op_ref, gp_ref, p_ref) = some_or!(helper.load_delete(op, cs), return false);
+        let mut helper = Helper::new();
+        helper.load_delete(op, cs);
 
+        let op_ref = unsafe { op.deref() };
+        let p_ref = unsafe { helper.p.deref() };
+        let gp_ref = unsafe { helper.gp.deref() };
+
+        let mut aux = Snapshot::new();
         match p_ref.update.compare_exchange_protecting_current(
             op_ref.pupdate.as_ptr(),
             op.with_tag(UpdateTag::MARK.bits()),
-            aux,
+            &mut aux,
             Ordering::Release,
             Ordering::Acquire,
             cs,
         ) {
             Ok(_) => {
                 // (prev value) = op → pupdate
-                self.help_marked(op, helper, cs);
+                self.help_marked(op, cs);
                 return true;
             }
             Err(e) => match e {
                 CompareExchangeErrorRc::Changed { current, .. } => {
                     if current == op.with_tag(UpdateTag::MARK.bits()).as_ptr() {
                         // (prev value) = <Mark, op>
-                        self.help_marked(op, helper, cs);
+                        self.help_marked(op, cs);
                         return true;
                     } else {
                         let _ = gp_ref.update.compare_exchange_tag(
@@ -509,7 +441,7 @@ where
                             Ordering::Relaxed,
                             cs,
                         );
-                        self.help(aux, op, helper, cs);
+                        self.help(aux, cs);
                         return false;
                     }
                 }
@@ -518,23 +450,24 @@ where
         }
     }
 
-    fn help_marked(
-        &self,
-        op: &Snapshot<Update<K, V>, CsEBR>,
-        helper: &mut Helper<K, V>,
-        cs: &CsEBR,
-    ) {
+    fn help_marked(&self, op: Snapshot<Update<K, V>, CsEBR>, cs: &CsEBR) {
         // Precondition: op points to a DInfo record (i.e., it is not ⊥)
-        let (op_ref, gp_ref, _) = some_or!(helper.load_delete(op, cs), return);
+        let mut helper = Helper::new();
+        helper.load_delete(op, cs);
+
+        let p_ref = unsafe { helper.p.deref() };
+        let gp_ref = unsafe { helper.gp.deref() };
+
+        let other = if p_ref.right.load(Ordering::Acquire) == unsafe { op.deref() }.l.as_ptr() {
+            &p_ref.left
+        } else {
+            &p_ref.right
+        };
+        // Splice the node to which op → p points out of the tree, replacing it by other
+        let other_sh = other.load_ss(cs);
 
         // dchild CAS
-        let _ = gp_ref.child(op_ref.gp_p_dir).compare_exchange(
-            op_ref.p.as_ptr(),
-            op_ref.l_other.clone(),
-            Ordering::Release,
-            Ordering::Relaxed,
-            cs,
-        );
+        self.cas_child(helper.gp, helper.p, other_sh, cs);
 
         // dunflag CAS
         let _ = gp_ref.update.compare_exchange_tag(
@@ -546,28 +479,23 @@ where
         );
     }
 
-    fn help_insert(
-        &self,
-        op: &Snapshot<Update<K, V>, CsEBR>,
-        helper: &mut Helper<K, V>,
-        cs: &CsEBR,
-    ) {
+    fn help_insert(&self, op: Snapshot<Update<K, V>, CsEBR>, cs: &CsEBR) {
         // Precondition: op points to a IInfo record (i.e., it is not ⊥)
         let op_ref = unsafe { op.deref() };
-        if !helper.p.protect_weak(&op_ref.p, cs) {
+        let mut p = Snapshot::new();
+        if !p.protect_weak(&op_ref.p, cs) {
             return;
         }
 
-        let p_ref = helper.p.as_ref().unwrap();
+        let mut l = Snapshot::new();
+        l.protect(&op_ref.l, cs);
+        let mut new_internal = Snapshot::new();
+        new_internal.protect(&op_ref.new_internal, cs);
+
+        let p_ref = p.as_ref().unwrap();
 
         // ichild CAS
-        let _ = p_ref.child(op_ref.p_l_dir).compare_exchange(
-            op_ref.l.as_ptr(),
-            op_ref.new_internal.clone(),
-            Ordering::Release,
-            Ordering::Relaxed,
-            cs,
-        );
+        self.cas_child(p, l, new_internal, cs);
 
         // iunflag CAS
         let _ = p_ref.update.compare_exchange_tag(
@@ -578,6 +506,25 @@ where
             cs,
         );
     }
+
+    fn cas_child(
+        &self,
+        parent: Snapshot<Node<K, V>, CsEBR>,
+        old: Snapshot<Node<K, V>, CsEBR>,
+        new: Snapshot<Node<K, V>, CsEBR>,
+        cs: &CsEBR,
+    ) -> bool {
+        let new_node = unsafe { new.deref() };
+        let parent_node = unsafe { parent.deref() };
+        let node_to_cas = if new_node.key < parent_node.key {
+            &parent_node.left
+        } else {
+            &parent_node.right
+        };
+        node_to_cas
+            .compare_exchange(old.as_ptr(), new, Ordering::Release, Ordering::Relaxed, cs)
+            .is_ok()
+    }
 }
 
 impl<K, V> ConcurrentMap<K, V> for EFRBTree<K, V>
@@ -585,25 +532,25 @@ where
     K: Ord + Clone,
     V: Clone,
 {
-    type Output = Cursor<K, V>;
+    type Output = Snapshot<Node<K, V>, CsEBR>;
 
     fn new() -> Self {
         EFRBTree::new()
     }
 
     #[inline(always)]
-    fn get(&self, key: &K, output: &mut Self::Output, cs: &CsEBR) -> bool {
-        self.find(key, output, cs)
+    fn get(&self, key: &K, cs: &CsEBR) -> Option<Self::Output> {
+        self.find(key, cs)
     }
 
     #[inline(always)]
-    fn insert(&self, key: K, value: V, output: &mut Self::Output, cs: &CsEBR) -> bool {
-        self.insert(key, value, output, cs)
+    fn insert(&self, key: K, value: V, cs: &CsEBR) -> bool {
+        self.insert(key, value, cs)
     }
 
     #[inline(always)]
-    fn remove(&self, key: &K, output: &mut Self::Output, cs: &CsEBR) -> bool {
-        self.delete(key, output, cs)
+    fn remove(&self, key: &K, cs: &CsEBR) -> Option<Self::Output> {
+        self.delete(key, cs)
     }
 }
 

@@ -1,21 +1,16 @@
 use circ::CsEBR;
 
 pub trait OutputHolder<V> {
-    fn default() -> Self;
     fn output(&self) -> &V;
 }
 
 pub trait ConcurrentMap<K, V> {
     type Output: OutputHolder<V>;
 
-    fn empty_output() -> Self::Output {
-        <Self::Output as OutputHolder<V>>::default()
-    }
-
     fn new() -> Self;
-    fn get(&self, key: &K, output: &mut Self::Output, cs: &CsEBR) -> bool;
-    fn insert(&self, key: K, value: V, output: &mut Self::Output, cs: &CsEBR) -> bool;
-    fn remove(&self, key: &K, output: &mut Self::Output, cs: &CsEBR) -> bool;
+    fn get(&self, key: &K, cs: &CsEBR) -> Option<Self::Output>;
+    fn insert(&self, key: K, value: V, cs: &CsEBR) -> bool;
+    fn remove(&self, key: &K, cs: &CsEBR) -> Option<Self::Output>;
 }
 
 #[cfg(test)]
@@ -35,13 +30,12 @@ pub mod tests {
         thread::scope(|s| {
             for t in 0..THREADS {
                 s.spawn(move |_| {
-                    let output = &mut M::empty_output();
                     let mut rng = rand::thread_rng();
                     let mut keys: Vec<i32> =
                         (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        assert!(map.insert(i, i.to_string(), output, &CsEBR::new()));
+                        assert!(map.insert(i, i.to_string(), &CsEBR::new()));
                     }
                 });
             }
@@ -51,15 +45,13 @@ pub mod tests {
         thread::scope(|s| {
             for t in 0..(THREADS / 2) {
                 s.spawn(move |_| {
-                    let output = &mut M::empty_output();
                     let mut rng = rand::thread_rng();
                     let mut keys: Vec<i32> =
                         (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
                     keys.shuffle(&mut rng);
                     let cs = &mut CsEBR::new();
                     for i in keys {
-                        assert!(map.remove(&i, output, cs));
-                        assert_eq!(i.to_string(), *output.output());
+                        assert_eq!(i.to_string(), *map.remove(&i, cs).unwrap().output());
                         cs.clear();
                     }
                 });
@@ -70,15 +62,13 @@ pub mod tests {
         thread::scope(|s| {
             for t in (THREADS / 2)..THREADS {
                 s.spawn(move |_| {
-                    let output = &mut M::empty_output();
                     let mut rng = rand::thread_rng();
                     let mut keys: Vec<i32> =
                         (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
                     keys.shuffle(&mut rng);
                     let cs = &mut CsEBR::new();
                     for i in keys {
-                        assert!(map.get(&i, output, cs));
-                        assert_eq!(i.to_string(), *output.output());
+                        assert_eq!(i.to_string(), *map.get(&i, cs).unwrap().output());
                         cs.clear();
                     }
                 });

@@ -8,7 +8,7 @@ const MAX_HEIGHT: usize = 32;
 
 type Tower<K, V> = [AtomicRc<Node<K, V>, CsEBR>; MAX_HEIGHT];
 
-struct Node<K, V> {
+pub struct Node<K, V> {
     key: K,
     value: V,
     next: Tower<K, V>,
@@ -101,30 +101,23 @@ where
 pub struct Cursor<K, V> {
     preds: [Snapshot<Node<K, V>, CsEBR>; MAX_HEIGHT],
     succs: [Snapshot<Node<K, V>, CsEBR>; MAX_HEIGHT],
-    /// `found_value` is not set by a traversal function.
-    /// It must be manually set in Get/Remove function.
-    found_value: Option<V>,
+    found: Option<Snapshot<Node<K, V>, CsEBR>>,
 }
 
-impl<K, V> OutputHolder<V> for Cursor<K, V> {
-    fn default() -> Self {
-        Self {
-            preds: core::array::from_fn(|_| Default::default()),
-            succs: Default::default(),
-            found_value: None,
-        }
-    }
-
+impl<K, V> OutputHolder<V> for Snapshot<Node<K, V>, CsEBR> {
     fn output(&self) -> &V {
-        self.found_value.as_ref().unwrap()
+        self.as_ref().map(|node| &node.value).unwrap()
     }
 }
 
 impl<K, V> Cursor<K, V> {
-    fn initialize(&mut self, head: &AtomicRc<Node<K, V>, CsEBR>, cs: &CsEBR) {
+    fn new(head: &AtomicRc<Node<K, V>, CsEBR>, cs: &CsEBR) -> Self {
         let head = head.load_ss(cs);
-        self.preds.fill(head);
-        self.succs.fill(Snapshot::new());
+        Self {
+            preds: [head; MAX_HEIGHT],
+            succs: [Snapshot::new(); MAX_HEIGHT],
+            found: None,
+        }
     }
 }
 
@@ -179,9 +172,9 @@ where
         return None;
     }
 
-    fn find(&self, key: &K, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> Option<usize> {
+    fn find(&self, key: &K, cs: &CsEBR) -> Cursor<K, V> {
         'search: loop {
-            cursor.initialize(&self.head, cs);
+            let mut cursor = Cursor::new(&self.head, cs);
             let head = cursor.preds[0];
 
             let mut level = MAX_HEIGHT;
@@ -193,7 +186,6 @@ where
                 level -= 1;
             }
 
-            let mut found_level = None;
             let mut pred = head;
             while level >= 1 {
                 level -= 1;
@@ -224,7 +216,7 @@ where
                     match curr_ref.key.cmp(key) {
                         std::cmp::Ordering::Greater => break,
                         std::cmp::Ordering::Equal => {
-                            found_level = Some(level);
+                            cursor.found = Some(curr);
                             break;
                         }
                         std::cmp::Ordering::Less => {}
@@ -239,7 +231,7 @@ where
                 cursor.succs[level] = curr;
             }
 
-            return found_level;
+            return cursor;
         }
     }
 
@@ -273,8 +265,9 @@ where
         }
     }
 
-    pub fn insert(&self, key: K, value: V, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> bool {
-        if self.find(&key, cursor, cs).is_some() {
+    pub fn insert(&self, key: K, value: V, cs: &CsEBR) -> bool {
+        let mut cursor = self.find(&key, cs);
+        if cursor.found.is_some() {
             return false;
         }
 
@@ -306,7 +299,8 @@ where
             }
 
             // We failed. Let's search for the key and try again.
-            if self.find(&new_node_ref.key, cursor, cs).is_some() {
+            cursor = self.find(&new_node_ref.key, cs);
+            if cursor.found.is_some() {
                 drop(unsafe { new_node.into_inner() });
                 return false;
             }
@@ -328,18 +322,15 @@ where
                 let succ_ptr = cursor.succs[level].as_ptr();
                 let (succ_rc, succ_dt) = cursor.succs[level].loan();
 
-                match new_node_ref.next[level].compare_exchange(
+                if let Err(e) = new_node_ref.next[level].compare_exchange(
                     next.as_ptr(),
                     succ_rc,
                     Ordering::SeqCst,
                     Ordering::SeqCst,
                     cs,
                 ) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        succ_dt.repay(e.desired());
-                        break 'build;
-                    }
+                    succ_dt.repay(e.desired());
+                    break 'build;
                 }
 
                 // Try installing the new node at the current level.
@@ -382,29 +373,22 @@ where
                 }
 
                 // Installation failed.
-                self.find(&new_node_ref.key, cursor, cs);
+                cursor = self.find(&new_node_ref.key, cs);
             }
         }
 
         true
     }
 
-    pub fn remove(&self, key: &K, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> bool {
+    pub fn remove(&self, key: &K, cs: &CsEBR) -> Option<Snapshot<Node<K, V>, CsEBR>> {
         loop {
-            let found_level = self.find(key, cursor, cs);
-            if found_level.is_none() {
-                return false;
-            }
-            let found_level = found_level.unwrap();
-            let height = unsafe { cursor.succs[found_level].deref() }.height;
-            cursor.found_value = Some(unsafe { cursor.succs[found_level].deref() }.value.clone());
-            debug_assert!(cursor.succs[found_level].as_ptr().tag() == 0);
+            let cursor = self.find(key, cs);
+            let node = unsafe { cursor.found?.deref() };
 
             // Try removing the node by marking its tower.
-            if unsafe { cursor.succs[found_level].deref() }.mark_tower(cs) {
-                for level in (0..height).rev() {
-                    let mut next =
-                        unsafe { cursor.succs[found_level].deref() }.next[level].load_ss(cs);
+            if node.mark_tower(cs) {
+                for level in (0..node.height).rev() {
+                    let mut next = node.next[level].load_ss(cs);
                     if (next.tag() & 2) != 0 {
                         continue;
                     }
@@ -412,16 +396,16 @@ where
                     next.set_tag(0);
                     if !self.help_unlink(
                         &cursor.preds[level],
-                        &cursor.succs[found_level],
+                        cursor.found.as_ref().unwrap(),
                         &next,
                         level,
                         cs,
                     ) {
-                        self.find(key, cursor, cs);
+                        self.find(key, cs);
                         break;
                     }
                 }
-                return true;
+                return Some(cursor.found.unwrap());
             }
         }
     }
@@ -432,26 +416,22 @@ where
     K: Ord + Clone + Default,
     V: Clone + Default + Display,
 {
-    type Output = Cursor<K, V>;
+    type Output = Snapshot<Node<K, V>, CsEBR>;
 
     fn new() -> Self {
         SkipList::new()
     }
 
-    fn get(&self, key: &K, output: &mut Self::Output, cs: &CsEBR) -> bool {
-        if let Some(found) = self.find_optimistic(key, cs) {
-            output.found_value = Some(unsafe { found.deref().value.clone() });
-            return true;
-        }
-        false
+    fn get(&self, key: &K, cs: &CsEBR) -> Option<Self::Output> {
+        self.find_optimistic(key, cs)
     }
 
-    fn insert(&self, key: K, value: V, output: &mut Self::Output, cs: &CsEBR) -> bool {
-        self.insert(key, value, output, cs)
+    fn insert(&self, key: K, value: V, cs: &CsEBR) -> bool {
+        self.insert(key, value, cs)
     }
 
-    fn remove(&self, key: &K, output: &mut Self::Output, cs: &CsEBR) -> bool {
-        self.remove(key, output, cs)
+    fn remove(&self, key: &K, cs: &CsEBR) -> Option<Self::Output> {
+        self.remove(key, cs)
     }
 }
 

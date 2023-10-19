@@ -1041,7 +1041,6 @@ impl PrefillStrategy {
         config: &Config,
         map: &M,
     ) {
-        let output = &mut M::empty_output();
         let cs = unsafe { &CsEBR::unprotected() };
         let rng = &mut rand::thread_rng();
         match self {
@@ -1049,7 +1048,7 @@ impl PrefillStrategy {
                 for _ in 0..config.prefill {
                     let key = config.key_dist.sample(rng);
                     let value = key.clone();
-                    map.insert(key, value, output, cs);
+                    map.insert(key, value, cs);
                 }
             }
             PrefillStrategy::Decreasing => {
@@ -1060,7 +1059,7 @@ impl PrefillStrategy {
                 keys.sort_by(|a, b| b.cmp(a));
                 for key in keys.drain(..) {
                     let value = key.clone();
-                    map.insert(key, value, output, cs);
+                    map.insert(key, value, cs);
                 }
             }
         }
@@ -1933,20 +1932,19 @@ fn bench_map_circ_ebr<M: circ_ebr::ConcurrentMap<usize, usize> + Send + Sync, N:
                 barrier.clone().wait();
                 let start = Instant::now();
 
-                let output = &mut M::empty_output();
                 let mut cs = CsEBR::new();
                 while start.elapsed() < config.duration {
                     let key = config.key_dist.sample(rng);
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
                         Op::Get => {
-                            map.get(&key, output, &cs);
+                            map.get(&key, &cs);
                         }
                         Op::Insert => {
                             let value = key.clone();
-                            map.insert(key, value, output, &cs);
+                            map.insert(key, value, &cs);
                         }
                         Op::Remove => {
-                            map.remove(&key, output, &cs);
+                            map.remove(&key, &cs);
                         }
                     }
                     ops += 1;

@@ -3,7 +3,7 @@ use circ::CsEBR;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use super::list::{Cursor, HHSList};
+use super::list::HHSList;
 
 pub struct HashMap<K, V> {
     buckets: Vec<HHSList<K, V>>,
@@ -36,19 +36,23 @@ where
         s.finish() as usize
     }
 
-    pub fn get(&self, k: &K, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> bool {
+    pub fn get(&self, k: &K, cs: &CsEBR) -> Option<<HHSList<K, V> as ConcurrentMap<K, V>>::Output> {
         let i = Self::hash(k);
-        self.get_bucket(i).get(k, cursor, cs)
+        self.get_bucket(i).get(k, cs)
     }
 
-    pub fn insert(&self, k: K, v: V, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> bool {
+    pub fn insert(&self, k: K, v: V, cs: &CsEBR) -> bool {
         let i = Self::hash(&k);
-        self.get_bucket(i).insert(k, v, cursor, cs)
+        self.get_bucket(i).insert(k, v, cs)
     }
 
-    pub fn remove(&self, k: &K, cursor: &mut Cursor<K, V>, cs: &CsEBR) -> bool {
+    pub fn remove(
+        &self,
+        k: &K,
+        cs: &CsEBR,
+    ) -> Option<<HHSList<K, V> as ConcurrentMap<K, V>>::Output> {
         let i = Self::hash(&k);
-        self.get_bucket(i).remove(k, cursor, cs)
+        self.get_bucket(i).remove(k, cs)
     }
 }
 
@@ -57,23 +61,23 @@ where
     K: Ord + Hash + Default,
     V: Default,
 {
-    type Output = Cursor<K, V>;
+    type Output = <HHSList<K, V> as ConcurrentMap<K, V>>::Output;
 
     fn new() -> Self {
         Self::with_capacity(30000)
     }
 
     #[inline(always)]
-    fn get(&self, key: &K, output: &mut Self::Output, cs: &CsEBR) -> bool {
-        self.get(key, output, cs)
+    fn get(&self, key: &K, cs: &CsEBR) -> Option<Self::Output> {
+        self.get(key, cs)
     }
     #[inline(always)]
-    fn insert(&self, key: K, value: V, output: &mut Self::Output, cs: &CsEBR) -> bool {
-        self.insert(key, value, output, cs)
+    fn insert(&self, key: K, value: V, cs: &CsEBR) -> bool {
+        self.insert(key, value, cs)
     }
     #[inline(always)]
-    fn remove(&self, key: &K, output: &mut Self::Output, cs: &CsEBR) -> bool {
-        self.remove(key, output, cs)
+    fn remove(&self, key: &K, cs: &CsEBR) -> Option<Self::Output> {
+        self.remove(key, cs)
     }
 }
 

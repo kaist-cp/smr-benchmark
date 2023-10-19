@@ -85,7 +85,7 @@ where
     }
 }
 
-struct Node<K, V> {
+pub struct Node<K, V> {
     key: Key<K>,
     // TODO(@jeehoonkang): how about having another type that is either (1) value, or (2) left and
     // right.
@@ -120,6 +120,14 @@ where
     }
 }
 
+impl<K, V> OutputHolder<V> for Snapshot<Node<K, V>, CsEBR> {
+    fn output(&self) -> &V {
+        self.as_ref()
+            .map(|node| node.value.as_ref().unwrap())
+            .unwrap()
+    }
+}
+
 #[derive(Default, Clone, Copy)]
 enum Direction {
     #[default]
@@ -143,23 +151,6 @@ pub struct SeekRecord<K, V> {
     leaf: Snapshot<Node<K, V>, CsEBR>,
     /// The direction of leaf from parent.
     leaf_dir: Direction,
-}
-
-impl<K, V> OutputHolder<V> for SeekRecord<K, V> {
-    fn default() -> Self {
-        Self {
-            ancestor: Default::default(),
-            successor: Default::default(),
-            successor_dir: Default::default(),
-            parent: Default::default(),
-            leaf: Default::default(),
-            leaf_dir: Default::default(),
-        }
-    }
-
-    fn output(&self) -> &V {
-        unsafe { self.leaf.deref() }.value.as_ref().unwrap()
-    }
 }
 
 // TODO(@jeehoonkang): code duplication...
@@ -339,13 +330,17 @@ where
             .is_ok()
     }
 
-    pub fn get(&self, key: &K, record: &mut SeekRecord<K, V>, cs: &CsEBR) -> bool {
-        *record = self.seek_leaf(key, cs);
+    pub fn get(&self, key: &K, cs: &CsEBR) -> Option<Snapshot<Node<K, V>, CsEBR>> {
+        let record = self.seek_leaf(key, cs);
         let leaf_node = unsafe { record.leaf.deref() };
-        leaf_node.key.cmp(key) == cmp::Ordering::Equal
+        if leaf_node.key.cmp(key) == cmp::Ordering::Equal {
+            Some(record.leaf)
+        } else {
+            None
+        }
     }
 
-    pub fn insert(&self, key: K, value: V, record: &mut SeekRecord<K, V>, cs: &CsEBR) -> bool {
+    pub fn insert(&self, key: K, value: V, cs: &CsEBR) -> bool {
         let mut new_leaf = Rc::new(Node::new_leaf(Key::Fin(key.clone()), Some(value)));
 
         let mut new_internal = Rc::new(Node {
@@ -356,7 +351,7 @@ where
         });
 
         loop {
-            *record = self.seek(&key, cs);
+            let record = self.seek(&key, cs);
             let new_internal_node = unsafe { new_internal.deref_mut() };
 
             let (leaf_rc, leaf_dt) = record.leaf.loan();
@@ -417,7 +412,7 @@ where
                         leaf_dt.repay(leaf_rc);
 
                         if current.with_tag(Marks::empty().bits()) == record.leaf.as_ptr() {
-                            self.cleanup(record, cs);
+                            self.cleanup(&record, cs);
                         }
                     }
                     _ => unreachable!(),
@@ -426,18 +421,18 @@ where
         }
     }
 
-    pub fn remove(&self, key: &K, record: &mut SeekRecord<K, V>, cs: &CsEBR) -> bool {
+    pub fn remove(&self, key: &K, cs: &CsEBR) -> Option<Snapshot<Node<K, V>, CsEBR>> {
         // `leaf` and `value` are the snapshot of the node to be deleted.
         // NOTE: The paper version uses one big loop for both phases.
         // injection phase
-        loop {
-            *record = self.seek(key, cs);
+        let leaf = loop {
+            let record = self.seek(key, cs);
 
             // candidates
             let leaf_node = record.leaf.as_ref().unwrap();
 
             if leaf_node.key.cmp(key) != cmp::Ordering::Equal {
-                return false;
+                return None;
             }
 
             // Try injecting the deletion flag.
@@ -450,11 +445,11 @@ where
             ) {
                 Ok(_) => {
                     // Finalize the node to be removed
-                    if self.cleanup(record, cs) {
-                        return true;
+                    if self.cleanup(&record, cs) {
+                        return Some(record.leaf);
                     }
                     // In-place cleanup failed. Enter the cleanup phase.
-                    break;
+                    break record.leaf;
                 }
                 Err(e) => match e {
                     CompareExchangeErrorRc::Changed { current, .. } => {
@@ -463,25 +458,25 @@ where
                         // case 2. Another thread flagged/tagged the edge to leaf: help and restart
                         // NOTE: The paper version checks if any of the mark is set, which is redundant.
                         if record.leaf.as_ptr() == current.with_tag(Marks::empty().bits()) {
-                            self.cleanup(record, cs);
+                            self.cleanup(&record, cs);
                         }
                     }
                     CompareExchangeErrorRc::Closed { .. } => unreachable!(),
                 },
             }
-        }
+        };
 
         // cleanup phase
         loop {
             let next_record = self.seek(key, cs);
-            if next_record.leaf != record.leaf {
+            if next_record.leaf != leaf {
                 // The edge to leaf flagged for deletion was removed by a helping thread
-                return true;
+                return Some(leaf);
             }
 
             // leaf is still present in the tree.
             if self.cleanup(&next_record, cs) {
-                return true;
+                return Some(leaf);
             }
         }
     }
@@ -492,23 +487,23 @@ where
     K: Ord + Clone,
     V: Clone,
 {
-    type Output = SeekRecord<K, V>;
+    type Output = Snapshot<Node<K, V>, CsEBR>;
 
     fn new() -> Self {
         Self::new()
     }
 
     #[inline(always)]
-    fn get(&self, key: &K, output: &mut Self::Output, cs: &CsEBR) -> bool {
-        self.get(key, output, cs)
+    fn get(&self, key: &K, cs: &CsEBR) -> Option<Self::Output> {
+        self.get(key, cs)
     }
     #[inline(always)]
-    fn insert(&self, key: K, value: V, output: &mut Self::Output, cs: &CsEBR) -> bool {
-        self.insert(key, value, output, cs)
+    fn insert(&self, key: K, value: V, cs: &CsEBR) -> bool {
+        self.insert(key, value, cs)
     }
     #[inline(always)]
-    fn remove<'g>(&'g self, key: &K, output: &mut Self::Output, cs: &'g CsEBR) -> bool {
-        self.remove(key, output, cs)
+    fn remove<'g>(&'g self, key: &K, cs: &'g CsEBR) -> Option<Self::Output> {
+        self.remove(key, cs)
     }
 }
 
