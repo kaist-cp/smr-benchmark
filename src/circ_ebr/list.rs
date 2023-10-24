@@ -170,17 +170,24 @@ impl<K: Ord, V> Cursor<K, V> {
 
     #[inline]
     fn try_unlink_curr(&self, next: Snapshot<Node<K, V>, CsEBR>, cs: &CsEBR) -> Result<(), ()> {
-        unsafe { self.prev.deref() }
-            .next
-            .compare_exchange(
-                self.curr.as_ptr(),
-                &next,
-                Ordering::Release,
-                Ordering::Relaxed,
-                cs,
-            )
-            .map(|_| ())
-            .map_err(|_| ())
+        let (next_rc, next_dt) = next.loan();
+
+        match unsafe { self.prev.deref() }.next.compare_exchange(
+            self.curr.as_ptr(),
+            next_rc,
+            Ordering::Release,
+            Ordering::Relaxed,
+            cs,
+        ) {
+            Ok(_) => {
+                next_dt.repay_frontier(&unsafe { self.curr.deref() }.next, 1, cs);
+                Ok(())
+            }
+            Err(e) => {
+                next_dt.repay(e.desired());
+                Err(())
+            }
+        }
     }
 
     /// Inserts a value.
