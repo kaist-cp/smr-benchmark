@@ -512,44 +512,40 @@ where
 
 #[cfg(test)]
 mod tests {
-    // use super::{HHSList, HList, HMList};
-    // use crate::circ_hp::concurrent_map;
-    // use circ::CsEBR;
+    use super::{HHSList, HList, HMList};
+    use crate::circ_hp::concurrent_map;
+    use circ::CsHP;
 
     #[test]
     fn smoke_h_list() {
-        // TODO: Implement CIRCL for HP and uncomment
-        // concurrent_map::tests::smoke::<CsHP, HList<i32, String, CsHP>>();
+        concurrent_map::tests::smoke::<HList<i32, String>>();
     }
 
     #[test]
     fn smoke_hm_list() {
-        // TODO: Implement CIRCL for HP and uncomment
-        // concurrent_map::tests::smoke::<CsHP, HMList<i32, String, CsHP>>();
+        concurrent_map::tests::smoke::<HMList<i32, String>>();
     }
 
     #[test]
     fn smoke_hhs_list() {
-        // TODO: Implement CIRCL for HP and uncomment
-        // concurrent_map::tests::smoke::<CsHP, HHSList<i32, String, CsHP>>();
+        concurrent_map::tests::smoke::<HHSList<i32, String>>();
     }
 
     #[test]
     fn litmus_hhs_pop() {
-        // TODO: Implement CIRCL for HP and uncomment
-        // use circ::Cs;
-        // use concurrent_map::ConcurrentMap;
-        // let map = HHSList::new();
+        use circ::Cs;
+        use concurrent_map::ConcurrentMap;
+        let map = HHSList::new();
 
-        // let output = &mut HHSList::empty_output();
-        // let cs = &CsEBR::new();
-        // map.insert(1, "1", output, cs);
-        // map.insert(2, "2", output, cs);
-        // map.insert(3, "3", output, cs);
+        let output = &mut HHSList::empty_output();
+        let cs = &CsHP::new();
+        map.insert(1, "1", output, cs);
+        map.insert(2, "2", output, cs);
+        map.insert(3, "3", output, cs);
 
-        // assert!(map.pop(output, cs));
-        // assert!(map.pop(output, cs));
-        // assert!(map.pop(output, cs));
-        // assert!(!map.pop(output, cs));
+        assert!(map.pop(output, cs));
+        assert!(map.pop(output, cs));
+        assert!(map.pop(output, cs));
+        assert!(!map.pop(output, cs));
     }
 }

@@ -3,10 +3,10 @@ use circ::CsHP;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use super::list::{Cursor, HHSList};
+use super::list::{Cursor, HMList};
 
 pub struct HashMap<K, V> {
-    buckets: Vec<HHSList<K, V>>,
+    buckets: Vec<HMList<K, V>>,
 }
 
 impl<K, V> HashMap<K, V>
@@ -17,14 +17,14 @@ where
     pub fn with_capacity(n: usize) -> Self {
         let mut buckets = Vec::with_capacity(n);
         for _ in 0..n {
-            buckets.push(HHSList::new());
+            buckets.push(HMList::new());
         }
 
         HashMap { buckets }
     }
 
     #[inline]
-    pub fn get_bucket(&self, index: usize) -> &HHSList<K, V> {
+    pub fn get_bucket(&self, index: usize) -> &HMList<K, V> {
         unsafe { self.buckets.get_unchecked(index % self.buckets.len()) }
     }
 
@@ -79,13 +79,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    // use super::HashMap;
-    // use crate::circ_hp::concurrent_map;
-    // use circ::CsEBR;
+    use super::HashMap;
+    use crate::circ_hp::concurrent_map;
 
     #[test]
     fn smoke_hashmap() {
-        // TODO: Implement CIRCL for HP and uncomment
-        // concurrent_map::tests::smoke::<CsHP, HashMap<i32, String, CsHP>>();
+        concurrent_map::tests::smoke::<HashMap<i32, String>>();
     }
 }

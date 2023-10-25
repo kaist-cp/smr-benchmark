@@ -21,7 +21,7 @@ where
     V: Default,
 {
     pub fn new(key: K, value: V) -> Self {
-        let cs = unsafe { &CsHP::unprotected() };
+        let cs = unsafe { &Cs::unprotected() };
         let height = Self::generate_height();
         let next: [AtomicRc<Node<K, V>, CsHP>; MAX_HEIGHT] = Default::default();
         for link in next.iter().take(height) {
@@ -57,10 +57,10 @@ where
         height
     }
 
-    pub fn mark_tower(&self, cs: &CsHP) -> bool {
+    pub fn mark_tower(&self, aux: &mut Snapshot<Self, CsHP>, cs: &CsHP) -> bool {
         for level in (0..self.height).rev() {
             loop {
-                let aux = self.next[level].load_ss(cs);
+                aux.load(&self.next[level], cs);
                 if aux.tag() & 1 != 0 {
                     if level == 0 {
                         return false;
@@ -68,8 +68,8 @@ where
                     break;
                 }
                 match self.next[level].compare_exchange_tag(
-                    &aux,
-                    1 | aux.tag(),
+                    &*aux,
+                    1,
                     Ordering::SeqCst,
                     Ordering::SeqCst,
                     cs,
@@ -99,8 +99,13 @@ where
 }
 
 pub struct Cursor<K, V> {
-    preds: [Snapshot<Node<K, V>, CsHP>; MAX_HEIGHT],
+    preds: [Snapshot<Node<K, V>, CsHP>; MAX_HEIGHT + 1],
+    pred_offset: [usize; MAX_HEIGHT + 1],
     succs: [Snapshot<Node<K, V>, CsHP>; MAX_HEIGHT],
+    next: Snapshot<Node<K, V>, CsHP>,
+    new_node: Snapshot<Node<K, V>, CsHP>,
+    found_level: Option<usize>,
+
     /// `found_value` is not set by a traversal function.
     /// It must be manually set in Get/Remove function.
     found_value: Option<V>,
@@ -110,7 +115,11 @@ impl<K, V> OutputHolder<V> for Cursor<K, V> {
     fn default() -> Self {
         Self {
             preds: core::array::from_fn(|_| Default::default()),
+            pred_offset: core::array::from_fn(|_| Default::default()),
             succs: Default::default(),
+            next: Default::default(),
+            new_node: Default::default(),
+            found_level: None,
             found_value: None,
         }
     }
@@ -122,10 +131,23 @@ impl<K, V> OutputHolder<V> for Cursor<K, V> {
 
 impl<K, V> Cursor<K, V> {
     fn initialize(&mut self, head: &AtomicRc<Node<K, V>, CsHP>, cs: &CsHP) {
-        self.preds[MAX_HEIGHT - 1].load(head, cs);
+        self.preds[MAX_HEIGHT].load(head, cs);
+        self.pred_offset.fill(0);
+        for i in 0..MAX_HEIGHT + 1 {
+            self.pred_offset[MAX_HEIGHT - i] = i;
+        }
         for succ in &mut self.succs {
             succ.clear();
         }
+        self.found_level = None;
+    }
+
+    fn pred(&self, level: usize) -> &Snapshot<Node<K, V>, CsHP> {
+        &self.preds[level + self.pred_offset[level]]
+    }
+
+    fn found(&self) -> &Snapshot<Node<K, V>, CsHP> {
+        &self.succs[self.found_level.unwrap()]
     }
 }
 
@@ -144,15 +166,13 @@ where
         }
     }
 
-    /// Returns `None` if the key is not found. Otherwise, returns `Some(found level)`.
-    pub fn find_optimistic(&self, key: &K, cursor: &mut Cursor<K, V>, cs: &CsHP) -> Option<usize> {
-        let mut pred = Snapshot::new();
-        let mut succ = Snapshot::new();
-        pred.load(&self.head, cs);
+    pub fn find_optimistic(&self, key: &K, cursor: &mut Cursor<K, V>, cs: &CsHP) -> bool {
+        cursor.found_level = None;
+        cursor.preds[0].load(&self.head, cs);
 
         let mut level = MAX_HEIGHT;
         while level >= 1
-            && unsafe { pred.deref() }.next[level - 1]
+            && unsafe { cursor.preds[0].deref() }.next[level - 1]
                 .load(Ordering::Relaxed)
                 .is_null()
         {
@@ -161,70 +181,67 @@ where
 
         while level >= 1 {
             level -= 1;
-            succ.load(&unsafe { pred.deref() }.next[level], cs);
+            cursor.succs[0].load(&unsafe { cursor.preds[0].deref() }.next[level], cs);
 
             loop {
-                let curr_node = some_or!(succ.as_ref(), break);
+                let curr_node = some_or!(cursor.succs[0].as_ref(), break);
                 match curr_node.key.cmp(key) {
                     std::cmp::Ordering::Less => {
-                        Snapshot::swap(&mut pred, &mut succ);
-                        succ.load(&unsafe { pred.deref() }.next[level], cs);
+                        Snapshot::swap(&mut cursor.preds[0], &mut cursor.succs[0]);
+                        cursor.succs[0].load(&unsafe { cursor.preds[0].deref() }.next[level], cs);
                     }
                     std::cmp::Ordering::Equal => {
                         let clean = curr_node.next[level].load(Ordering::Acquire).tag() == 0;
                         if clean {
-                            cursor.succs[0] = succ;
-                            return Some(0);
+                            cursor.found_level = Some(0);
                         }
-                        return None;
+                        return clean;
                     }
                     std::cmp::Ordering::Greater => break,
                 }
             }
         }
 
-        return None;
+        return false;
     }
 
-    /// Returns `None` if the key is not found. Otherwise, returns `Some(found level)`.
-    fn find(&self, key: &K, cursor: &mut Cursor<K, V>, cs: &CsHP) -> Option<usize> {
+    fn find(&self, key: &K, cursor: &mut Cursor<K, V>, cs: &CsHP) -> bool {
         'search: loop {
             cursor.initialize(&self.head, cs);
 
             let mut level = MAX_HEIGHT;
             while level >= 1
-                && unsafe { cursor.preds[level - 1].deref() }.next[level - 1]
+                && unsafe { cursor.pred(level - 1).deref() }.next[level - 1]
                     .load(Ordering::Relaxed)
                     .is_null()
             {
-                if level > 1 {
-                    let (lower, upper) = cursor.preds.split_at_mut(level - 1);
-                    unsafe { upper[0].copy_to(&mut lower[level - 2]) };
-                }
                 level -= 1;
             }
 
-            let mut found_level = None;
-            let mut pred = Snapshot::new();
-            unsafe { cursor.preds[MAX_HEIGHT - 1].copy_to(&mut pred) };
             while level >= 1 {
                 level -= 1;
-                let mut succ = unsafe { pred.deref() }.next[level].load_ss(cs);
+                cursor.pred_offset[level] = cursor.pred_offset[level + 1] + 1;
+                cursor.succs[level].load(&unsafe { cursor.pred(level).deref() }.next[level], cs);
 
                 // If the next node of `pred` is marked, that means `pred` is removed and we have
                 // to restart the search.
-                if succ.tag() == 1 {
+                if cursor.succs[level].tag() == 1 {
                     continue 'search;
                 }
 
                 // Order of snapshots: pred[i] -> succ[i] -> next
-                while let Some(succ_ref) = succ.as_ref() {
-                    let mut next = succ_ref.next[level].load_ss(cs);
+                while let Some(succ_ref) = cursor.succs[level].as_ref() {
+                    cursor.next.load(&succ_ref.next[level], cs);
 
-                    if next.tag() == 1 {
-                        next.set_tag(0);
-                        if self.help_unlink(&pred, &succ, &next, level, cs) {
-                            succ = next;
+                    if cursor.next.tag() == 1 {
+                        cursor.next.set_tag(0);
+                        if self.help_unlink(
+                            &unsafe { cursor.pred(level).deref() }.next[level],
+                            &cursor.succs[level],
+                            &cursor.next,
+                            cs,
+                        ) {
+                            Snapshot::swap(&mut cursor.succs[level], &mut cursor.next);
                             continue;
                         } else {
                             // On failure, we cannot do anything reasonable to continue
@@ -238,75 +255,57 @@ where
                     match succ_ref.key.cmp(key) {
                         std::cmp::Ordering::Greater => break,
                         std::cmp::Ordering::Equal => {
-                            found_level = Some(level);
+                            cursor.found_level = Some(level);
                             break;
                         }
                         std::cmp::Ordering::Less => {}
                     }
 
                     // Move one step forward.
-                    pred = succ;
-                    succ = next;
+                    cursor.pred_offset[level] = 0;
+                    Snapshot::swap(&mut cursor.preds[level], &mut cursor.succs[level]);
+                    Snapshot::swap(&mut cursor.succs[level], &mut cursor.next);
                 }
-
-                cursor.preds[level] = pred;
-                cursor.succs[level] = succ;
-                pred = Snapshot::new();
-                unsafe { cursor.preds[level].copy_to(&mut pred) };
             }
 
-            return found_level;
+            return cursor.found_level.is_some();
         }
     }
 
     fn help_unlink(
         &self,
-        pred: &Snapshot<Node<K, V>, CsHP>,
+        pred: &AtomicRc<Node<K, V>, CsHP>,
         succ: &Snapshot<Node<K, V>, CsHP>,
         next: &Snapshot<Node<K, V>, CsHP>,
-        level: usize,
         cs: &CsHP,
     ) -> bool {
-        debug_assert!(succ.tag() == 0);
-        debug_assert!(next.tag() == 0);
-        let (next_rc, next_dt) = next.loan();
-
-        match unsafe { pred.deref() }.next[level].compare_exchange(
-            succ.as_ptr().with_tag(0),
-            next_rc,
+        pred.compare_exchange(
+            succ.with_tag(0).as_ptr(),
+            next.with_tag(0),
             Ordering::Release,
             Ordering::Relaxed,
             cs,
-        ) {
-            Ok(_) => {
-                next_dt.repay_frontier(&unsafe { succ.deref() }.next[level], 1, cs);
-                true
-            }
-            Err(e) => {
-                next_dt.repay(e.desired());
-                false
-            }
-        }
+        )
+        .is_ok()
     }
 
     pub fn insert(&self, key: K, value: V, cursor: &mut Cursor<K, V>, cs: &CsHP) -> bool {
-        if self.find(&key, cursor, cs).is_some() {
+        if self.find(&key, cursor, cs) {
             return false;
         }
 
         let new_node = Rc::new(Node::new(key, value));
         let new_node_ref = unsafe { new_node.deref() };
         let height = new_node_ref.height;
-        let mut new_node_ss = Snapshot::new();
-        new_node_ss.protect(&new_node, cs);
+        cursor.new_node.protect(&new_node, cs);
 
         loop {
             let (succ_rc, succ_dt) = cursor.succs[0].loan();
             new_node_ref.next[0].store(succ_rc, Ordering::Relaxed, cs);
 
-            match unsafe { cursor.preds[0].deref() }.next[0].compare_exchange(
+            match unsafe { cursor.pred(0).deref() }.next[0].compare_exchange(
                 cursor.succs[0].as_ptr(),
-                &new_node_ss,
+                &cursor.new_node,
                 Ordering::SeqCst,
                 Ordering::SeqCst,
                 cs,
@@ -322,7 +321,7 @@ where
             }
 
             // We failed. Let's search for the key and try again.
-            if self.find(&new_node_ref.key, cursor, cs).is_some() {
+            if self.find(&new_node_ref.key, cursor, cs) {
                 drop(unsafe { new_node.into_inner() });
                 return false;
             }
@@ -332,12 +331,12 @@ where
         // Build the rest of the tower above level 0.
         'build: for level in 1..height {
             loop {
-                let next = new_node_ref.next[level].load_ss(cs);
+                cursor.next.load(&new_node_ref.next[level], cs);
 
                 // If the current pointer is marked, that means another thread is already
                 // removing the node we've just inserted. In that case, let's just stop
                 // building the tower.
-                if (next.tag() & 1) != 0 {
+                if (cursor.next.tag() & 1) != 0 {
                     break 'build;
                 }
 
@@ -345,7 +344,7 @@ where
                 let (succ_rc, succ_dt) = cursor.succs[level].loan();
 
                 match new_node_ref.next[level].compare_exchange(
-                    next.as_ptr(),
+                    cursor.next.as_ptr(),
                     succ_rc,
                     Ordering::SeqCst,
                     Ordering::SeqCst,
@@ -359,9 +358,9 @@ where
                 }
 
                 // Try installing the new node at the current level.
-                match unsafe { cursor.preds[level].deref() }.next[level].compare_exchange(
+                match unsafe { cursor.pred(level).deref() }.next[level].compare_exchange(
                     cursor.succs[level].as_ptr(),
-                    &new_node_ss,
+                    &cursor.new_node,
                     Ordering::SeqCst,
                     Ordering::SeqCst,
                     cs,
@@ -407,30 +406,28 @@ where
 
     pub fn remove(&self, key: &K, cursor: &mut Cursor<K, V>, cs: &CsHP) -> bool {
         loop {
-            let found_level = self.find(key, cursor, cs);
-            if found_level.is_none() {
+            let found = self.find(key, cursor, cs);
+            if !found {
                 return false;
             }
-            let found_level = found_level.unwrap();
-            let height = unsafe { cursor.succs[found_level].deref() }.height;
-            cursor.found_value = Some(unsafe { cursor.succs[found_level].deref() }.value.clone());
-            debug_assert!(cursor.succs[found_level].as_ptr().tag() == 0);
+            let height = unsafe { cursor.found().deref() }.height;
+            cursor.found_value = Some(unsafe { cursor.found().deref() }.value.clone());
 
             // Try removing the node by marking its tower.
-            if unsafe { cursor.succs[found_level].deref() }.mark_tower(cs) {
+            if unsafe { cursor.found().deref() }.mark_tower(&mut cursor.next, cs) {
                 for level in (0..height).rev() {
-                    let mut next =
-                        unsafe { cursor.succs[found_level].deref() }.next[level].load_ss(cs);
-                    if (next.tag() & 2) != 0 {
+                    cursor
+                        .next
+                        .load(&unsafe { cursor.found().deref() }.next[level], cs);
+                    if (cursor.next.tag() & 2) != 0 {
                         continue;
                     }
                     // Try linking the predecessor and successor at this level.
-                    next.set_tag(0);
+                    cursor.next.set_tag(0);
                     if !self.help_unlink(
-                        &cursor.preds[level],
-                        &cursor.succs[found_level],
-                        &next,
-                        level,
+                        &unsafe { cursor.pred(level).deref() }.next[level],
+                        cursor.found(),
+                        &cursor.next,
                         cs,
                     ) {
                         self.find(key, cursor, cs);
@@ -455,11 +452,11 @@ where
     }
 
     fn get(&self, key: &K, output: &mut Self::Output, cs: &CsHP) -> bool {
-        let found_level = self.find_optimistic(key, output, cs);
-        if let Some(level) = found_level {
-            output.found_value = Some(unsafe { output.succs[level].deref() }.value.clone());
+        let found = self.find_optimistic(key, output, cs);
+        if found {
+            output.found_value = Some(unsafe { output.found().deref() }.value.clone());
         }
-        found_level.is_some()
+        found
     }
 
     fn insert(&self, key: K, value: V, output: &mut Self::Output, cs: &CsHP) -> bool {
@@ -473,12 +470,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    // use super::SkipList;
-    // use crate::circ_hp::concurrent_map;
+    use super::SkipList;
+    use crate::circ_hp::concurrent_map;
 
     #[test]
     fn smoke_skip_list() {
-        // TODO: Implement CIRCL for HP and uncomment
-        // concurrent_map::tests::smoke::<CsHP, SkipList<i32, String, CsHP>>();
+        concurrent_map::tests::smoke::<SkipList<i32, String>>();
     }
 }

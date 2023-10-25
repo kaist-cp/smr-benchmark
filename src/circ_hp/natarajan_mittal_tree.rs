@@ -1,4 +1,4 @@
-use circ::{AtomicRc, CompareExchangeErrorRc, CsHP, Pointer, Rc, Snapshot, StrongPtr, TaggedCnt};
+use circ::{AtomicRc, CompareExchangeErrorRc, CsHP, Pointer, Rc, Snapshot, StrongPtr};
 
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use std::cmp;
@@ -135,8 +135,8 @@ pub struct SeekRecord<K, V> {
     /// Parent of `successor`
     ancestor: Snapshot<Node<K, V>, CsHP>,
     /// The first internal node with a marked outgoing edge.
-    /// As we do not dereference the successor, It is okay to maintain a raw pointer.
-    successor: TaggedCnt<Node<K, V>>,
+    /// It is null if the successor is equal to the parent.
+    successor: Snapshot<Node<K, V>, CsHP>,
     /// The direction of successor from ancestor.
     successor_dir: Direction,
     /// Parent of `leaf`
@@ -234,7 +234,7 @@ where
         record
             .parent
             .load(&unsafe { record.ancestor.deref() }.left, cs);
-        record.successor = record.parent.as_ptr();
+        record.successor.clear();
         record.leaf.load(&unsafe { record.parent.deref() }.left, cs);
         record.leaf.set_tag(Marks::empty().bits());
         record.successor_dir = Direction::L;
@@ -252,7 +252,8 @@ where
             if !prev_tag {
                 // untagged edge: advance ancestor and successor pointers
                 Snapshot::swap(&mut record.ancestor, &mut record.parent);
-                record.successor = record.leaf.as_ptr();
+                // `successsor` is equal to `parent` after this step.
+                record.successor.clear();
                 record.successor_dir = record.leaf_dir;
             }
 
@@ -333,7 +334,11 @@ where
         record
             .successor_addr()
             .compare_exchange(
-                record.successor,
+                if record.successor.is_null() {
+                    record.parent.as_ptr()
+                } else {
+                    record.successor.as_ptr()
+                },
                 target_sibling.with_tag(Marks::new(flag, false).bits()),
                 Ordering::AcqRel,
                 Ordering::Acquire,
@@ -521,13 +526,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    // use super::NMTreeMap;
-    // use crate::circ_hp::concurrent_map;
-    // use circ::CsEBR;
+    use super::NMTreeMap;
+    use crate::circ_hp::concurrent_map;
 
     #[test]
     fn smoke_nm_tree() {
-        // TODO: Implement CIRCL for HP and uncomment
-        // concurrent_map::tests::smoke::<CsHP, NMTreeMap<i32, String, CsHP>>();
+        concurrent_map::tests::smoke::<NMTreeMap<i32, String>>();
     }
 }

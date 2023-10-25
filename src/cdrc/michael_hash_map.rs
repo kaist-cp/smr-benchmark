@@ -3,10 +3,10 @@ use cdrc_rs::Cs;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use super::list::{Cursor, HHSList};
+use super::list::{Cursor, HMList};
 
 pub struct HashMap<K, V, C: Cs> {
-    buckets: Vec<HHSList<K, V, C>>,
+    buckets: Vec<HMList<K, V, C>>,
 }
 
 impl<K, V, C> HashMap<K, V, C>
@@ -18,14 +18,14 @@ where
     pub fn with_capacity(n: usize) -> Self {
         let mut buckets = Vec::with_capacity(n);
         for _ in 0..n {
-            buckets.push(HHSList::new());
+            buckets.push(HMList::new());
         }
 
         HashMap { buckets }
     }
 
     #[inline]
-    pub fn get_bucket(&self, index: usize) -> &HHSList<K, V, C> {
+    pub fn get_bucket(&self, index: usize) -> &HMList<K, V, C> {
         unsafe { self.buckets.get_unchecked(index % self.buckets.len()) }
     }
 
