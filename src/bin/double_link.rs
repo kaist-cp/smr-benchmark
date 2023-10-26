@@ -19,11 +19,12 @@ use std::sync::atomic::{compiler_fence, Ordering};
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
 
-use smr_benchmark::{cdrc, circ_ebr, circ_hp, ebr, hp};
+use smr_benchmark::{cdrc, circ_ebr, circ_hp, ebr, hp, nr};
 
 #[derive(PartialEq, Debug, ValueEnum, Clone)]
 #[allow(non_camel_case_types)]
 pub enum MM {
+    NR,
     EBR,
     HP,
     CDRC_EBR,
@@ -172,6 +173,7 @@ fn bench(config: &Config, output: &mut Writer<File>) {
         config.threads,
     );
     let (ops_per_sec, peak_mem, avg_mem) = match config.mm {
+        MM::NR => bench_queue_nr(config),
         MM::EBR => bench_queue_ebr(config),
         MM::HP => bench_queue_hp(config),
         MM::CDRC_EBR => bench_queue_cdrc::<cdrc_rs::CsEBR>(config),
@@ -198,6 +200,85 @@ fn bench(config: &Config, output: &mut Writer<File>) {
         "ops/s: {}, peak mem: {}, avg_mem: {}",
         ops_per_sec, peak_mem, avg_mem
     );
+}
+
+fn bench_queue_nr(config: &Config) -> (u64, usize, usize) {
+    let queue = nr::DoubleLink::new();
+
+    let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
+    let (ops_sender, ops_receiver) = mpsc::channel();
+    let (mem_sender, mem_receiver) = mpsc::channel();
+
+    scope(|s| {
+        // sampling & interference thread
+        if config.aux_thread > 0 {
+            let mem_sender = mem_sender.clone();
+            s.spawn(move |_| {
+                let mut samples = 0usize;
+                let mut acc = 0usize;
+                let mut peak = 0usize;
+                barrier.clone().wait();
+
+                let start = Instant::now();
+                let mut next_sampling = start + Duration::from_millis(1);
+                while start.elapsed() < config.duration {
+                    let now = Instant::now();
+                    if now > next_sampling {
+                        let allocated = config.mem_sampler.sample();
+                        samples += 1;
+
+                        acc += allocated;
+                        peak = max(peak, allocated);
+
+                        next_sampling = now + Duration::from_millis(1);
+                    }
+                    std::thread::sleep(config.aux_thread_period);
+                }
+
+                if config.sampling {
+                    mem_sender.send((peak, acc / samples)).unwrap();
+                } else {
+                    mem_sender.send((0, 0)).unwrap();
+                }
+            });
+        } else {
+            mem_sender.send((0, 0)).unwrap();
+        }
+
+        for _ in 0..config.threads {
+            let ops_sender = ops_sender.clone();
+            let queue = &queue;
+            s.spawn(move |_| {
+                let mut ops: u64 = 0;
+                let mut rng = &mut rand::thread_rng();
+                let dist = Uniform::new(0, 100000);
+                barrier.clone().wait();
+                let start = Instant::now();
+
+                while start.elapsed() < config.duration {
+                    let item = dist.sample(&mut rng).to_string();
+                    queue.enqueue(item);
+                    compiler_fence(Ordering::SeqCst);
+                    queue.dequeue().unwrap();
+                    compiler_fence(Ordering::SeqCst);
+
+                    ops += 1;
+                }
+                ops_sender.send(ops).unwrap();
+            });
+        }
+    })
+    .unwrap();
+    println!("end");
+
+    let mut ops = 0;
+    for _ in 0..config.threads {
+        let local_ops = ops_receiver.recv().unwrap();
+        ops += local_ops;
+    }
+    let ops_per_sec = ops / config.interval;
+    let (peak_mem, avg_mem) = mem_receiver.recv().unwrap();
+    (ops_per_sec, peak_mem, avg_mem)
 }
 
 fn bench_queue_ebr(config: &Config) -> (u64, usize, usize) {
@@ -427,8 +508,7 @@ fn bench_queue_cdrc<C: cdrc_rs::Cs>(config: &Config) -> (u64, usize, usize) {
                     compiler_fence(Ordering::SeqCst);
 
                     ops += 1;
-                    drop(cs);
-                    cs = C::new();
+                    cs.clear();
                 }
                 ops_sender.send(ops).unwrap();
             });
@@ -509,8 +589,7 @@ fn bench_queue_circ_ebr(config: &Config) -> (u64, usize, usize) {
                     compiler_fence(Ordering::SeqCst);
 
                     ops += 1;
-                    drop(cs);
-                    cs = circ::CsEBR::new();
+                    cs.clear();
                 }
                 ops_sender.send(ops).unwrap();
             });
@@ -592,8 +671,7 @@ fn bench_queue_circ_hp(config: &Config) -> (u64, usize, usize) {
                     compiler_fence(Ordering::SeqCst);
 
                     ops += 1;
-                    drop(cs);
-                    cs = Cs::new();
+                    cs.clear();
                 }
                 ops_sender.send(ops).unwrap();
             });

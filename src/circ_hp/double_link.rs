@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use circ::{AtomicRc, AtomicWeak, CsHP, Pointer, Rc, Snapshot, StrongPtr, Weak};
+use circ::{AtomicRc, AtomicWeak, CsHP, Pointer, Rc, Snapshot, StrongPtr};
 use crossbeam_utils::CachePadded;
 
 pub struct Holder<T> {
@@ -54,12 +54,8 @@ pub struct DoubleLink<T: Sync + Send> {
 impl<T: Sync + Send> DoubleLink<T> {
     pub fn new() -> Self {
         let sentinel = Rc::new(Node::sentinel());
-        unsafe {
-            sentinel
-                .deref()
-                .prev
-                .store(Weak::from_strong(&sentinel), Ordering::Relaxed)
-        };
+        // Note: In RC-based SMRs(CDRC, CIRC, ...), `sentinel.prev` MUST NOT be set to the self.
+        // It will make a loop after the first enqueue, blocking the entire reclamation.
         Self {
             head: CachePadded::new(AtomicRc::from(sentinel.clone())),
             tail: CachePadded::new(AtomicRc::from(sentinel)),
@@ -76,17 +72,16 @@ impl<T: Sync + Send> DoubleLink<T> {
 
         loop {
             ltail.load(&self.tail, cs);
-            lprev.load_from_weak(unsafe { &ltail.deref().prev }, cs);
-            if lprev.is_null() {
-                continue;
-            }
             unsafe { node.deref() }
                 .prev
                 .store(&*ltail, Ordering::Relaxed);
+
             // Try to help the previous enqueue to complete.
-            let lprev = unsafe { lprev.deref() };
-            if lprev.next.load(Ordering::SeqCst).is_null() {
-                lprev.next.store(&*ltail, Ordering::Relaxed, cs);
+            lprev.load_from_weak(unsafe { &ltail.deref().prev }, cs);
+            if let Some(lprev) = lprev.as_ref() {
+                if lprev.next.load(Ordering::SeqCst).is_null() {
+                    lprev.next.store(&*ltail, Ordering::Relaxed, cs);
+                }
             }
             match self.tail.compare_exchange(
                 ltail.as_ptr(),

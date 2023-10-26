@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use crossbeam_ebr::{unprotected, Atomic, Guard, Owned};
+use super::pointers::{Atomic, Shared};
 use crossbeam_utils::CachePadded;
 
 struct Node<T> {
@@ -38,7 +38,7 @@ pub struct DoubleLink<T: Sync + Send> {
 impl<T: Sync + Send> DoubleLink<T> {
     #[inline]
     pub fn new() -> Self {
-        let sentinel = Owned::new(Node::sentinel()).into_shared(unsafe { unprotected() });
+        let sentinel = Shared::from_owned(Node::sentinel());
         unsafe { sentinel.deref().prev.store(sentinel, Ordering::Relaxed) };
         Self {
             head: CachePadded::new(Atomic::from(sentinel)),
@@ -47,19 +47,19 @@ impl<T: Sync + Send> DoubleLink<T> {
     }
 
     #[inline]
-    pub fn enqueue(&self, item: T, guard: &Guard) {
-        let node = Owned::new(Node::new(item)).into_shared(guard);
+    pub fn enqueue(&self, item: T) {
+        let node = Shared::from_owned(Node::new(item));
         loop {
-            let ltail = self.tail.load(Ordering::Acquire, guard);
-            let lprev = unsafe { ltail.deref().prev.load(Ordering::Relaxed, guard).deref() };
+            let ltail = self.tail.load(Ordering::Acquire);
+            let lprev = unsafe { ltail.deref().prev.load(Ordering::Relaxed).deref() };
             unsafe { node.deref() }.prev.store(ltail, Ordering::Relaxed);
             // Try to help the previous enqueue to complete.
-            if lprev.next.load(Ordering::SeqCst, guard).is_null() {
+            if lprev.next.load(Ordering::SeqCst).is_null() {
                 lprev.next.store(ltail, Ordering::Relaxed);
             }
             if self
                 .tail
-                .compare_exchange(ltail, node, Ordering::SeqCst, Ordering::SeqCst, guard)
+                .compare_exchange(ltail, node, Ordering::SeqCst, Ordering::SeqCst)
                 .is_ok()
             {
                 unsafe { ltail.deref() }.next.store(node, Ordering::Release);
@@ -69,10 +69,10 @@ impl<T: Sync + Send> DoubleLink<T> {
     }
 
     #[inline]
-    pub fn dequeue<'g>(&self, guard: &'g Guard) -> Option<&'g T> {
+    pub fn dequeue(&self) -> Option<&'static T> {
         loop {
-            let lhead = self.head.load(Ordering::Acquire, guard);
-            let lnext = unsafe { lhead.deref().next.load(Ordering::Acquire, guard) };
+            let lhead = self.head.load(Ordering::Acquire);
+            let lnext = unsafe { lhead.deref().next.load(Ordering::Acquire) };
             // Check if this queue is empty.
             if lnext.is_null() {
                 return None;
@@ -80,27 +80,13 @@ impl<T: Sync + Send> DoubleLink<T> {
 
             if self
                 .head
-                .compare_exchange(lhead, lnext, Ordering::SeqCst, Ordering::SeqCst, guard)
+                .compare_exchange(lhead, lnext, Ordering::SeqCst, Ordering::SeqCst)
                 .is_ok()
             {
                 let item = unsafe { lnext.deref().item.as_ref().unwrap() };
-                unsafe { guard.defer_destroy(lhead) };
                 return Some(item);
             }
         }
-    }
-}
-
-impl<T: Sync + Send> Drop for DoubleLink<T> {
-    fn drop(&mut self) {
-        while self.dequeue(unsafe { unprotected() }).is_some() {}
-        unsafe {
-            drop(
-                self.head
-                    .load(Ordering::Relaxed, unprotected())
-                    .into_owned(),
-            )
-        };
     }
 }
 
@@ -109,21 +95,19 @@ mod test {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use super::DoubleLink;
-    use crossbeam_ebr::pin;
     use crossbeam_utils::thread::scope;
 
     #[test]
     fn simple() {
         let queue = DoubleLink::new();
-        let guard = &pin();
-        assert!(queue.dequeue(guard).is_none());
-        queue.enqueue(1, guard);
-        queue.enqueue(2, guard);
-        queue.enqueue(3, guard);
-        assert_eq!(*queue.dequeue(guard).unwrap(), 1);
-        assert_eq!(*queue.dequeue(guard).unwrap(), 2);
-        assert_eq!(*queue.dequeue(guard).unwrap(), 3);
-        assert!(queue.dequeue(guard).is_none());
+        assert!(queue.dequeue().is_none());
+        queue.enqueue(1);
+        queue.enqueue(2);
+        queue.enqueue(3);
+        assert_eq!(*queue.dequeue().unwrap(), 1);
+        assert_eq!(*queue.dequeue().unwrap(), 2);
+        assert_eq!(*queue.dequeue().unwrap(), 3);
+        assert!(queue.dequeue().is_none());
     }
 
     #[test]
@@ -140,7 +124,7 @@ mod test {
                 let queue = &queue;
                 s.spawn(move |_| {
                     for i in 0..ELEMENTS_PER_THREAD {
-                        queue.enqueue((t * ELEMENTS_PER_THREAD + i).to_string(), &pin());
+                        queue.enqueue((t * ELEMENTS_PER_THREAD + i).to_string());
                     }
                 });
             }
@@ -153,8 +137,7 @@ mod test {
                 let found = &found;
                 s.spawn(move |_| {
                     for _ in 0..ELEMENTS_PER_THREAD {
-                        let guard = pin();
-                        let res = queue.dequeue(&guard).unwrap();
+                        let res = queue.dequeue().unwrap();
                         assert_eq!(
                             found[res.parse::<usize>().unwrap()].fetch_add(1, Ordering::Relaxed),
                             0

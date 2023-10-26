@@ -55,6 +55,7 @@ impl Default for Handle<'static> {
 }
 
 impl<T: Sync + Send> DoubleLink<T> {
+    #[inline]
     pub fn new() -> Self {
         let sentinel = Box::into_raw(Box::new(Node::sentinel()));
         unsafe { (*sentinel).prev = sentinel };
@@ -64,6 +65,7 @@ impl<T: Sync + Send> DoubleLink<T> {
         }
     }
 
+    #[inline]
     pub fn enqueue(&self, item: T, handle: &mut Handle) {
         let node = Box::into_raw(Box::new(Node::new(item)));
         let node_mut = unsafe { &mut *node };
@@ -96,6 +98,7 @@ impl<T: Sync + Send> DoubleLink<T> {
         }
     }
 
+    #[inline]
     pub fn dequeue<'h>(&self, handle: &'h mut Handle) -> Option<&'h T> {
         loop {
             let lhead = protect_link(&self.head, &mut handle.pri);

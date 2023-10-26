@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use circ::{AtomicRc, AtomicWeak, CsEBR, Pointer, Rc, Snapshot, StrongPtr, Weak};
+use circ::{AtomicRc, AtomicWeak, CsEBR, Pointer, Rc, Snapshot, StrongPtr};
 use crossbeam_utils::CachePadded;
 
 pub struct Output<T> {
@@ -49,20 +49,18 @@ pub struct DoubleLink<T: Sync + Send> {
 }
 
 impl<T: Sync + Send> DoubleLink<T> {
+    #[inline]
     pub fn new() -> Self {
         let sentinel = Rc::new(Node::sentinel());
-        unsafe {
-            sentinel
-                .deref()
-                .prev
-                .store(Weak::from_strong(&sentinel), Ordering::Relaxed)
-        };
+        // Note: In RC-based SMRs(CDRC, CIRC, ...), `sentinel.prev` MUST NOT be set to the self.
+        // It will make a loop after the first enqueue, blocking the entire reclamation.
         Self {
             head: CachePadded::new(AtomicRc::from(sentinel.clone())),
             tail: CachePadded::new(AtomicRc::from(sentinel)),
         }
     }
 
+    #[inline]
     pub fn enqueue(&self, item: T, cs: &CsEBR) {
         let mut node = Rc::new(Node::new(item));
         let mut node_ss = Snapshot::new();
@@ -70,16 +68,15 @@ impl<T: Sync + Send> DoubleLink<T> {
 
         loop {
             let ltail = self.tail.load_ss(cs);
+            unsafe { node.deref() }.prev.store(ltail, Ordering::Relaxed);
+
+            // Try to help the previous enqueue to complete.
             let mut lprev = Snapshot::new();
             lprev.load_from_weak(unsafe { &ltail.deref().prev }, cs);
-            if lprev.is_null() {
-                continue;
-            }
-            unsafe { node.deref() }.prev.store(ltail, Ordering::Relaxed);
-            // Try to help the previous enqueue to complete.
-            let lprev = unsafe { lprev.deref() };
-            if lprev.next.load(Ordering::SeqCst).is_null() {
-                lprev.next.store(ltail, Ordering::Relaxed, cs);
+            if let Some(lprev) = lprev.as_ref() {
+                if lprev.next.load(Ordering::SeqCst).is_null() {
+                    lprev.next.store(ltail, Ordering::Relaxed, cs);
+                }
             }
             match self.tail.compare_exchange(
                 ltail.as_ptr(),
@@ -99,6 +96,7 @@ impl<T: Sync + Send> DoubleLink<T> {
         }
     }
 
+    #[inline]
     pub fn dequeue(&self, cs: &CsEBR) -> Option<Output<T>> {
         loop {
             let lhead = self.head.load_ss(cs);
