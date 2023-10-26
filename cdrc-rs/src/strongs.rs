@@ -384,8 +384,6 @@ impl<T, C: Cs> Snapshot<T, C> {
 
     #[inline]
     pub fn load_from_weak(&mut self, from: &AtomicWeak<T, C>, cs: &C) -> bool {
-        // TODO: Referencing AtomicWeak from strong snapshot is awkward... Find a better
-        // project/API structure.
         cs.protect_snapshot(&from.link, &mut self.acquired)
     }
 

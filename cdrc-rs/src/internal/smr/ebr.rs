@@ -87,6 +87,7 @@ impl Cs for CsEBR {
     ) -> bool {
         let ptr = link.load(Ordering::Acquire);
         if !ptr.is_null() && unsafe { ptr.deref() }.ref_count() == 0 {
+            shield.clear();
             false
         } else {
             *shield = AcquiredEBR(ptr);

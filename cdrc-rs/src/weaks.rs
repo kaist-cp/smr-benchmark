@@ -59,7 +59,7 @@ impl<T, C: Cs> AtomicWeak<T, C> {
         let old_ptr = self.link.swap(new_ptr, order);
         unsafe {
             if let Some(cnt) = old_ptr.as_raw().as_mut() {
-                cs.delayed_decrement_ref_cnt(cnt);
+                cs.delayed_decrement_weak_cnt(cnt);
             }
         }
     }
@@ -368,7 +368,7 @@ impl<T, C: Cs> WeakPtr<T, C> for Snapshot<T, C> {
     #[inline]
     fn into_weak_count(self) {
         if let Some(cnt) = unsafe { self.as_ptr().as_raw().as_ref() } {
-            cnt.add_ref();
+            cnt.add_weak();
         }
     }
 }
@@ -377,7 +377,7 @@ impl<T, C: Cs> WeakPtr<T, C> for &Snapshot<T, C> {
     #[inline]
     fn into_weak_count(self) {
         if let Some(cnt) = unsafe { self.as_ptr().as_raw().as_ref() } {
-            cnt.add_ref();
+            cnt.add_weak();
         }
     }
 }
@@ -386,7 +386,7 @@ impl<'s, T, C: Cs> WeakPtr<T, C> for TaggedSnapshot<'s, T, C> {
     #[inline]
     fn into_weak_count(self) {
         if let Some(cnt) = unsafe { self.as_ptr().as_raw().as_ref() } {
-            cnt.add_ref();
+            cnt.add_weak();
         }
     }
 }
