@@ -1,4 +1,4 @@
-use std::{fmt::Display, sync::atomic::Ordering};
+use std::{fmt::Display, mem::forget, sync::atomic::Ordering};
 
 use circ::{AtomicRc, CompareExchangeErrorRc, Cs, CsEBR, Pointer, Rc, Snapshot, StrongPtr};
 
@@ -271,11 +271,11 @@ where
             return false;
         }
 
-        let mut new_node = Rc::new(Node::new(key, value));
+        let inner = Node::new(key, value);
+        let height = inner.height;
+        let mut new_node_iter = Rc::new_many_iter(inner, height);
+        let mut new_node = new_node_iter.next().unwrap();
         let new_node_ref = unsafe { new_node.deref() };
-        let height = new_node_ref.height;
-        let mut new_node_ss = Snapshot::new();
-        new_node_ss.protect(&new_node, cs);
 
         loop {
             let (succ_rc, succ_dt) = cursor.succs[0].loan();
@@ -302,7 +302,8 @@ where
             // We failed. Let's search for the key and try again.
             cursor = self.find(&new_node_ref.key, cs);
             if cursor.found.is_some() {
-                drop(unsafe { new_node.into_inner() });
+                unsafe { new_node.into_inner_unchecked() };
+                forget(new_node_iter);
                 return false;
             }
         }
@@ -310,7 +311,7 @@ where
         // The new node was successfully installed.
         // Build the rest of the tower above level 0.
         'build: for level in 1..height {
-            let mut new_node = new_node_ss.upgrade();
+            let mut new_node = new_node_iter.next().unwrap();
             loop {
                 let next = new_node_ref.next[level].load_ss(cs);
 
@@ -318,6 +319,7 @@ where
                 // removing the node we've just inserted. In that case, let's just stop
                 // building the tower.
                 if (next.tag() & 1) != 0 {
+                    new_node_iter.halt(cs);
                     break 'build;
                 }
 
@@ -332,6 +334,7 @@ where
                     cs,
                 ) {
                     succ_dt.repay(e.desired());
+                    new_node_iter.halt(cs);
                     break 'build;
                 }
 
