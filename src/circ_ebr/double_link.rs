@@ -62,8 +62,7 @@ impl<T: Sync + Send> DoubleLink<T> {
 
     #[inline]
     pub fn enqueue(&self, item: T, cs: &CsEBR) {
-        let mut node = Rc::new(Node::new(item));
-        let sub = node.clone();
+        let [mut node, sub] = Rc::new_many(Node::new(item));
 
         loop {
             let ltail = self.tail.load_ss(cs);
@@ -75,7 +74,7 @@ impl<T: Sync + Send> DoubleLink<T> {
             if let Some(lprev) = lprev.as_ref() {
                 if lprev.next.load(Ordering::SeqCst).is_null() {
                     // Cannot use a normal store, as the link may contain a weak guard.
-                    let _ = lprev.next.compare_exchange(
+                    let _ = lprev.next.compare_exchange_weak(
                         Tagged::null(),
                         ltail,
                         Ordering::Relaxed,
@@ -93,7 +92,7 @@ impl<T: Sync + Send> DoubleLink<T> {
             ) {
                 Ok(_) => {
                     // Cannot use a normal store, as the link may contain a weak guard.
-                    let _ = unsafe { ltail.deref() }.next.compare_exchange(
+                    let _ = unsafe { ltail.deref() }.next.compare_exchange_weak(
                         Tagged::null(),
                         sub,
                         Ordering::Release,
