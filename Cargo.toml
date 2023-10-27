@@ -33,8 +33,13 @@ path = "crossbeam-ebr/crossbeam-epoch"
 package = "crossbeam-pebr-epoch"
 path = "crossbeam-pebr/crossbeam-epoch"
 
-# TODO: remove this
 [profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.release-with-debug]
+inherits = "release"
 debug = true
 
 [features]
