@@ -281,7 +281,7 @@ where
     ) -> bool {
         pred.compare_exchange(
             succ.with_tag(0).as_ptr(),
-            next.with_tag(0),
+            next.upgrade().with_tag(0),
             Ordering::Release,
             Ordering::Relaxed,
             cs,
@@ -294,7 +294,7 @@ where
             return false;
         }
 
-        let new_node = Rc::new(Node::new(key, value));
+        let mut new_node = Rc::new(Node::new(key, value));
         let new_node_ref = unsafe { new_node.deref() };
         let height = new_node_ref.height;
         cursor.new_node.protect(&new_node, cs);
@@ -305,7 +305,7 @@ where
 
             match unsafe { cursor.pred(0).deref() }.next[0].compare_exchange(
                 cursor.succs[0].as_ptr(),
-                &cursor.new_node,
+                new_node,
                 Ordering::SeqCst,
                 Ordering::SeqCst,
                 cs,
@@ -314,7 +314,8 @@ where
                     succ_dt.repay(succ_rc);
                     break;
                 }
-                Err(_) => {
+                Err(e) => {
+                    new_node = e.desired();
                     let succ_rc = new_node_ref.next[0].swap(Rc::null(), Ordering::Relaxed, cs);
                     succ_dt.repay(succ_rc);
                 }
@@ -330,6 +331,7 @@ where
         // The new node was successfully installed.
         // Build the rest of the tower above level 0.
         'build: for level in 1..height {
+            let mut new_node = cursor.new_node.upgrade();
             loop {
                 cursor.next.load(&new_node_ref.next[level], cs);
 
@@ -360,7 +362,7 @@ where
                 // Try installing the new node at the current level.
                 match unsafe { cursor.pred(level).deref() }.next[level].compare_exchange(
                     cursor.succs[level].as_ptr(),
-                    &cursor.new_node,
+                    new_node,
                     Ordering::SeqCst,
                     Ordering::SeqCst,
                     cs,
@@ -370,7 +372,8 @@ where
                         // Success! Continue on the next level.
                         break;
                     }
-                    Err(_) => {
+                    Err(e) => {
+                        new_node = e.desired();
                         // Repay the debt and try again.
                         // Note that someone might mark the inserted node.
                         let succ_rc = match new_node_ref.next[level].compare_exchange(

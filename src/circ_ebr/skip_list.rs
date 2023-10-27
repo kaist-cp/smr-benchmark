@@ -271,7 +271,7 @@ where
             return false;
         }
 
-        let new_node = Rc::new(Node::new(key, value));
+        let mut new_node = Rc::new(Node::new(key, value));
         let new_node_ref = unsafe { new_node.deref() };
         let height = new_node_ref.height;
         let mut new_node_ss = Snapshot::new();
@@ -283,7 +283,7 @@ where
 
             match unsafe { cursor.preds[0].deref() }.next[0].compare_exchange(
                 cursor.succs[0].as_ptr(),
-                &new_node_ss,
+                new_node,
                 Ordering::SeqCst,
                 Ordering::SeqCst,
                 cs,
@@ -292,7 +292,8 @@ where
                     succ_dt.repay(succ_rc);
                     break;
                 }
-                Err(_) => {
+                Err(e) => {
+                    new_node = e.desired();
                     let succ_rc = new_node_ref.next[0].swap(Rc::null(), Ordering::Relaxed, cs);
                     succ_dt.repay(succ_rc);
                 }
@@ -309,6 +310,7 @@ where
         // The new node was successfully installed.
         // Build the rest of the tower above level 0.
         'build: for level in 1..height {
+            let mut new_node = new_node_ss.upgrade();
             loop {
                 let next = new_node_ref.next[level].load_ss(cs);
 
@@ -336,7 +338,7 @@ where
                 // Try installing the new node at the current level.
                 match unsafe { cursor.preds[level].deref() }.next[level].compare_exchange(
                     cursor.succs[level].as_ptr(),
-                    &new_node_ss,
+                    new_node,
                     Ordering::SeqCst,
                     Ordering::SeqCst,
                     cs,
@@ -346,7 +348,8 @@ where
                         // Success! Continue on the next level.
                         break;
                     }
-                    Err(_) => {
+                    Err(e) => {
+                        new_node = e.desired();
                         // Repay the debt and try again.
                         // Note that someone might mark the inserted node.
                         let succ_rc = match new_node_ref.next[level].compare_exchange(

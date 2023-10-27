@@ -300,7 +300,7 @@ where
 
                 let op = Update {
                     p: Weak::from_strong(&cursor.p),
-                    l: Rc::from_snapshot(&cursor.l),
+                    l: cursor.l.upgrade(),
                     new_internal,
                     gp: Weak::null(),
                     pupdate: Rc::null(),
@@ -356,8 +356,8 @@ where
                 let op = Update {
                     gp: Weak::from_strong(&cursor.gp),
                     p: Weak::from_strong(&cursor.p),
-                    l: Rc::from_snapshot(&cursor.l),
-                    pupdate: Rc::from_snapshot(&cursor.pupdate),
+                    l: cursor.l.upgrade(),
+                    pupdate: cursor.pupdate.upgrade(),
                     new_internal: Rc::null(),
                 };
 
@@ -416,7 +416,7 @@ where
         let mut aux = Snapshot::new();
         match p_ref.update.compare_exchange_protecting_current(
             op_ref.pupdate.as_ptr(),
-            op.with_tag(UpdateTag::MARK.bits()),
+            op.upgrade().with_tag(UpdateTag::MARK.bits()),
             &mut aux,
             Ordering::Release,
             Ordering::Acquire,
@@ -429,7 +429,7 @@ where
             }
             Err(e) => match e {
                 CompareExchangeErrorRc::Changed { current, .. } => {
-                    if current == op.with_tag(UpdateTag::MARK.bits()).as_ptr() {
+                    if current == op.as_ptr().with_tag(UpdateTag::MARK.bits()) {
                         // (prev value) = <Mark, op>
                         self.help_marked(op, cs);
                         return true;
@@ -522,7 +522,13 @@ where
             &parent_node.right
         };
         node_to_cas
-            .compare_exchange(old.as_ptr(), new, Ordering::Release, Ordering::Relaxed, cs)
+            .compare_exchange(
+                old.as_ptr(),
+                new.upgrade(),
+                Ordering::Release,
+                Ordering::Relaxed,
+                cs,
+            )
             .is_ok()
     }
 }

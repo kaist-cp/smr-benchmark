@@ -153,7 +153,7 @@ impl<K: Ord, V> Cursor<K, V> {
                 } else {
                     self.anchor_next.as_ptr()
                 },
-                &self.curr,
+                self.curr.upgrade(),
                 Ordering::Release,
                 Ordering::Relaxed,
                 cs,
@@ -213,7 +213,7 @@ impl<K: Ord, V> Cursor<K, V> {
             .next
             .compare_exchange(
                 self.curr.as_ptr(),
-                &self.next,
+                self.next.upgrade(),
                 Ordering::Release,
                 Ordering::Relaxed,
                 cs,

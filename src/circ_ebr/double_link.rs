@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use circ::{AtomicRc, Weak, CsEBR, Pointer, Rc, Snapshot, StrongPtr, Tagged};
+use circ::{AtomicRc, CsEBR, Pointer, Rc, Snapshot, StrongPtr, Tagged, Weak};
 use crossbeam_utils::CachePadded;
 
 pub struct Output<T> {
@@ -76,7 +76,7 @@ impl<T: Sync + Send> DoubleLink<T> {
                     // Cannot use a normal store, as the link may contain a weak guard.
                     let _ = lprev.next.compare_exchange_weak(
                         Tagged::null(),
-                        ltail,
+                        ltail.upgrade(),
                         Ordering::Relaxed,
                         Ordering::Relaxed,
                         cs,

@@ -83,6 +83,7 @@ impl<K: Ord, V> Cursor<K, V> {
     #[inline]
     fn find_harris(&mut self, key: &K, cs: &CsEBR) -> Result<bool, ()> {
         let mut prev_next = self.curr;
+        let mut frontier = self.prev;
         let found = loop {
             let curr_node = some_or!(self.curr.as_ref(), break false);
             let mut next = curr_node.next.load_ss(cs);
@@ -90,6 +91,7 @@ impl<K: Ord, V> Cursor<K, V> {
             if next.tag() != 0 {
                 // We add a 0 tag here so that `self.curr`s tag is always 0.
                 next.set_tag(0);
+                frontier = self.curr;
                 self.curr = next;
                 continue;
             }
@@ -97,6 +99,7 @@ impl<K: Ord, V> Cursor<K, V> {
             match curr_node.key.cmp(key) {
                 Less => {
                     self.prev = self.curr;
+                    frontier = self.curr;
                     self.curr = next;
                     prev_next = next;
                 }
@@ -111,16 +114,21 @@ impl<K: Ord, V> Cursor<K, V> {
         }
 
         // cleanup tagged nodes between anchor and curr
-        unsafe { self.prev.deref() }
-            .next
-            .compare_exchange(
-                prev_next.as_ptr(),
-                &self.curr,
-                Ordering::Release,
-                Ordering::Relaxed,
-                cs,
-            )
-            .map_err(|_| ())?;
+        let (curr_rc, curr_dt) = self.curr.loan();
+
+        match unsafe { self.prev.deref() }.next.compare_exchange(
+            prev_next.as_ptr(),
+            curr_rc,
+            Ordering::Release,
+            Ordering::Relaxed,
+            cs,
+        ) {
+            Ok(_) => curr_dt.repay_frontier(&unsafe { frontier.deref() }.next, 1, cs),
+            Err(e) => {
+                curr_dt.repay(e.desired());
+                return Err(());
+            }
+        }
 
         Ok(found)
     }

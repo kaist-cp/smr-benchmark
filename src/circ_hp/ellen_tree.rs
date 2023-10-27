@@ -335,8 +335,8 @@ where
                 let op = Update {
                     p: Weak::from_strong(&finder.p),
                     p_l_dir: finder.p_l_dir,
-                    l: Rc::from_snapshot(&finder.l),
-                    l_other: Rc::from_snapshot(&finder.l_other),
+                    l: finder.l.upgrade(),
+                    l_other: finder.l_other.upgrade(),
                     new_internal,
                     gp: Weak::null(),
                     gp_p_dir: Direction::L,
@@ -408,9 +408,9 @@ where
                     gp_p_dir: finder.gp_p_dir,
                     p: Weak::from_strong(&finder.p),
                     p_l_dir: finder.p_l_dir,
-                    l: Rc::from_snapshot(&finder.l),
-                    l_other: Rc::from_snapshot(&finder.l_other),
-                    pupdate: Rc::from_snapshot(&finder.pupdate),
+                    l: finder.l.upgrade(),
+                    l_other: finder.l_other.upgrade(),
+                    pupdate: finder.pupdate.upgrade(),
                     new_internal: Rc::null(),
                 };
 
@@ -484,7 +484,7 @@ where
 
         match p_ref.update.compare_exchange_protecting_current(
             op_ref.pupdate.as_ptr(),
-            op.with_tag(UpdateTag::MARK.bits()),
+            op.upgrade().with_tag(UpdateTag::MARK.bits()),
             aux,
             Ordering::Release,
             Ordering::Acquire,
@@ -497,7 +497,7 @@ where
             }
             Err(e) => match e {
                 CompareExchangeErrorRc::Changed { current, .. } => {
-                    if current == op.with_tag(UpdateTag::MARK.bits()).as_ptr() {
+                    if current == op.as_ptr().with_tag(UpdateTag::MARK.bits()) {
                         // (prev value) = <Mark, op>
                         self.help_marked(op, helper, cs);
                         return true;

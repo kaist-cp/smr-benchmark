@@ -339,7 +339,9 @@ where
                 } else {
                     record.successor.as_ptr()
                 },
-                target_sibling.with_tag(Marks::new(flag, false).bits()),
+                target_sibling
+                    .upgrade()
+                    .with_tag(Marks::new(flag, false).bits()),
                 Ordering::AcqRel,
                 Ordering::Acquire,
                 cs,

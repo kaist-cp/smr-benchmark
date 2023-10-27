@@ -117,7 +117,7 @@ impl<T: Sync + Send> DoubleLink<T> {
                 .head
                 .compare_exchange(
                     lhead.as_ptr(),
-                    &*lnext,
+                    lnext.upgrade(),
                     Ordering::SeqCst,
                     Ordering::SeqCst,
                     cs,
