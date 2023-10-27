@@ -279,14 +279,17 @@ where
         next: &Snapshot<Node<K, V>, CsHP>,
         cs: &CsHP,
     ) -> bool {
-        pred.compare_exchange(
+        if let Ok(rc) = pred.compare_exchange(
             succ.with_tag(0).as_ptr(),
             next.upgrade().with_tag(0),
             Ordering::Release,
             Ordering::Relaxed,
             cs,
-        )
-        .is_ok()
+        ) {
+            rc.finalize(cs);
+            return true;
+        }
+        false
     }
 
     pub fn insert(&self, key: K, value: V, cursor: &mut Cursor<K, V>, cs: &CsHP) -> bool {

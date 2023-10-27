@@ -254,7 +254,8 @@ where
             Ordering::Relaxed,
             cs,
         ) {
-            Ok(_) => {
+            Ok(rc) => {
+                rc.finalize(cs);
                 succ_dt.repay_frontier(&unsafe { curr.deref() }.next[level], 1, cs);
                 true
             }
@@ -428,14 +429,17 @@ where
         SkipList::new()
     }
 
+    #[inline(always)]
     fn get(&self, key: &K, cs: &CsEBR) -> Option<Self::Output> {
         self.find_optimistic(key, cs)
     }
 
+    #[inline(always)]
     fn insert(&self, key: K, value: V, cs: &CsEBR) -> bool {
         self.insert(key, value, cs)
     }
 
+    #[inline(always)]
     fn remove(&self, key: &K, cs: &CsEBR) -> Option<Self::Output> {
         self.remove(key, cs)
     }
