@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use circ::{AtomicRc, AtomicWeak, CsEBR, Pointer, Rc, Snapshot, StrongPtr, Tagged};
+use circ::{AtomicRc, Weak, CsEBR, Pointer, Rc, Snapshot, StrongPtr, Tagged};
 use crossbeam_utils::CachePadded;
 
 pub struct Output<T> {
@@ -18,7 +18,7 @@ impl<T> Output<T> {
 
 struct Node<T> {
     item: Option<T>,
-    prev: AtomicWeak<Node<T>, CsEBR>,
+    prev: Weak<Node<T>, CsEBR>,
     next: AtomicRc<Node<T>, CsEBR>,
 }
 
@@ -26,7 +26,7 @@ impl<T> Node<T> {
     fn sentinel() -> Self {
         Self {
             item: None,
-            prev: AtomicWeak::null(),
+            prev: Weak::null(),
             next: AtomicRc::null(),
         }
     }
@@ -34,7 +34,7 @@ impl<T> Node<T> {
     fn new(item: T) -> Self {
         Self {
             item: Some(item),
-            prev: AtomicWeak::null(),
+            prev: Weak::null(),
             next: AtomicRc::null(),
         }
     }
@@ -66,11 +66,11 @@ impl<T: Sync + Send> DoubleLink<T> {
 
         loop {
             let ltail = self.tail.load_ss(cs);
-            unsafe { node.deref() }.prev.store(ltail, Ordering::Relaxed);
+            unsafe { node.deref_mut() }.prev = Weak::from_strong(&ltail);
 
             // Try to help the previous enqueue to complete.
             let mut lprev = Snapshot::new();
-            lprev.load_from_weak(unsafe { &ltail.deref().prev }, cs);
+            lprev.protect_weak(unsafe { &ltail.deref().prev }, cs);
             if let Some(lprev) = lprev.as_ref() {
                 if lprev.next.load(Ordering::SeqCst).is_null() {
                     // Cannot use a normal store, as the link may contain a weak guard.
