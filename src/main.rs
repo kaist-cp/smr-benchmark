@@ -619,7 +619,7 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 cdrc_rs::CsHP,
                 cdrc::SkipList<usize, usize, cdrc_rs::CsHP>,
                 N,
-            >(config, PrefillStrategy::Random),
+            >(config, PrefillStrategy::Decreasing),
             DS::BonsaiTree => bench_map_cdrc::<
                 cdrc_rs::CsHP,
                 cdrc::BonsaiTreeMap<usize, usize, cdrc_rs::CsHP>,
@@ -654,7 +654,7 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             ),
             DS::SkipList => bench_map_circ_ebr::<circ_ebr::SkipList<usize, usize>, N>(
                 config,
-                PrefillStrategy::Random,
+                PrefillStrategy::Decreasing,
             ),
             DS::BonsaiTree => bench_map_circ_ebr::<circ_ebr::BonsaiTreeMap<usize, usize>, N>(
                 config,
@@ -688,7 +688,7 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             ),
             DS::SkipList => bench_map_circ_hp::<circ_hp::SkipList<usize, usize>, N>(
                 config,
-                PrefillStrategy::Random,
+                PrefillStrategy::Decreasing,
             ),
             DS::BonsaiTree => bench_map_circ_hp::<circ_hp::BonsaiTreeMap<usize, usize>, N>(
                 config,
@@ -1099,18 +1099,33 @@ impl PrefillStrategy {
         config: &Config,
         map: &M,
     ) {
-        let output = &mut M::empty_output();
-        let cs = unsafe { &CsHP::unprotected() };
-        let rng = &mut rand::thread_rng();
         match self {
             PrefillStrategy::Random => {
-                for _ in 0..config.prefill {
-                    let key = config.key_dist.sample(rng);
-                    let value = key.clone();
-                    map.insert(key, value, output, cs);
-                }
+                let threads = available_parallelism().map(|v| v.get()).unwrap_or(1);
+                print!("prefilling with {threads} threads... ");
+                stdout().flush().unwrap();
+                scope(|s| {
+                    for t in 0..threads {
+                        s.spawn(move |_| {
+                            let cs = unsafe { &Cs::unprotected() };
+                            let output = &mut M::empty_output();
+                            let rng = &mut rand::thread_rng();
+                            let count = config.prefill / threads
+                                + if t < config.prefill % threads { 1 } else { 0 };
+                            for _ in 0..count {
+                                let key = config.key_dist.sample(rng);
+                                let value = key.clone();
+                                map.insert(key, value, output, cs);
+                            }
+                        });
+                    }
+                })
+                .unwrap();
             }
             PrefillStrategy::Decreasing => {
+                let cs = unsafe { &Cs::unprotected() };
+                let output = &mut M::empty_output();
+                let rng = &mut rand::thread_rng();
                 let mut keys = Vec::with_capacity(config.prefill);
                 for _ in 0..config.prefill {
                     keys.push(config.key_dist.sample(rng));
@@ -1131,17 +1146,31 @@ impl PrefillStrategy {
         config: &Config,
         map: &M,
     ) {
-        let cs = unsafe { &CsEBR::unprotected() };
-        let rng = &mut rand::thread_rng();
         match self {
             PrefillStrategy::Random => {
-                for _ in 0..config.prefill {
-                    let key = config.key_dist.sample(rng);
-                    let value = key.clone();
-                    map.insert(key, value, cs);
-                }
+                let threads = available_parallelism().map(|v| v.get()).unwrap_or(1);
+                print!("prefilling with {threads} threads... ");
+                stdout().flush().unwrap();
+                scope(|s| {
+                    for t in 0..threads {
+                        s.spawn(move |_| {
+                            let cs = unsafe { &Cs::unprotected() };
+                            let rng = &mut rand::thread_rng();
+                            let count = config.prefill / threads
+                                + if t < config.prefill % threads { 1 } else { 0 };
+                            for _ in 0..count {
+                                let key = config.key_dist.sample(rng);
+                                let value = key.clone();
+                                map.insert(key, value, cs);
+                            }
+                        });
+                    }
+                })
+                .unwrap();
             }
             PrefillStrategy::Decreasing => {
+                let cs = unsafe { &Cs::unprotected() };
+                let rng = &mut rand::thread_rng();
                 let mut keys = Vec::with_capacity(config.prefill);
                 for _ in 0..config.prefill {
                     keys.push(config.key_dist.sample(rng));
