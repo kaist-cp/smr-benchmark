@@ -189,8 +189,8 @@ fn bench(config: &Config, output: &mut Writer<File>) {
                 .unwrap()
                 .get_name()
                 .to_string(),
-            ops_per_sec.to_string(),
             config.threads.to_string(),
+            ops_per_sec.to_string(),
             peak_mem.to_string(),
             avg_mem.to_string(),
         ])

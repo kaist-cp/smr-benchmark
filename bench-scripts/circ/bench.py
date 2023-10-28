@@ -3,10 +3,10 @@
 import subprocess
 import os
 
-RESULTS_PATH = "results"
+RESULTS_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "results")
 
 dss = ['h-list', 'hm-list', 'hhs-list', 'hash-map', 'nm-tree', 'skip-list']
-mms = ['nr', 'ebr', 'pebr', 'hp', 'hp-pp', 'nbr', 'nbr-large', 'cdrc-ebr', 'hp-sharp', 'cdrc-hp-sharp', 'vbr']
+mms = ['nr', 'ebr', 'hp', 'circ-ebr', 'circ-hp', 'cdrc-ebr', 'cdrc-hp']
 i = 10
 cpu_count = os.cpu_count()
 if not cpu_count or cpu_count <= 24:
@@ -16,22 +16,24 @@ elif cpu_count <= 64:
 else:
     ts = list(map(str, [1] + list(range(10, 151, 10))))
 runs = 1
-gs = [0, 1, 2, 3]
+gs = [0, 1, 2]
 
 if os.path.exists('.git'):
     subprocess.run(['git', 'submodule', 'update', '--init', '--recursive'])
 subprocess.run(['cargo', 'build', '--release'])
 
-run_cmd = ['./target/release/smr-benchmark', '-i', str(i)]
+smr_benchmark = ['./target/release/smr-benchmark', '-i', str(i)]
+double_link = ['./target/release/double_link', '-i', str(i)]
 
-def key_range(ds):
+def key_ranges(ds):
     if ds in ["h-list", "hm-list", "hhs-list"]:
-        return "10000"
+        return ["1000", "10000"]
     else:
-        return "100000"
+        # 100K and 100M
+        return ["100000", "100000000"]
 
 def opts(ds, mm, g, t, kr):
-    return ['-d', ds, '-m', mm, '-g', str(g), '-t', t, '-r', str(kr), '-o', f'{RESULTS_PATH}/{ds}.csv']
+    return ['-d', ds, '-m', mm, '-g', str(g), '-t', t, '-r', str(kr), '-o', os.path.join(RESULTS_PATH, f'{ds}.csv')]
 
 def invalid(mm, ds, g):
     is_invalid = False
@@ -39,8 +41,6 @@ def invalid(mm, ds, g):
         is_invalid |= g == 0  # HHSList is just HList with faster get()
     if mm == 'hp':
         is_invalid |= ds in ["h-list", "hhs-list", "nm-tree"]
-    if mm == 'nbr':
-        is_invalid |= ds in ["hm-list", "skip-list"]
     return is_invalid
 
 cmds = []
@@ -51,8 +51,13 @@ for ds in dss:
             if invalid(mm, ds, g):
                 continue
             for t in ts:
-                cmd = run_cmd + opts(ds, mm, g, t, key_range(ds))
-                cmds.append(cmd)
+                for kr in key_ranges(ds):
+                    cmd = smr_benchmark + opts(ds, mm, g, t, kr)
+                    cmds.append(cmd)
+
+for mm in mms:
+    for t in ts:
+        cmd = double_link + [f'-m{str(mm)} -t{str(t)}', '-o', os.path.join(RESULTS_PATH, 'double-link.csv')]
 
 print('number of configurations: ', len(cmds))
 print('estimated time: ', (len(cmds) * i * 1.1) // 60, ' min *', runs, 'times')

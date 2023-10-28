@@ -6,7 +6,7 @@ import os
 import matplotlib
 import math
 
-RESULTS_PATH = "results"
+RESULTS_PATH = "bench-scripts/results"
 
 warnings.filterwarnings("ignore")
 pd.set_option('display.max_rows', None)
@@ -32,6 +32,8 @@ HHSLIST = "hhs-list"
 HASHMAP = "hash-map"
 NMTREE = "nm-tree"
 SKIPLIST = "skip-list"
+EFRBTREE = "efrb-tree"
+BONSAITREE = "bonsai-tree"
 
 FORMAL_NAMES = {
     HLIST: "HList",
@@ -40,6 +42,8 @@ FORMAL_NAMES = {
     HASHMAP: "HashMap",
     NMTREE: "NMTree",
     SKIPLIST: "SkipList",
+    EFRBTREE: "EFRBTree",
+    BONSAITREE: "BonsaiTree",
 }
 
 EBR = "ebr"
@@ -49,20 +53,23 @@ HP = "hp"
 HP_PP = "hp-pp"
 NBR = "nbr"
 NBR_LARGE = "nbr-large"
-CDRC_EBR = "cdrc-ebr"
 HP_SHARP = "hp-sharp"
+CDRC_EBR = "cdrc-ebr"
+CDRC_HP = "cdrc-hp"
 CDRC_HP_SHARP = "cdrc-hp-sharp"
 VBR = "vbr"
+CIRC_EBR = "circ-ebr"
+CIRC_HP = "circ-hp"
 
 # DS with read-dominated bench & write-only bench
-dss_all   = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, SKIPLIST]
-dss_read  = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, SKIPLIST]
-dss_write = [HLIST, HMLIST,          HASHMAP, NMTREE, SKIPLIST]
+dss_all   = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, SKIPLIST, BONSAITREE, EFRBTREE]
+dss_read  = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, SKIPLIST, BONSAITREE, EFRBTREE]
+dss_write = [HLIST, HMLIST,          HASHMAP, NMTREE, SKIPLIST, BONSAITREE, EFRBTREE]
 
 WRITE, HALF, READ, READ_ONLY = "write", "half", "read", "read-only"
 
-SMR_ONLYs = [NR, EBR, NBR, HP_PP, HP, PEBR, CDRC_EBR, HP_SHARP, CDRC_HP_SHARP, VBR, NBR_LARGE]
-SMR_Is = [NR, EBR, NBR, HP_PP, HP, PEBR, CDRC_EBR, HP_SHARP, CDRC_HP_SHARP, VBR, NBR_LARGE]
+SMR_ONLYs = [NR, EBR, HP, CDRC_EBR, CDRC_HP, CIRC_EBR, CIRC_HP]
+SMR_Is = [NR, EBR, HP, CDRC_EBR, CDRC_HP, CIRC_EBR, CIRC_HP]
 
 cpu_count = os.cpu_count()
 if not cpu_count or cpu_count <= 24:
@@ -81,13 +88,17 @@ line_shapes = {
     HP_PP: 'D',
     PEBR: "x",
     CDRC_EBR: "1",
+    CDRC_HP: "2",
     NBR: "p",
     NBR_LARGE: "H",
     HP_SHARP: "s",
     CDRC_HP_SHARP: "P",
     VBR: "*",
+    CIRC_EBR: "X",
+    CIRC_HP: "P",
 }
 
+# https://matplotlib.org/stable/gallery/color/named_colors.html
 line_colors = {
     NR: 'k',
     EBR: 'c',
@@ -95,11 +106,14 @@ line_colors = {
     HP_PP: 'purple',
     PEBR: "y",
     CDRC_EBR: "green",
+    CDRC_HP: "peru",
     NBR: "blue",
     NBR_LARGE: "indigo",
     HP_SHARP: "r",
     CDRC_HP_SHARP: "brown",
     VBR: "orange",
+    CIRC_EBR: "blue",
+    CIRC_HP: "purple",
 }
 
 line_types = {
@@ -109,11 +123,14 @@ line_types = {
     HP_PP: 'dashdot',
     PEBR: (5, (10, 3)),
     CDRC_EBR: (0, (3, 1)),
+    CDRC_HP: (0, (3, 1)),
     NBR: (5, (10, 3)),
     NBR_LARGE: (5, (10, 3)),
     HP_SHARP: (0, (3, 1, 1, 1)),
     CDRC_HP_SHARP: (0, (3, 1, 1, 1)),
     VBR: (0, (2, 1)),
+    CIRC_EBR: (0, (3, 1, 1, 1)),
+    CIRC_HP: (0, (3, 1, 1, 1)),
 }
 
 def filter_invalid_data(data, ds):
@@ -187,7 +204,7 @@ def draw_throughput(data, ds, bench, key_range):
     data = data[data.non_coop == 0]
     data = filter_invalid_data(data, ds)
     y_label = 'Throughput (M op/s)'
-    legend = False
+    legend = True
     y_max = data.throughput.max() * 1.05
     draw(plot_title(ds, bench), f'{RESULTS_PATH}/{ds}_{bench}_throughput.pdf',
          data, SMR_ONLY, THROUGHPUT, y_label, y_max, legend)
@@ -199,7 +216,7 @@ def draw_mem(data, ds, bench):
         data = data[data.mm != HP]
     y_label = 'Peak memory usage (MiB)'
     y_max = None
-    legend = False
+    legend = True
     _d = data[~data[SMR_I].isin([NR])]  # exclude NR and EBR stalled
     y_max = _d[_d.ds == ds].peak_mem.max() * 1.05
     draw(plot_title(ds, bench), f'{RESULTS_PATH}/{ds}_{bench}_peak_mem.pdf',
@@ -211,11 +228,12 @@ def draw_garb(data, ds, bench):
     data = data[data.key_range == key_range(ds)]
     data = data[data.mm != NR]
     data = data[data.mm != CDRC_EBR]
+    data = data[data.mm != CDRC_HP]
     data = data[data.mm != CDRC_HP_SHARP]
     data = data[data.mm != VBR]
     data = filter_invalid_data(data, ds)
     y_label = 'Avg. Unreclaimed memory blocks (×10⁴)'
-    legend = False
+    legend = True
 
     nbr_max = data[data.mm == NBR].avg_garb.max()
     hp_pp_max = data[data.mm == HP_PP].avg_garb.max()
@@ -230,11 +248,12 @@ def draw_peak_garb(data, ds, bench):
     data = data[data.key_range == key_range(ds)]
     data = data[data.mm != NR]
     data = data[data.mm != CDRC_EBR]
+    data = data[data.mm != CDRC_HP]
     data = data[data.mm != CDRC_HP_SHARP]
     data = data[data.mm != VBR]
     data = filter_invalid_data(data, ds)
     y_label = 'Peak unreclaimed memory blocks (×10⁴)'
-    legend = False
+    legend = True
 
     nbr_max = data[data.mm == NBR].peak_garb.max()
     hp_pp_max = data[data.mm == HP_PP].peak_garb.max()
