@@ -103,13 +103,17 @@ impl<K, V, C: Cs> OutputHolder<V> for Cursor<K, V, C> {
 
 impl<K, V, C: Cs> Cursor<K, V, C> {
     fn initialize(&mut self, head: &AtomicRc<Node<K, V, C>, C>, cs: &C) {
+        // Clearing all previous slots are important to reduce the memory consumption.
+        for pred in &mut self.preds {
+            pred.clear();
+        }
+        for succ in &mut self.succs {
+            succ.clear();
+        }
         self.preds[MAX_HEIGHT].load(head, cs);
         self.pred_offset.fill(0);
         for i in 0..MAX_HEIGHT + 1 {
             self.pred_offset[MAX_HEIGHT - i] = i;
-        }
-        for succ in &mut self.succs {
-            succ.clear();
         }
         self.found_level = None;
     }
