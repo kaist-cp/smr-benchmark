@@ -10,11 +10,14 @@ mms = ['nr', 'ebr', 'hp', 'circ-ebr', 'circ-hp', 'cdrc-ebr', 'cdrc-hp']
 i = 10
 cpu_count = os.cpu_count()
 if not cpu_count or cpu_count <= 24:
-    ts = list(map(str, [1] + list(range(4, 33, 4))))
+    ts_map = list(map(str, [1] + list(range(4, 33, 4))))
+    ts_queue = list(map(str, [1, 2, 3] + list(range(4, 33, 4))))
 elif cpu_count <= 64:
-    ts = list(map(str, [1] + list(range(8, 129, 8))))
+    ts_map = list(map(str, [1] + list(range(8, 129, 8))))
+    ts_queue = list(map(str, [1, 2, 4] + list(range(8, 129, 8))))
 else:
-    ts = list(map(str, [1] + list(range(10, 151, 10))))
+    ts_map = list(map(str, [1] + list(range(10, 151, 10))))
+    ts_queue = list(map(str, [1, 3, 5] + list(range(10, 151, 10))))
 runs = 1
 gs = [0, 1, 2]
 
@@ -50,14 +53,15 @@ for ds in dss:
         for g in gs:
             if invalid(mm, ds, g):
                 continue
-            for t in ts:
+            for t in ts_map:
                 for kr in key_ranges(ds):
                     cmd = smr_benchmark + opts(ds, mm, g, t, kr)
                     cmds.append(cmd)
 
 for mm in mms:
-    for t in ts:
-        cmd = double_link + [f'-m{str(mm)} -t{str(t)}', '-o', os.path.join(RESULTS_PATH, 'double-link.csv')]
+    for t in ts_queue:
+        cmd = double_link + ['-m', str(mm), '-t', str(t), '-o', os.path.join(RESULTS_PATH, 'double-link.csv')]
+        cmds.append(cmd)
 
 print('number of configurations: ', len(cmds))
 print('estimated time: ', (len(cmds) * i * 1.1) // 60, ' min *', runs, 'times')
