@@ -244,7 +244,7 @@ if __name__ == '__main__':
     matplotlib.rcParams['ps.fonttype'] = 42
 
 
-    for bench in [WRITE, HALF, READ, QUEUE]:
+    for bench in [WRITE, HALF, READ]:
         os.makedirs(f'{RESULTS_PATH}/{bench}', exist_ok=True)
 
     n_map = {0: ''}
@@ -291,7 +291,7 @@ if __name__ == '__main__':
     for ds in dss_read:
         for kr in key_ranges(ds):
             tasks.append((PEAK_MEM, avg_data[HALF][ds].copy(deep=True), ds, HALF, kr))
-            tasks.append((PEAK_MEM, avg_data[READ][ds].copy(deep=True), ds, HALF, kr))
+            tasks.append((PEAK_MEM, avg_data[READ][ds].copy(deep=True), ds, READ, kr))
 
     # 3. avg mem graph
     for ds in dss_write:
@@ -300,7 +300,7 @@ if __name__ == '__main__':
     for ds in dss_read:
         for kr in key_ranges(ds):
             tasks.append((AVG_MEM, avg_data[HALF][ds].copy(deep=True), ds, HALF, kr))
-            tasks.append((AVG_MEM, avg_data[READ][ds].copy(deep=True), ds, HALF, kr))
+            tasks.append((AVG_MEM, avg_data[READ][ds].copy(deep=True), ds, READ, kr))
 
     # TODO: Parallelize generating plots.
     # Problem: generating with multiprocessing breaks some plots...

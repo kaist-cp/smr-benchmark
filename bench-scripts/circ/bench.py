@@ -18,7 +18,7 @@ elif cpu_count <= 64:
 else:
     ts_map = list(map(str, [1] + list(range(10, 151, 10))))
     ts_queue = list(map(str, [1, 3, 5] + list(range(10, 151, 10))))
-runs = 1
+runs = 2
 gs = [0, 1, 2]
 
 if os.path.exists('.git'):

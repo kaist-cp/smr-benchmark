@@ -110,7 +110,7 @@ def draw_throughput(data, max_threads, width, height, legend):
 
 def draw_throughput_ratio(data, max_threads, width, height, legend):
     data = data[data.threads <= max_threads]
-    y_label = 'Throughput ratio to CDRC EBR'
+    y_label = 'Throughput ratio to CIRC EBR'
     name = f'{RESULTS_PATH}/queue/double-link_xmax{max_threads}_throughput-ratio.pdf'
     draw(name, data, SMR_ONLY, THROUGHPUT_RATIO, width, height, y_label=y_label, legend=legend)
     return name
@@ -143,6 +143,7 @@ if __name__ == '__main__':
 
     data = pd.read_csv(f'{RESULTS_PATH}/{DOUBLELINK}.csv')
     data = data[data.mm.isin(SMR_ONLYs)]
+    data.throughput = data.throughput.map(lambda x: x / 1_000_000)
     data.peak_mem = data.peak_mem.map(lambda x: x / (2 ** 30))
     data.avg_mem = data.avg_mem.map(lambda x: x / (2 ** 30))
     avg = data.groupby(['mm', 'threads']).mean().reset_index()
