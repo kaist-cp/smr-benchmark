@@ -146,7 +146,7 @@ impl<K: Ord, V> Cursor<K, V> {
 
             if next.tag() != 0 {
                 next.set_tag(0);
-                self.try_unlink_curr(next, cs).map_err(|_| ())?;
+                self.try_unlink_curr(next, cs)?;
                 self.curr = next;
                 continue;
             }

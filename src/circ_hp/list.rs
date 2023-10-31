@@ -177,7 +177,7 @@ impl<K: Ord, V> Cursor<K, V> {
 
             if self.next.tag() != 0 {
                 self.next.set_tag(0);
-                self.try_unlink_curr(cs).map_err(|_| ())?;
+                self.try_unlink_curr(cs)?;
                 Snapshot::swap(&mut self.curr, &mut self.next);
                 continue;
             }
