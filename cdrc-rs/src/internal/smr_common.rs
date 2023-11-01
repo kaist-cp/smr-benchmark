@@ -53,6 +53,7 @@ pub trait Cs {
     unsafe fn own_object<T>(ptr: *mut Counted<T>) -> Counted<T>;
     unsafe fn retire<T>(&self, ptr: *mut Counted<T>, ret_type: RetireType);
     fn clear(&mut self);
+    fn eager_reclaim(&mut self);
 
     #[inline]
     unsafe fn dispose<T>(&self, cnt: &mut Counted<T>) {

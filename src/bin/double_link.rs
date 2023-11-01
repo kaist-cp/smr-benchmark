@@ -29,6 +29,8 @@ pub enum MM {
     HP,
     CDRC_EBR,
     CDRC_HP,
+    CDRC_EBR_FLUSH,
+    CDRC_HP_FLUSH,
     CIRC_EBR,
     CIRC_HP,
 }
@@ -178,6 +180,8 @@ fn bench(config: &Config, output: &mut Writer<File>) {
         MM::HP => bench_queue_hp(config),
         MM::CDRC_EBR => bench_queue_cdrc::<cdrc_rs::CsEBR>(config),
         MM::CDRC_HP => bench_queue_cdrc::<cdrc_rs::CsHP>(config),
+        MM::CDRC_EBR_FLUSH => bench_queue_cdrc_flush::<cdrc_rs::CsEBR>(config),
+        MM::CDRC_HP_FLUSH => bench_queue_cdrc_flush::<cdrc_rs::CsHP>(config),
         MM::CIRC_EBR => bench_queue_circ_ebr(config),
         MM::CIRC_HP => bench_queue_circ_hp(config),
     };
@@ -505,6 +509,90 @@ fn bench_queue_cdrc<C: cdrc_rs::Cs>(config: &Config) -> (u64, usize, usize) {
                     queue.enqueue(item, &mut holder, &cs);
                     compiler_fence(Ordering::SeqCst);
                     queue.dequeue(&mut holder, &cs).unwrap();
+                    compiler_fence(Ordering::SeqCst);
+
+                    ops += 1;
+                    cs.clear();
+                }
+                ops_sender.send(ops).unwrap();
+            });
+        }
+    })
+    .unwrap();
+    println!("end");
+
+    let mut ops = 0;
+    for _ in 0..config.threads {
+        let local_ops = ops_receiver.recv().unwrap();
+        ops += local_ops;
+    }
+    let ops_per_sec = ops / config.interval;
+    let (peak_mem, avg_mem) = mem_receiver.recv().unwrap();
+    (ops_per_sec, peak_mem, avg_mem)
+}
+
+fn bench_queue_cdrc_flush<C: cdrc_rs::Cs>(config: &Config) -> (u64, usize, usize) {
+    let queue = cdrc::DoubleLink::<_, C>::new();
+
+    let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
+    let (ops_sender, ops_receiver) = mpsc::channel();
+    let (mem_sender, mem_receiver) = mpsc::channel();
+
+    scope(|s| {
+        // sampling & interference thread
+        if config.aux_thread > 0 {
+            let mem_sender = mem_sender.clone();
+            s.spawn(move |_| {
+                let mut samples = 0usize;
+                let mut acc = 0usize;
+                let mut peak = 0usize;
+                barrier.clone().wait();
+
+                let start = Instant::now();
+                let mut next_sampling = start + Duration::from_millis(1);
+                while start.elapsed() < config.duration {
+                    let now = Instant::now();
+                    if now > next_sampling {
+                        let allocated = config.mem_sampler.sample();
+                        samples += 1;
+
+                        acc += allocated;
+                        peak = max(peak, allocated);
+
+                        next_sampling = now + Duration::from_millis(1);
+                    }
+                    std::thread::sleep(config.aux_thread_period);
+                }
+
+                if config.sampling {
+                    mem_sender.send((peak, acc / samples)).unwrap();
+                } else {
+                    mem_sender.send((0, 0)).unwrap();
+                }
+            });
+        } else {
+            mem_sender.send((0, 0)).unwrap();
+        }
+
+        for _ in 0..config.threads {
+            let ops_sender = ops_sender.clone();
+            let queue = &queue;
+            s.spawn(move |_| {
+                let mut ops: u64 = 0;
+                let mut rng = &mut rand::thread_rng();
+                let dist = Uniform::new(0, 100000);
+                let mut holder = cdrc::double_link::Holder::new();
+                barrier.clone().wait();
+                let start = Instant::now();
+
+                let mut cs = C::new();
+                while start.elapsed() < config.duration {
+                    let item = dist.sample(&mut rng).to_string();
+                    queue.enqueue(item, &mut holder, &cs);
+                    cs.eager_reclaim();
+                    compiler_fence(Ordering::SeqCst);
+                    queue.dequeue(&mut holder, &cs).unwrap();
+                    cs.eager_reclaim();
                     compiler_fence(Ordering::SeqCst);
 
                     ops += 1;

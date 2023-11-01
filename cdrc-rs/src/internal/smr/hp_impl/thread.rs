@@ -74,6 +74,13 @@ impl Thread {
     }
 
     #[inline]
+    pub fn eager_reclaim(&self) {
+        self.count.set(0);
+        self.flush_retireds();
+        self.do_reclamation();
+    }
+
+    #[inline]
     pub(crate) fn do_reclamation(&self) {
         if self.in_recl.get() {
             // Prevent nested collections, but trigger a retrial.

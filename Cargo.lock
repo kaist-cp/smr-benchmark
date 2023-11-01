@@ -195,9 +195,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.4.6"
+version = "4.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d04704f56c2cde07f43e8e2c154b43f216dc5c92fc98ada720177362f953b956"
+checksum = "ac495e00dcec98c83465d5ad66c5c4fabd652fd6686e7c6269b117e729a6f17b"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -205,9 +205,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.4.6"
+version = "4.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e231faeaca65ebd1ea3c737966bf858971cd38c3849107aa3ea7de90a804e45"
+checksum = "c77ed9a32a62e6ca27175d00d29d05ca32e396ea1eb5fb01d8256b669cec7663"
 dependencies = [
  "anstream",
  "anstyle",
@@ -217,9 +217,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.4.2"
+version = "4.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0862016ff20d69b84ef8247369fabf5c008a7417002411897d40ee1f4532b873"
+checksum = "cf9804afaaf59a91e75b022a30fb7229a7901f60c755489cc61c9b423b836442"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -229,9 +229,9 @@ dependencies = [
 
 [[package]]
 name = "clap_lex"
-version = "0.5.1"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd7cc57abe963c6d3b9d8be5b06ba7c8957a930305ca90304f24ef040aa6f961"
+checksum = "702fc72eb24e5a1e48ce58027a675bc24edd52096d5397d4aea7c6dd9eca0bd1"
 
 [[package]]
 name = "colorchoice"
@@ -242,7 +242,7 @@ checksum = "acbf1af155f9b9ef647e42cdc158db4b64a1b61f743629225fde6f3e0be2a7c7"
 [[package]]
 name = "crossbeam"
 version = "0.8.2"
-source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#824fc4e4bacac1d99d9e894fb6bf43c653c62fb7"
+source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#cd6bf87a06c34fed69c07d4be1d741edfc434fce"
 dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-channel",
@@ -255,7 +255,7 @@ dependencies = [
 [[package]]
 name = "crossbeam-channel"
 version = "0.5.6"
-source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#824fc4e4bacac1d99d9e894fb6bf43c653c62fb7"
+source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#cd6bf87a06c34fed69c07d4be1d741edfc434fce"
 dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-utils 0.8.14 (git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested)",
@@ -264,7 +264,7 @@ dependencies = [
 [[package]]
 name = "crossbeam-deque"
 version = "0.8.2"
-source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#824fc4e4bacac1d99d9e894fb6bf43c653c62fb7"
+source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#cd6bf87a06c34fed69c07d4be1d741edfc434fce"
 dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-epoch 0.9.13 (git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested)",
@@ -285,7 +285,7 @@ dependencies = [
 [[package]]
 name = "crossbeam-epoch"
 version = "0.9.13"
-source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#824fc4e4bacac1d99d9e894fb6bf43c653c62fb7"
+source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#cd6bf87a06c34fed69c07d4be1d741edfc434fce"
 dependencies = [
  "autocfg",
  "cfg-if 1.0.0",
@@ -321,7 +321,7 @@ dependencies = [
 [[package]]
 name = "crossbeam-queue"
 version = "0.3.8"
-source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#824fc4e4bacac1d99d9e894fb6bf43c653c62fb7"
+source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#cd6bf87a06c34fed69c07d4be1d741edfc434fce"
 dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-utils 0.8.14 (git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested)",
@@ -337,7 +337,7 @@ dependencies = [
 [[package]]
 name = "crossbeam-utils"
 version = "0.8.14"
-source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#824fc4e4bacac1d99d9e894fb6bf43c653c62fb7"
+source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#cd6bf87a06c34fed69c07d4be1d741edfc434fce"
 dependencies = [
  "cfg-if 1.0.0",
 ]
@@ -682,9 +682,9 @@ checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
 name = "portable-atomic"
-version = "1.5.0"
+version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b559898e0b4931ed2d3b959ab0c2da4d99cc644c4b0b1a35b4d344027f474023"
+checksum = "3bccab0e7fd7cc19f820a1c8c91720af652d0c88dc9664dd72aef2614f04af3b"
 
 [[package]]
 name = "ppv-lite86"
@@ -777,9 +777,9 @@ checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
 
 [[package]]
 name = "rustix"
-version = "0.38.20"
+version = "0.38.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67ce50cb2e16c2903e30d1cbccfd8387a74b9d4c938b6a4c5ec6cc7556f7a8a0"
+checksum = "2b426b0506e5d50a7d8dafcf2e81471400deb602392c7dd110815afb4eaf02a3"
 dependencies = [
  "bitflags 2.4.1",
  "errno",
@@ -802,18 +802,18 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "serde"
-version = "1.0.189"
+version = "1.0.190"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e422a44e74ad4001bdc8eede9a4570ab52f71190e9c076d14369f38b9200537"
+checksum = "91d3c334ca1ee894a2c6f6ad698fe8c435b76d504b13d436f0685d648d6d96f7"
 dependencies = [
  "serde_derive",
 ]
 
 [[package]]
 name = "serde_derive"
-version = "1.0.189"
+version = "1.0.190"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e48d1f918009ce3145511378cf68d613e3b3d9137d67272562080d68a2b32d5"
+checksum = "67c5609f394e5c2bd7fc51efda478004ea80ef42fee983d5c67a65e34f32c0e3"
 dependencies = [
  "proc-macro2",
  "quote",

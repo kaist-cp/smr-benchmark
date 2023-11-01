@@ -139,4 +139,11 @@ impl Cs for CsHP {
     fn clear(&mut self) {
         // No-op for HP.
     }
+
+    #[inline]
+    fn eager_reclaim(&mut self) {
+        if let Some(thread) = unsafe { self.thread.as_ref() } {
+            thread.eager_reclaim();
+        }
+    }
 }

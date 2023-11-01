@@ -130,4 +130,12 @@ impl Cs for CsEBR {
             guard.repin_after(|| {});
         }
     }
+
+    #[inline]
+    fn eager_reclaim(&mut self) {
+        if let Some(guard) = &mut self.guard {
+            guard.repin_after(|| {});
+            guard.flush();
+        }
+    }
 }
