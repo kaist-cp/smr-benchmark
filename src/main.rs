@@ -81,6 +81,15 @@ pub enum BagSize {
     Large,
 }
 
+impl fmt::Display for BagSize {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BagSize::Small => write!(f, "small"),
+            BagSize::Large => write!(f, "large"),
+        }
+    }
+}
+
 #[derive(PartialEq, Debug)]
 pub enum Op {
     Get,
@@ -757,6 +766,7 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
                 .get_name()
                 .to_string(),
             config.threads.to_string(),
+            config.bag_size.to_string(),
             config.sampling_period.as_millis().to_string(),
             config.non_coop.to_string(),
             config.get_rate.to_string(),
