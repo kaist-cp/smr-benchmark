@@ -7,7 +7,7 @@ extern crate crossbeam_ebr;
 extern crate crossbeam_pebr;
 extern crate smr_benchmark;
 
-use ::hp_pp::DEFAULT_DOMAIN;
+use ::hp_pp::{set_counts_between_flush, DEFAULT_DOMAIN};
 use circ::{Cs, CsEBR, CsHP};
 use clap::{value_parser, Arg, ArgMatches, Command, ValueEnum};
 use crossbeam_utils::thread::scope;
@@ -31,21 +31,6 @@ use smr_benchmark::{
     pebr, vbr,
 };
 
-const NBR_CAP: NBRConfig = NBRConfig {
-    bag_cap_pow2: 256,
-    lowatermark: 32,
-};
-
-const NBR_LARGE_CAP: NBRConfig = NBRConfig {
-    bag_cap_pow2: 8192,
-    lowatermark: 1024,
-};
-
-struct NBRConfig {
-    bag_cap_pow2: usize,
-    lowatermark: usize,
-}
-
 #[derive(PartialEq, Debug, ValueEnum, Clone)]
 pub enum DS {
     HList,
@@ -67,7 +52,6 @@ pub enum MM {
     HP,
     HP_PP,
     NBR,
-    NBR_LARGE,
     CDRC_EBR,
     CDRC_HP,
     HP_SHARP,
@@ -91,6 +75,12 @@ impl fmt::Display for OpsPerCs {
     }
 }
 
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub enum BagSize {
+    Small,
+    Large,
+}
+
 #[derive(PartialEq, Debug)]
 pub enum Op {
     Get,
@@ -106,6 +96,7 @@ struct Config {
     ds: DS,
     mm: MM,
     threads: usize,
+    bag_size: BagSize,
 
     aux_thread: usize,
     aux_thread_period: Duration,
@@ -234,6 +225,13 @@ fn main() {
                 .help("Operations per each critical section")
                 .default_value("1"),
         )
+        .arg(
+            Arg::new("bag size")
+                .short('b')
+                .value_parser(["small", "large"])
+                .help("The size of deferred bag")
+                .default_value("small"),
+        )
         .arg(Arg::new("output").short('o').help(
             "Output CSV filename. \
                      Appends the data if the file already exists.\n\
@@ -252,6 +250,11 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
     let ds = m.get_one::<DS>("data structure").cloned().unwrap();
     let mm = m.get_one::<MM>("memory manager").cloned().unwrap();
     let threads = m.get_one::<usize>("threads").copied().unwrap();
+    let bag_size = match m.get_one::<String>("bag size").unwrap().as_str() {
+        "small" => BagSize::Small,
+        "large" => BagSize::Large,
+        _ => unreachable!("bag_size should be small or large"),
+    };
     let non_coop = m.get_one::<u8>("non-coop").copied().unwrap();
     let get_rate = m.get_one::<u8>("get rate").copied().unwrap();
     let range = m.get_one::<usize>("range").copied().unwrap();
@@ -263,7 +266,7 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
     let ops_per_cs = match m.get_one::<String>("ops per cs").unwrap().as_str() {
         "1" => OpsPerCs::One,
         "4" => OpsPerCs::Four,
-        _ => panic!("ops_per_cs should be one or four"),
+        _ => unreachable!("ops_per_cs should be one or four"),
     };
     let duration = Duration::from_secs(interval);
 
@@ -302,6 +305,7 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
                     "ds",
                     "mm",
                     "threads",
+                    "bag_size",
                     "sampling_period",
                     "non_coop",
                     "get_rate",
@@ -323,6 +327,7 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
         ds,
         mm,
         threads,
+        bag_size,
 
         aux_thread: if sampling || non_coop > 0 { 1 } else { 0 },
         aux_thread_period: Duration::from_millis(1),
@@ -493,57 +498,18 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             ),
         },
         MM::NBR => match config.ds {
-            DS::HList => bench_map_nbr::<nbr::HList<usize, usize>>(
-                config,
-                PrefillStrategy::Decreasing,
-                &NBR_CAP,
-                2,
-            ),
-            DS::HHSList => bench_map_nbr::<nbr::HHSList<usize, usize>>(
-                config,
-                PrefillStrategy::Decreasing,
-                &NBR_CAP,
-                2,
-            ),
-            DS::HashMap => bench_map_nbr::<nbr::HashMap<usize, usize>>(
-                config,
-                PrefillStrategy::Decreasing,
-                &NBR_CAP,
-                2,
-            ),
-            DS::NMTree => bench_map_nbr::<nbr::NMTreeMap<usize, usize>>(
-                config,
-                PrefillStrategy::Random,
-                &NBR_CAP,
-                4,
-            ),
-            _ => panic!("Unsupported(or unimplemented) data structure for NBR"),
-        },
-        MM::NBR_LARGE => match config.ds {
-            DS::HList => bench_map_nbr::<nbr::HList<usize, usize>>(
-                config,
-                PrefillStrategy::Decreasing,
-                &NBR_LARGE_CAP,
-                2,
-            ),
-            DS::HHSList => bench_map_nbr::<nbr::HHSList<usize, usize>>(
-                config,
-                PrefillStrategy::Decreasing,
-                &NBR_LARGE_CAP,
-                2,
-            ),
-            DS::HashMap => bench_map_nbr::<nbr::HashMap<usize, usize>>(
-                config,
-                PrefillStrategy::Decreasing,
-                &NBR_LARGE_CAP,
-                2,
-            ),
-            DS::NMTree => bench_map_nbr::<nbr::NMTreeMap<usize, usize>>(
-                config,
-                PrefillStrategy::Random,
-                &NBR_LARGE_CAP,
-                4,
-            ),
+            DS::HList => {
+                bench_map_nbr::<nbr::HList<usize, usize>>(config, PrefillStrategy::Decreasing, 2)
+            }
+            DS::HHSList => {
+                bench_map_nbr::<nbr::HHSList<usize, usize>>(config, PrefillStrategy::Decreasing, 2)
+            }
+            DS::HashMap => {
+                bench_map_nbr::<nbr::HashMap<usize, usize>>(config, PrefillStrategy::Decreasing, 2)
+            }
+            DS::NMTree => {
+                bench_map_nbr::<nbr::NMTreeMap<usize, usize>>(config, PrefillStrategy::Random, 4)
+            }
             _ => panic!("Unsupported(or unimplemented) data structure for NBR"),
         },
         MM::CDRC_EBR => match config.ds {
@@ -1372,6 +1338,10 @@ fn bench_map_ebr<M: ebr::ConcurrentMap<usize, usize> + Send + Sync, N: Unsigned>
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
+    match config.bag_size {
+        BagSize::Small => crossbeam_ebr::set_bag_capacity(64),
+        BagSize::Large => crossbeam_ebr::set_bag_capacity(4096),
+    }
     let map = &M::new();
     strategy.prefill_ebr(config, map);
 
@@ -1492,6 +1462,9 @@ fn bench_map_pebr<M: pebr::ConcurrentMap<usize, usize> + Send + Sync, N: Unsigne
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
+    if config.bag_size == BagSize::Large {
+        println!("Warning: Large bag size is currently unavailable for PEBR.");
+    }
     let map = &M::new();
     strategy.prefill_pebr(config, map);
 
@@ -1613,6 +1586,10 @@ fn bench_map_hp<M: hp::ConcurrentMap<usize, usize> + Send + Sync, N: Unsigned>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
+    match config.bag_size {
+        BagSize::Small => set_counts_between_flush(64),
+        BagSize::Large => set_counts_between_flush(4096),
+    }
     let map = &M::new();
     strategy.prefill_hp(config, map);
 
@@ -1710,18 +1687,16 @@ fn bench_map_hp<M: hp::ConcurrentMap<usize, usize> + Send + Sync, N: Unsigned>(
 fn bench_map_nbr<M: nbr::ConcurrentMap<usize, usize> + Send + Sync>(
     config: &Config,
     strategy: PrefillStrategy,
-    nbr_config: &NBRConfig,
     max_hazptrs: usize,
 ) -> (u64, usize, usize, usize, usize) {
+    let (bag_cap_pow2, lowatermark) = match config.bag_size {
+        BagSize::Small => (256, 32),
+        BagSize::Large => (8192, 1024),
+    };
     let map = &M::new();
     strategy.prefill_nbr(config, map, max_hazptrs);
 
-    let collector = &nbr_rs::Collector::new(
-        config.threads,
-        nbr_config.bag_cap_pow2,
-        nbr_config.lowatermark,
-        max_hazptrs,
-    );
+    let collector = &nbr_rs::Collector::new(config.threads, bag_cap_pow2, lowatermark, max_hazptrs);
 
     let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
     let (ops_sender, ops_receiver) = mpsc::channel();
@@ -1823,6 +1798,12 @@ fn bench_map_cdrc<
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
+    let counts = match config.bag_size {
+        BagSize::Small => 64,
+        BagSize::Large => 4096,
+    };
+    cdrc_rs::set_counts_between_flush_ebr(counts);
+    cdrc_rs::set_counts_between_flush_hp(counts);
     let map = &M::new();
     strategy.prefill_cdrc(config, map);
 
@@ -1924,6 +1905,10 @@ fn bench_map_circ_hp<M: circ_hp::ConcurrentMap<usize, usize> + Send + Sync, N: U
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
+    match config.bag_size {
+        BagSize::Small => circ::set_counts_between_flush_hp(64),
+        BagSize::Large => circ::set_counts_between_flush_hp(4096),
+    }
     let map = &M::new();
     strategy.prefill_circ_hp(config, map);
 
@@ -2025,6 +2010,10 @@ fn bench_map_circ_ebr<M: circ_ebr::ConcurrentMap<usize, usize> + Send + Sync, N:
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
+    match config.bag_size {
+        BagSize::Small => circ::set_counts_between_flush_ebr(64),
+        BagSize::Large => circ::set_counts_between_flush_ebr(4096),
+    }
     let map = &M::new();
     strategy.prefill_circ_ebr(config, map);
 
@@ -2125,6 +2114,9 @@ fn bench_map_hp_sharp<M: hp_sharp_bench::ConcurrentMap<usize, usize> + Send + Sy
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
+    if config.bag_size == BagSize::Large {
+        println!("Warning: Large bag size is currently unavailable for HP#.");
+    }
     let map = &M::new();
     strategy.prefill_hp_sharp(config, map);
 
@@ -2225,6 +2217,9 @@ fn bench_map_vbr<M: vbr::ConcurrentMap<usize, usize> + Send + Sync>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
+    if config.bag_size == BagSize::Large {
+        println!("Warning: Large bag size is currently unavailable for VBR.");
+    }
     let global = &M::global(config.prefill * 2);
     let local = &M::local(global);
     let map = &M::new(local);
