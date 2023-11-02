@@ -1,6 +1,7 @@
 [submodule "crossbeam-ebr"]
 	path = crossbeam-ebr
-	url = https://github.com/kaist-cp/crossbeam
+	url = https://github.com/powergee/crossbeam.git
+	branch = kaist-no-nested
 [submodule "crossbeam-pebr"]
 	path = crossbeam-pebr
 	url = https://github.com/kaist-cp/crossbeam
