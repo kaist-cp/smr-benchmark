@@ -19,7 +19,7 @@ impl<T> Output<T> {
 struct Node<T> {
     item: Option<T>,
     prev: Weak<Node<T>, CsEBR>,
-    next: AtomicRc<Node<T>, CsEBR>,
+    next: CachePadded<AtomicRc<Node<T>, CsEBR>>,
 }
 
 impl<T> Node<T> {
@@ -27,7 +27,7 @@ impl<T> Node<T> {
         Self {
             item: None,
             prev: Weak::null(),
-            next: AtomicRc::null(),
+            next: CachePadded::new(AtomicRc::null()),
         }
     }
 
@@ -35,7 +35,7 @@ impl<T> Node<T> {
         Self {
             item: Some(item),
             prev: Weak::null(),
-            next: AtomicRc::null(),
+            next: CachePadded::new(AtomicRc::null()),
         }
     }
 }

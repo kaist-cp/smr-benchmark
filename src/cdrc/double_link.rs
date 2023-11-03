@@ -22,7 +22,7 @@ impl<T, C: Cs> Holder<T, C> {
 struct Node<T, C: Cs> {
     item: Option<T>,
     prev: AtomicWeak<Node<T, C>, C>,
-    next: AtomicRc<Node<T, C>, C>,
+    next: CachePadded<AtomicRc<Node<T, C>, C>>,
 }
 
 impl<T, C: Cs> Node<T, C> {
@@ -30,7 +30,7 @@ impl<T, C: Cs> Node<T, C> {
         Self {
             item: None,
             prev: AtomicWeak::null(),
-            next: AtomicRc::null(),
+            next: CachePadded::new(AtomicRc::null()),
         }
     }
 
@@ -38,7 +38,7 @@ impl<T, C: Cs> Node<T, C> {
         Self {
             item: Some(item),
             prev: AtomicWeak::null(),
-            next: AtomicRc::null(),
+            next: CachePadded::new(AtomicRc::null()),
         }
     }
 }

@@ -44,6 +44,7 @@ struct Config {
     interval: u64,
     duration: Duration,
     mem_sampler: MemSampler,
+    key_dist: Uniform<usize>,
 }
 
 cfg_if! {
@@ -164,6 +165,7 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
         interval,
         duration,
         mem_sampler,
+        key_dist: Uniform::from(0..100000),
     };
     (config, output)
 }
@@ -254,13 +256,12 @@ fn bench_queue_nr(config: &Config) -> (u64, usize, usize) {
             let queue = &queue;
             s.spawn(move |_| {
                 let mut ops: u64 = 0;
-                let mut rng = &mut rand::thread_rng();
-                let dist = Uniform::new(0, 100000);
+                let rng = &mut rand::thread_rng();
                 barrier.clone().wait();
                 let start = Instant::now();
 
                 while start.elapsed() < config.duration {
-                    let item = dist.sample(&mut rng).to_string();
+                    let item = config.key_dist.sample(rng).to_string();
                     queue.enqueue(item);
                     compiler_fence(Ordering::SeqCst);
                     queue.dequeue().unwrap();
@@ -334,7 +335,7 @@ fn bench_queue_ebr(config: &Config) -> (u64, usize, usize) {
             let queue = &queue;
             s.spawn(move |_| {
                 let mut ops: u64 = 0;
-                let mut rng = &mut rand::thread_rng();
+                let rng = &mut rand::thread_rng();
                 let dist = Uniform::new(0, 100000);
                 let handle = collector.register();
                 barrier.clone().wait();
@@ -342,7 +343,7 @@ fn bench_queue_ebr(config: &Config) -> (u64, usize, usize) {
 
                 let mut guard = handle.pin();
                 while start.elapsed() < config.duration {
-                    let item = dist.sample(&mut rng).to_string();
+                    let item = dist.sample(rng).to_string();
                     queue.enqueue(item, &guard);
                     compiler_fence(Ordering::SeqCst);
                     queue.dequeue(&guard).unwrap();
@@ -417,14 +418,14 @@ fn bench_queue_hp(config: &Config) -> (u64, usize, usize) {
             let queue = &queue;
             s.spawn(move |_| {
                 let mut ops: u64 = 0;
-                let mut rng = &mut rand::thread_rng();
+                let rng = &mut rand::thread_rng();
                 let dist = Uniform::new(0, 100000);
                 let mut handle = hp::double_link::Handle::default();
                 barrier.clone().wait();
                 let start = Instant::now();
 
                 while start.elapsed() < config.duration {
-                    let item = dist.sample(&mut rng).to_string();
+                    let item = dist.sample(rng).to_string();
                     queue.enqueue(item, &mut handle);
                     compiler_fence(Ordering::SeqCst);
                     queue.dequeue(&mut handle).unwrap();
@@ -497,7 +498,7 @@ fn bench_queue_cdrc<C: cdrc_rs::Cs>(config: &Config) -> (u64, usize, usize) {
             let queue = &queue;
             s.spawn(move |_| {
                 let mut ops: u64 = 0;
-                let mut rng = &mut rand::thread_rng();
+                let rng = &mut rand::thread_rng();
                 let dist = Uniform::new(0, 100000);
                 let mut holder = cdrc::double_link::Holder::new();
                 barrier.clone().wait();
@@ -505,7 +506,7 @@ fn bench_queue_cdrc<C: cdrc_rs::Cs>(config: &Config) -> (u64, usize, usize) {
 
                 let mut cs = C::new();
                 while start.elapsed() < config.duration {
-                    let item = dist.sample(&mut rng).to_string();
+                    let item = dist.sample(rng).to_string();
                     queue.enqueue(item, &mut holder, &cs);
                     compiler_fence(Ordering::SeqCst);
                     queue.dequeue(&mut holder, &cs).unwrap();
@@ -579,7 +580,7 @@ fn bench_queue_cdrc_flush<C: cdrc_rs::Cs>(config: &Config) -> (u64, usize, usize
             let queue = &queue;
             s.spawn(move |_| {
                 let mut ops: u64 = 0;
-                let mut rng = &mut rand::thread_rng();
+                let rng = &mut rand::thread_rng();
                 let dist = Uniform::new(0, 100000);
                 let mut holder = cdrc::double_link::Holder::new();
                 barrier.clone().wait();
@@ -587,7 +588,7 @@ fn bench_queue_cdrc_flush<C: cdrc_rs::Cs>(config: &Config) -> (u64, usize, usize
 
                 let mut cs = C::new();
                 while start.elapsed() < config.duration {
-                    let item = dist.sample(&mut rng).to_string();
+                    let item = dist.sample(rng).to_string();
                     queue.enqueue(item, &mut holder, &cs);
                     cs.eager_reclaim();
                     compiler_fence(Ordering::SeqCst);
@@ -663,14 +664,14 @@ fn bench_queue_circ_ebr(config: &Config) -> (u64, usize, usize) {
             let queue = &queue;
             s.spawn(move |_| {
                 let mut ops: u64 = 0;
-                let mut rng = &mut rand::thread_rng();
+                let rng = &mut rand::thread_rng();
                 let dist = Uniform::new(0, 100000);
                 barrier.clone().wait();
                 let start = Instant::now();
 
                 let mut cs = circ::CsEBR::new();
                 while start.elapsed() < config.duration {
-                    let item = dist.sample(&mut rng).to_string();
+                    let item = dist.sample(rng).to_string();
                     queue.enqueue(item, &cs);
                     compiler_fence(Ordering::SeqCst);
                     queue.dequeue(&cs).unwrap();
@@ -744,7 +745,7 @@ fn bench_queue_circ_hp(config: &Config) -> (u64, usize, usize) {
             let queue = &queue;
             s.spawn(move |_| {
                 let mut ops: u64 = 0;
-                let mut rng = &mut rand::thread_rng();
+                let rng = &mut rand::thread_rng();
                 let dist = Uniform::new(0, 100000);
                 let mut holder = circ_hp::double_link::Holder::new();
                 barrier.clone().wait();
@@ -752,7 +753,7 @@ fn bench_queue_circ_hp(config: &Config) -> (u64, usize, usize) {
 
                 let mut cs = Cs::new();
                 while start.elapsed() < config.duration {
-                    let item = dist.sample(&mut rng).to_string();
+                    let item = dist.sample(rng).to_string();
                     queue.enqueue(item, &mut holder, &cs);
                     compiler_fence(Ordering::SeqCst);
                     queue.dequeue(&mut holder, &cs).unwrap();

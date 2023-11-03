@@ -9,7 +9,7 @@ use hp_pp::{light_membarrier, HazardPointer, Thread, DEFAULT_DOMAIN};
 struct Node<T> {
     item: Option<T>,
     prev: *mut Node<T>,
-    next: AtomicPtr<Node<T>>,
+    next: CachePadded<AtomicPtr<Node<T>>>,
 }
 
 impl<T> Node<T> {
@@ -17,7 +17,7 @@ impl<T> Node<T> {
         Self {
             item: None,
             prev: null_mut(),
-            next: AtomicPtr::new(null_mut()),
+            next: CachePadded::new(AtomicPtr::new(null_mut())),
         }
     }
 
@@ -25,7 +25,7 @@ impl<T> Node<T> {
         Self {
             item: Some(item),
             prev: null_mut(),
-            next: AtomicPtr::new(null_mut()),
+            next: CachePadded::new(AtomicPtr::new(null_mut())),
         }
     }
 }

@@ -6,7 +6,7 @@ use crossbeam_utils::CachePadded;
 struct Node<T> {
     item: Option<T>,
     prev: Atomic<Node<T>>,
-    next: Atomic<Node<T>>,
+    next: CachePadded<Atomic<Node<T>>>,
 }
 
 impl<T> Node<T> {
@@ -14,7 +14,7 @@ impl<T> Node<T> {
         Self {
             item: None,
             prev: Atomic::null(),
-            next: Atomic::null(),
+            next: CachePadded::new(Atomic::null()),
         }
     }
 
@@ -22,7 +22,7 @@ impl<T> Node<T> {
         Self {
             item: Some(item),
             prev: Atomic::null(),
-            next: Atomic::null(),
+            next: CachePadded::new(Atomic::null()),
         }
     }
 }
