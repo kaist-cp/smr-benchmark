@@ -19,6 +19,7 @@ use std::cmp::max;
 use std::fmt;
 use std::fs::{create_dir_all, File, OpenOptions};
 use std::io::{stdout, Write};
+use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
@@ -172,18 +173,18 @@ fn main() {
                 )
                 .default_value("1"),
         )
-        .arg(Arg::new("output").short('o').help(
-            "Output CSV filename. \
-                     Appends the data if the file already exists.\n\
-                     [default: results/<DS>.csv]",
-        ))
+        .arg(
+            Arg::new("output")
+                .short('o')
+                .help("Output CSV filename. Appends the data if the file already exists."),
+        )
         .get_matches();
 
     let (config, mut output) = setup(matches);
-    bench::<U1>(&config, &mut output);
+    bench::<U1>(&config, output.as_mut());
 }
 
-fn setup(m: ArgMatches) -> (Config, Writer<File>) {
+fn setup(m: ArgMatches) -> (Config, Option<Writer<File>>) {
     let mm = m.get_one::<MM>("memory manager").cloned().unwrap();
     let writers = m.get_one::<usize>("writers").copied().unwrap();
     let readers = m.get_one::<usize>("readers").copied().unwrap();
@@ -200,43 +201,43 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
         "The number of readers must be greater than zero!"
     );
 
-    let output_name = m
-        .get_one("output")
-        .cloned()
-        .unwrap_or("results/long-running.csv".to_string());
-    create_dir_all("results").unwrap();
-    let output = match OpenOptions::new()
-        .read(true)
-        .write(true)
-        .append(true)
-        .open(&output_name)
-    {
-        Ok(f) => csv::Writer::from_writer(f),
-        Err(_) => {
-            let f = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .open(&output_name)
-                .unwrap();
-            let mut output = csv::Writer::from_writer(f);
-            // NOTE: `write_record` on `bench`
-            output
-                .write_record(&[
-                    "mm",
-                    "sampling_period",
-                    "throughput",
-                    "peak_mem",
-                    "avg_mem",
-                    "peak_garb",
-                    "avg_garb",
-                    "key_range",
-                ])
-                .unwrap();
-            output.flush().unwrap();
-            output
+    let output = m.get_one::<String>("output").map(|output_name| {
+        let output_path = Path::new(output_name);
+        let dir = output_path.parent().unwrap();
+        create_dir_all(dir).unwrap();
+        match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .append(true)
+            .open(&output_name)
+        {
+            Ok(f) => csv::Writer::from_writer(f),
+            Err(_) => {
+                let f = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .open(&output_name)
+                    .unwrap();
+                let mut output = csv::Writer::from_writer(f);
+                // NOTE: `write_record` on `bench`
+                output
+                    .write_record(&[
+                        "mm",
+                        "sampling_period",
+                        "throughput",
+                        "peak_mem",
+                        "avg_mem",
+                        "peak_garb",
+                        "avg_garb",
+                        "key_range",
+                    ])
+                    .unwrap();
+                output.flush().unwrap();
+                output
+            }
         }
-    };
+    });
     let mem_sampler = MemSampler::new();
     let config = Config {
         mm,
@@ -258,7 +259,7 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
     (config, output)
 }
 
-fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
+fn bench<N: Unsigned>(config: &Config, output: Option<&mut Writer<File>>) {
     println!(
         "{}: {} writers, {} readers",
         config.mm.to_possible_value().unwrap().get_name(),
@@ -278,24 +279,26 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
         MM::NBR_LARGE => bench_map_nbr(config, PrefillStrategy::Decreasing, &NBR_LARGE_CAP, 2),
         MM::VBR => bench_map_vbr(config, PrefillStrategy::Decreasing),
     };
-    output
-        .write_record(&[
-            config
-                .mm
-                .to_possible_value()
-                .unwrap()
-                .get_name()
-                .to_string(),
-            config.sampling_period.as_millis().to_string(),
-            ops_per_sec.to_string(),
-            peak_mem.to_string(),
-            avg_mem.to_string(),
-            peak_garb.to_string(),
-            avg_garb.to_string(),
-            (config.prefill * 2).to_string(),
-        ])
-        .unwrap();
-    output.flush().unwrap();
+    if let Some(output) = output {
+        output
+            .write_record(&[
+                config
+                    .mm
+                    .to_possible_value()
+                    .unwrap()
+                    .get_name()
+                    .to_string(),
+                config.sampling_period.as_millis().to_string(),
+                ops_per_sec.to_string(),
+                peak_mem.to_string(),
+                avg_mem.to_string(),
+                peak_garb.to_string(),
+                avg_garb.to_string(),
+                (config.prefill * 2).to_string(),
+            ])
+            .unwrap();
+        output.flush().unwrap();
+    }
     println!(
         "ops/s: {}, peak mem: {}, avg_mem: {}, peak garb: {}, avg garb: {}",
         ops_per_sec, peak_mem, avg_mem, peak_garb, avg_garb

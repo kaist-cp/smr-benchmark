@@ -20,6 +20,7 @@ use std::fmt;
 use std::fs::{create_dir_all, File, OpenOptions};
 use std::io::{stdout, Write};
 use std::mem::ManuallyDrop;
+use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc, Barrier};
 use std::thread::available_parallelism;
@@ -241,21 +242,21 @@ fn main() {
                 .help("The size of deferred bag")
                 .default_value("small"),
         )
-        .arg(Arg::new("output").short('o').help(
-            "Output CSV filename. \
-                     Appends the data if the file already exists.\n\
-                     [default: results/<DS>.csv]",
-        ))
+        .arg(
+            Arg::new("output")
+                .short('o')
+                .help("Output CSV filename. Appends the data if the file already exists."),
+        )
         .get_matches();
 
     let (config, mut output) = setup(matches);
     match config.ops_per_cs {
-        OpsPerCs::One => bench::<U1>(&config, &mut output),
-        OpsPerCs::Four => bench::<U4>(&config, &mut output),
+        OpsPerCs::One => bench::<U1>(&config, output.as_mut()),
+        OpsPerCs::Four => bench::<U4>(&config, output.as_mut()),
     }
 }
 
-fn setup(m: ArgMatches) -> (Config, Writer<File>) {
+fn setup(m: ArgMatches) -> (Config, Option<Writer<File>>) {
     let ds = m.get_one::<DS>("data structure").cloned().unwrap();
     let mm = m.get_one::<MM>("memory manager").cloned().unwrap();
     let threads = m.get_one::<usize>("threads").copied().unwrap();
@@ -287,50 +288,50 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
     };
     let op_dist = WeightedIndex::new(op_weights).unwrap();
 
-    let output_name = m.get_one::<String>("output").cloned().unwrap_or(format!(
-        "results/{}.csv",
-        ds.to_possible_value().unwrap().get_name()
-    ));
-    create_dir_all("results").unwrap();
-    let output = match OpenOptions::new()
-        .read(true)
-        .write(true)
-        .append(true)
-        .open(&output_name)
-    {
-        Ok(f) => csv::Writer::from_writer(f),
-        Err(_) => {
-            let f = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .open(&output_name)
-                .unwrap();
-            let mut output = csv::Writer::from_writer(f);
-            // NOTE: `write_record` on `bench`
-            output
-                .write_record(&[
-                    // "timestamp",
-                    "ds",
-                    "mm",
-                    "threads",
-                    "bag_size",
-                    "sampling_period",
-                    "non_coop",
-                    "get_rate",
-                    "ops_per_cs",
-                    "throughput",
-                    "peak_mem",
-                    "avg_mem",
-                    "peak_garb",
-                    "avg_garb",
-                    "key_range",
-                ])
-                .unwrap();
-            output.flush().unwrap();
-            output
+    let output = m.get_one::<String>("output").map(|output_name| {
+        let output_path = Path::new(output_name);
+        let dir = output_path.parent().unwrap();
+        create_dir_all(dir).unwrap();
+        match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .append(true)
+            .open(output_path)
+        {
+            Ok(f) => csv::Writer::from_writer(f),
+            Err(_) => {
+                let f = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .open(output_path)
+                    .unwrap();
+                let mut output = csv::Writer::from_writer(f);
+                // NOTE: `write_record` on `bench`
+                output
+                    .write_record(&[
+                        // "timestamp",
+                        "ds",
+                        "mm",
+                        "threads",
+                        "bag_size",
+                        "sampling_period",
+                        "non_coop",
+                        "get_rate",
+                        "ops_per_cs",
+                        "throughput",
+                        "peak_mem",
+                        "avg_mem",
+                        "peak_garb",
+                        "avg_garb",
+                        "key_range",
+                    ])
+                    .unwrap();
+                output.flush().unwrap();
+                output
+            }
         }
-    };
+    });
     let mem_sampler = MemSampler::new();
     let config = Config {
         ds,
@@ -363,7 +364,7 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
     (config, output)
 }
 
-fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
+fn bench<N: Unsigned>(config: &Config, output: Option<&mut Writer<File>>) {
     println!(
         "{}: {}, {} threads, n{}, c{}, g{}",
         config.ds.to_possible_value().unwrap().get_name(),
@@ -750,36 +751,38 @@ fn bench<N: Unsigned>(config: &Config, output: &mut Writer<File>) {
             _ => panic!("Unsupported(or unimplemented) data structure for VBR"),
         },
     };
-    output
-        .write_record(&[
-            // chrono::Local::now().to_rfc3339(),
-            config
-                .ds
-                .to_possible_value()
-                .unwrap()
-                .get_name()
-                .to_string(),
-            config
-                .mm
-                .to_possible_value()
-                .unwrap()
-                .get_name()
-                .to_string(),
-            config.threads.to_string(),
-            config.bag_size.to_string(),
-            config.sampling_period.as_millis().to_string(),
-            config.non_coop.to_string(),
-            config.get_rate.to_string(),
-            config.ops_per_cs.to_string(),
-            ops_per_sec.to_string(),
-            peak_mem.to_string(),
-            avg_mem.to_string(),
-            peak_garb.to_string(),
-            avg_garb.to_string(),
-            (config.prefill * 2).to_string(),
-        ])
-        .unwrap();
-    output.flush().unwrap();
+    if let Some(output) = output {
+        output
+            .write_record(&[
+                // chrono::Local::now().to_rfc3339(),
+                config
+                    .ds
+                    .to_possible_value()
+                    .unwrap()
+                    .get_name()
+                    .to_string(),
+                config
+                    .mm
+                    .to_possible_value()
+                    .unwrap()
+                    .get_name()
+                    .to_string(),
+                config.threads.to_string(),
+                config.bag_size.to_string(),
+                config.sampling_period.as_millis().to_string(),
+                config.non_coop.to_string(),
+                config.get_rate.to_string(),
+                config.ops_per_cs.to_string(),
+                ops_per_sec.to_string(),
+                peak_mem.to_string(),
+                avg_mem.to_string(),
+                peak_garb.to_string(),
+                avg_garb.to_string(),
+                (config.prefill * 2).to_string(),
+            ])
+            .unwrap();
+        output.flush().unwrap();
+    }
     println!(
         "ops/s: {}, peak mem: {}, avg_mem: {}, peak garb: {}, avg garb: {}",
         ops_per_sec, peak_mem, avg_mem, peak_garb, avg_garb

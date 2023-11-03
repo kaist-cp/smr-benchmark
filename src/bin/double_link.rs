@@ -15,6 +15,7 @@ use rand::distributions::Uniform;
 use rand::prelude::*;
 use std::cmp::max;
 use std::fs::{create_dir_all, File, OpenOptions};
+use std::path::Path;
 use std::sync::atomic::{compiler_fence, Ordering};
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
@@ -104,18 +105,18 @@ fn main() {
                 .help("Time interval in seconds to run the benchmark")
                 .default_value("10"),
         )
-        .arg(Arg::new("output").short('o').help(
-            "Output CSV filename. \
-                     Appends the data if the file already exists.\n\
-                     [default: results/<DS>.csv]",
-        ))
+        .arg(
+            Arg::new("output")
+                .short('o')
+                .help("Output CSV filename. Appends the data if the file already exists."),
+        )
         .get_matches();
 
     let (config, mut output) = setup(matches);
-    bench(&config, &mut output);
+    bench(&config, output.as_mut());
 }
 
-fn setup(m: ArgMatches) -> (Config, Writer<File>) {
+fn setup(m: ArgMatches) -> (Config, Option<Writer<File>>) {
     let mm = m.get_one::<MM>("memory manager").cloned().unwrap();
     let threads = m.get_one::<usize>("threads").copied().unwrap();
     let interval = m.get_one::<u64>("interval").copied().unwrap();
@@ -127,34 +128,34 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
         "The number of threads must be greater than zero!"
     );
 
-    let output_name = m
-        .get_one("output")
-        .cloned()
-        .unwrap_or("results/double-link.csv".to_string());
-    create_dir_all("results").unwrap();
-    let output = match OpenOptions::new()
-        .read(true)
-        .write(true)
-        .append(true)
-        .open(&output_name)
-    {
-        Ok(f) => csv::Writer::from_writer(f),
-        Err(_) => {
-            let f = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .open(&output_name)
-                .unwrap();
-            let mut output = csv::Writer::from_writer(f);
-            // NOTE: `write_record` on `bench`
-            output
-                .write_record(&["mm", "threads", "throughput", "peak_mem", "avg_mem"])
-                .unwrap();
-            output.flush().unwrap();
-            output
+    let output = m.get_one::<String>("output").map(|output_name| {
+        let output_path = Path::new(output_name);
+        let dir = output_path.parent().unwrap();
+        create_dir_all(dir).unwrap();
+        match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .append(true)
+            .open(output_path)
+        {
+            Ok(f) => csv::Writer::from_writer(f),
+            Err(_) => {
+                let f = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .open(output_path)
+                    .unwrap();
+                let mut output = csv::Writer::from_writer(f);
+                // NOTE: `write_record` on `bench`
+                output
+                    .write_record(&["mm", "threads", "throughput", "peak_mem", "avg_mem"])
+                    .unwrap();
+                output.flush().unwrap();
+                output
+            }
         }
-    };
+    });
     let mem_sampler = MemSampler::new();
     let config = Config {
         mm,
@@ -170,7 +171,7 @@ fn setup(m: ArgMatches) -> (Config, Writer<File>) {
     (config, output)
 }
 
-fn bench(config: &Config, output: &mut Writer<File>) {
+fn bench(config: &Config, output: Option<&mut Writer<File>>) {
     println!(
         "{}: {} threads",
         config.mm.to_possible_value().unwrap().get_name(),
@@ -187,21 +188,23 @@ fn bench(config: &Config, output: &mut Writer<File>) {
         MM::CIRC_EBR => bench_queue_circ_ebr(config),
         MM::CIRC_HP => bench_queue_circ_hp(config),
     };
-    output
-        .write_record(&[
-            config
-                .mm
-                .to_possible_value()
-                .unwrap()
-                .get_name()
-                .to_string(),
-            config.threads.to_string(),
-            ops_per_sec.to_string(),
-            peak_mem.to_string(),
-            avg_mem.to_string(),
-        ])
-        .unwrap();
-    output.flush().unwrap();
+    if let Some(output) = output {
+        output
+            .write_record(&[
+                config
+                    .mm
+                    .to_possible_value()
+                    .unwrap()
+                    .get_name()
+                    .to_string(),
+                config.threads.to_string(),
+                ops_per_sec.to_string(),
+                peak_mem.to_string(),
+                avg_mem.to_string(),
+            ])
+            .unwrap();
+        output.flush().unwrap();
+    }
     println!(
         "ops/s: {}, peak mem: {}, avg_mem: {}",
         ops_per_sec, peak_mem, avg_mem
