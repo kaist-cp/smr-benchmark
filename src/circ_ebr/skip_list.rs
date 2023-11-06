@@ -243,24 +243,19 @@ where
         level: usize,
         cs: &CsEBR,
     ) -> bool {
-        debug_assert!(curr.tag() == 0);
-        debug_assert!(succ.tag() == 0);
-        let (succ_rc, succ_dt) = succ.loan();
-
         match unsafe { pred.deref() }.next[level].compare_exchange(
             curr.as_ptr().with_tag(0),
-            succ_rc,
+            succ.upgrade(),
             Ordering::Release,
             Ordering::Relaxed,
             cs,
         ) {
             Ok(rc) => {
                 rc.finalize(cs);
-                succ_dt.repay_frontier(&unsafe { curr.deref() }.next[level], 1, cs);
                 true
             }
             Err(e) => {
-                succ_dt.repay(e.desired());
+                e.desired().finalize(cs);
                 false
             }
         }
