@@ -27,9 +27,10 @@ FORMAL_NAMES = {
 EBR = "ebr"
 NR = "nr"
 CDRC_EBR = "cdrc-ebr"
+CDRC_EBR_FLUSH = "cdrc-ebr-flush"
 CIRC_EBR = "circ-ebr"
 
-SMR_ONLYs = [NR, EBR, CDRC_EBR, CIRC_EBR]
+SMR_ONLYs = [NR, EBR, CDRC_EBR, CDRC_EBR_FLUSH, CIRC_EBR]
 
 cpu_count = os.cpu_count()
 if not cpu_count or cpu_count <= 24:
@@ -44,6 +45,7 @@ line_shapes = {
     NR: '.',
     EBR: 'o',
     CDRC_EBR: "1",
+    CDRC_EBR_FLUSH: "|",
     CIRC_EBR: "X",
 }
 
@@ -52,6 +54,7 @@ line_colors = {
     NR: 'k',
     EBR: 'c',
     CDRC_EBR: "green",
+    CDRC_EBR_FLUSH: "gray",
     CIRC_EBR: "blue",
 }
 
@@ -59,6 +62,7 @@ line_types = {
     NR: '-',
     EBR: 'dotted',
     CDRC_EBR: (5, (10, 3)),
+    CDRC_EBR_FLUSH: (5, (10, 3)),
     CIRC_EBR: (0, (3, 1)),
 }
 
@@ -110,7 +114,7 @@ def draw_throughput(data, max_threads, width, height, legend):
 
 def draw_throughput_ratio(data, max_threads, width, height, legend):
     data = data[data.threads <= max_threads]
-    y_label = 'Throughput ratio to CIRC EBR'
+    y_label = 'Throughput ratio to RCU'
     name = f'{RESULTS_PATH}/queue/double-link_xmax{max_threads}_throughput-ratio.pdf'
     draw(name, data, SMR_ONLY, THROUGHPUT_RATIO, width, height, y_label=y_label, legend=legend)
     return name
@@ -148,17 +152,17 @@ if __name__ == '__main__':
     data.avg_mem = data.avg_mem.map(lambda x: x / (2 ** 30))
     avg = data.groupby(['mm', 'threads']).mean().reset_index()
 
-    base = avg[avg.mm == CIRC_EBR].throughput.values
+    base = avg[avg.mm == EBR].throughput.values
     for m in SMR_ONLYs:
         thr = avg[avg.mm == m].throughput.values
         avg.loc[avg.mm == m, THROUGHPUT_RATIO] = thr / base
 
     avg[SMR_ONLY] = pd.Categorical(avg.mm.map(str), SMR_ONLYs)
     avg['ds'] = 'double-link'
-    draw_throughput(avg, 128, 10, 7, True)
-    draw_throughput_ratio(avg, 128, 10, 7, True)
-    draw_peak_mem(avg, 128, 10, 7, True)
-    draw_avg_mem(avg, 128, 10, 7, True)
+    draw_throughput(avg, 128, 10, 7, False)
+    draw_throughput_ratio(avg, 128, 10, 7, False)
+    draw_peak_mem(avg, 128, 10, 7, False)
+    draw_avg_mem(avg, 128, 10, 7, False)
     draw_throughput(avg, 32, 7, 5, False)
     draw_throughput_ratio(avg, 32, 7, 5, False)
     draw_peak_mem(avg, 32, 7, 5, False)

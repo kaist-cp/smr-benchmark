@@ -165,7 +165,6 @@ def draw_throughput(data, ds, bench, key_range):
         data = data[data.key_range == key_range]
     data = filter_invalid_data(data, ds)
     y_label = 'Throughput (M op/s)'
-    legend = True
     y_max = data.throughput.max() * 1.05
     props = "_".join(filter(lambda x: x != None, [
         ds,
@@ -174,7 +173,7 @@ def draw_throughput(data, ds, bench, key_range):
     ]))
     name = f'{RESULTS_PATH}/{bench}/{props}_throughput.pdf'
     draw(plot_title(ds, bench), name,
-         data, SMR_ONLY, THROUGHPUT, y_label, y_max, legend)
+         data, SMR_ONLY, THROUGHPUT, y_label, y_max)
     return name
 
 def draw_peak_mem(data, ds, bench, key_range):
@@ -183,7 +182,6 @@ def draw_peak_mem(data, ds, bench, key_range):
     data = filter_invalid_data(data, ds)
     y_label = 'Peak memory usage (MiB)'
     y_max = None
-    legend = True
     _d = data[~data[SMR_I].isin([NR])]  # exclude NR and EBR stalled
     y_max = _d[_d.ds == ds].peak_mem.max()
     y_min = _d[_d.ds == ds].peak_mem.min()
@@ -197,7 +195,7 @@ def draw_peak_mem(data, ds, bench, key_range):
     ]))
     name = f'{RESULTS_PATH}/{bench}/{props}_peak_mem.pdf'
     draw(plot_title(ds, bench), name,
-         data, SMR_I, PEAK_MEM, y_label, y_max, legend, y_min=y_min)
+         data, SMR_I, PEAK_MEM, y_label, y_max, y_min=y_min)
     return name
 
 def draw_avg_mem(data, ds, bench, key_range):
@@ -206,7 +204,6 @@ def draw_avg_mem(data, ds, bench, key_range):
     data = filter_invalid_data(data, ds)
     y_label = 'Avg. memory usage (MiB)'
     y_max = None
-    legend = True
     _d = data[~data[SMR_I].isin([NR])]  # exclude NR and EBR stalled
     y_max = _d[_d.ds == ds].avg_mem.max()
     y_min = _d[_d.ds == ds].avg_mem.min()
@@ -220,7 +217,7 @@ def draw_avg_mem(data, ds, bench, key_range):
     ]))
     name = f'{RESULTS_PATH}/{bench}/{props}_avg_mem.pdf'
     draw(plot_title(ds, bench), name,
-         data, SMR_I, AVG_MEM, y_label, y_max, legend, y_min=y_min)
+         data, SMR_I, AVG_MEM, y_label, y_max, y_min=y_min)
     return name
 
 def draw_task(descriptor):

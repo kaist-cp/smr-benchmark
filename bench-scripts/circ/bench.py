@@ -4,9 +4,11 @@ import subprocess
 import os
 
 RESULTS_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "results")
+BIN_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "target", "release")
 
 dss = ['h-list', 'hm-list', 'hhs-list', 'hash-map', 'nm-tree', 'skip-list']
-mms = ['nr', 'ebr', 'hp', 'circ-ebr', 'circ-hp', 'cdrc-ebr', 'cdrc-hp']
+mms_map = ['nr', 'ebr', 'hp', 'circ-ebr', 'circ-hp', 'cdrc-ebr', 'cdrc-hp']
+mms_queue = ['nr', 'ebr', 'circ-ebr', 'cdrc-ebr', 'cdrc-ebr-flush']
 i = 10
 cpu_count = os.cpu_count()
 if not cpu_count or cpu_count <= 24:
@@ -18,15 +20,15 @@ elif cpu_count <= 64:
 else:
     ts_map = list(map(str, [1] + list(range(10, 151, 10))))
     ts_queue = list(map(str, [1, 3, 5] + list(range(10, 151, 10))))
-runs = 2
+runs = 1
 gs = [0, 1, 2]
 
 if os.path.exists('.git'):
     subprocess.run(['git', 'submodule', 'update', '--init', '--recursive'])
 subprocess.run(['cargo', 'build', '--release'])
 
-smr_benchmark = ['./target/release/smr-benchmark', '-i', str(i)]
-double_link = ['./target/release/double_link', '-i', str(i)]
+smr_benchmark = [os.path.join(BIN_PATH, 'smr-benchmark'), '-i', str(i)]
+double_link = [os.path.join(BIN_PATH, 'double_link'), '-i', str(i)]
 
 def key_ranges(ds):
     if ds in ["h-list", "hm-list", "hhs-list"]:
@@ -49,7 +51,7 @@ def invalid(mm, ds, g):
 cmds = []
 
 for ds in dss:
-    for mm in mms:
+    for mm in mms_map:
         for g in gs:
             if invalid(mm, ds, g):
                 continue
@@ -58,7 +60,7 @@ for ds in dss:
                     cmd = smr_benchmark + opts(ds, mm, g, t, kr)
                     cmds.append(cmd)
 
-for mm in mms:
+for mm in mms_queue:
     for t in ts_queue:
         cmd = double_link + ['-m', str(mm), '-t', str(t), '-o', os.path.join(RESULTS_PATH, 'double-link.csv')]
         cmds.append(cmd)
