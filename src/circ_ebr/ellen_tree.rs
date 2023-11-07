@@ -1,5 +1,5 @@
 use bitflags::bitflags;
-use circ::{AtomicRc, CompareExchangeErrorRc, CsEBR, Pointer, Rc, Snapshot, StrongPtr, Weak};
+use circ::{AtomicRc, CsEBR, GraphNode, Pointer, Rc, Snapshot, StrongPtr, Weak};
 use std::sync::atomic::Ordering;
 
 use super::{concurrent_map::OutputHolder, ConcurrentMap};
@@ -91,12 +91,32 @@ pub struct Node<K, V> {
     right: AtomicRc<Node<K, V>, CsEBR>,
 }
 
+impl<K, V> GraphNode<CsEBR> for Node<K, V> {
+    #[inline]
+    fn pop_outgoings(&self) -> Vec<Rc<Self, CsEBR>>
+    where
+        Self: Sized,
+    {
+        vec![]
+    }
+}
+
 pub struct Update<K, V> {
     gp: Weak<Node<K, V>, CsEBR>,
     p: Weak<Node<K, V>, CsEBR>,
     l: Rc<Node<K, V>, CsEBR>,
     pupdate: Rc<Update<K, V>, CsEBR>,
     new_internal: Rc<Node<K, V>, CsEBR>,
+}
+
+impl<K, V> GraphNode<CsEBR> for Update<K, V> {
+    #[inline]
+    fn pop_outgoings(&self) -> Vec<Rc<Self, CsEBR>>
+    where
+        Self: Sized,
+    {
+        vec![]
+    }
 }
 
 impl<K, V> Node<K, V> {
@@ -324,7 +344,7 @@ where
                         return true;
                     }
                     Err(e) => unsafe {
-                        let new_pupdate = e.desired().into_inner().unwrap();
+                        let new_pupdate = e.desired.into_inner().unwrap();
                         drop(new_pupdate.new_internal.into_inner().unwrap());
                         self.help(helping, cs);
                     },
@@ -384,7 +404,7 @@ where
                         }
                     }
                     Err(e) => unsafe {
-                        drop(e.desired().into_inner().unwrap());
+                        drop(e.desired.into_inner().unwrap());
                         self.help(helping, cs);
                     },
                 }
@@ -407,7 +427,9 @@ where
     fn help_delete(&self, op: Snapshot<Update<K, V>, CsEBR>, cs: &CsEBR) -> bool {
         // Precondition: op points to a DInfo record (i.e., it is not ⊥)
         let mut helper = Helper::new();
-        helper.load_delete(op, cs);
+        if !helper.load_delete(op, cs) {
+            return false;
+        }
 
         let op_ref = unsafe { op.deref() };
         let p_ref = unsafe { helper.p.deref() };
@@ -427,33 +449,32 @@ where
                 self.help_marked(op, cs);
                 return true;
             }
-            Err(e) => match e {
-                CompareExchangeErrorRc::Changed { current, .. } => {
-                    if current == op.as_ptr().with_tag(UpdateTag::MARK.bits()) {
-                        // (prev value) = <Mark, op>
-                        self.help_marked(op, cs);
-                        return true;
-                    } else {
-                        let _ = gp_ref.update.compare_exchange_tag(
-                            op.with_tag(UpdateTag::DFLAG.bits()),
-                            UpdateTag::CLEAN.bits(),
-                            Ordering::Release,
-                            Ordering::Relaxed,
-                            cs,
-                        );
-                        self.help(aux, cs);
-                        return false;
-                    }
+            Err(e) => {
+                if e.current == op.as_ptr().with_tag(UpdateTag::MARK.bits()) {
+                    // (prev value) = <Mark, op>
+                    self.help_marked(op, cs);
+                    return true;
+                } else {
+                    let _ = gp_ref.update.compare_exchange_tag(
+                        op.with_tag(UpdateTag::DFLAG.bits()),
+                        UpdateTag::CLEAN.bits(),
+                        Ordering::Release,
+                        Ordering::Relaxed,
+                        cs,
+                    );
+                    self.help(aux, cs);
+                    return false;
                 }
-                CompareExchangeErrorRc::Closed { .. } => unreachable!(),
-            },
+            }
         }
     }
 
     fn help_marked(&self, op: Snapshot<Update<K, V>, CsEBR>, cs: &CsEBR) {
         // Precondition: op points to a DInfo record (i.e., it is not ⊥)
         let mut helper = Helper::new();
-        helper.load_delete(op, cs);
+        if !helper.load_delete(op, cs) {
+            return;
+        }
 
         let p_ref = unsafe { helper.p.deref() };
         let gp_ref = unsafe { helper.gp.deref() };

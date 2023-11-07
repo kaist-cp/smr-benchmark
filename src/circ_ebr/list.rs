@@ -1,5 +1,5 @@
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
-use circ::{AtomicRc, CsEBR, Pointer, Rc, Snapshot, StrongPtr};
+use circ::{AtomicRc, CsEBR, GraphNode, Pointer, Rc, Snapshot, StrongPtr};
 
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::sync::atomic::Ordering;
@@ -8,6 +8,16 @@ pub struct Node<K, V> {
     next: AtomicRc<Self, CsEBR>,
     key: K,
     value: V,
+}
+
+impl<K, V> GraphNode<CsEBR> for Node<K, V> {
+    #[inline]
+    fn pop_outgoings(&self) -> Vec<Rc<Self, CsEBR>>
+    where
+        Self: Sized,
+    {
+        vec![self.next.swap(Rc::null(), Ordering::Relaxed)]
+    }
 }
 
 struct List<K, V> {
@@ -207,10 +217,10 @@ impl<K: Ord, V> Cursor<K, V> {
                 Ok(())
             }
             Err(e) => {
-                let node = e.desired();
+                let node = e.desired;
                 let curr_rc = unsafe { node.deref() }
                     .next
-                    .swap(Rc::null(), Ordering::Relaxed, cs);
+                    .swap(Rc::null(), Ordering::Relaxed);
                 curr_dt.repay(curr_rc);
                 Err(node)
             }

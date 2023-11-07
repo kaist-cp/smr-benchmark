@@ -1,4 +1,4 @@
-use circ::{AtomicRc, CompareExchangeErrorRc, CsEBR, Pointer, Rc, Snapshot, StrongPtr};
+use circ::{AtomicRc, CsEBR, GraphNode, Pointer, Rc, Snapshot, StrongPtr};
 
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use std::cmp;
@@ -92,6 +92,19 @@ pub struct Node<K, V> {
     value: Option<V>,
     left: AtomicRc<Node<K, V>, CsEBR>,
     right: AtomicRc<Node<K, V>, CsEBR>,
+}
+
+impl<K, V> GraphNode<CsEBR> for Node<K, V> {
+    #[inline]
+    fn pop_outgoings(&self) -> Vec<Rc<Self, CsEBR>>
+    where
+        Self: Sized,
+    {
+        vec![
+            self.left.swap(Rc::null(), Ordering::Relaxed),
+            self.right.swap(Rc::null(), Ordering::Relaxed),
+        ]
+    }
 }
 
 impl<K, V> Node<K, V>
@@ -311,7 +324,21 @@ where
 
         // NOTE: the ibr implementation uses CAS
         // tag (parent, sibling) edge -> all of the parent's edges can't change now
-        target_sibling_addr.fetch_or(Marks::TAG.bits(), Ordering::AcqRel, cs);
+        loop {
+            let target_sibling = target_sibling_addr.load_ss(cs);
+            if target_sibling_addr
+                .compare_exchange_tag(
+                    target_sibling,
+                    target_sibling.tag() | Marks::TAG.bits(),
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
+                    cs,
+                )
+                .is_ok()
+            {
+                break;
+            }
+        }
 
         // Try to replace (ancestor, successor) w/ (ancestor, sibling).
         // Since (parent, sibling) might have been concurrently flagged, copy
@@ -396,29 +423,26 @@ where
                     leaf_dt.repay(leaf_rc);
                     return true;
                 }
-                Err(e) => match e {
-                    CompareExchangeErrorRc::Changed { desired, current } => {
-                        // Insertion failed. Help the conflicting remove operation if needed.
-                        // NOTE: The paper version checks if any of the mark is set, which is
-                        // redundant.
-                        new_internal = desired;
-                        let new_internal_ref = unsafe { new_internal.deref() };
+                Err(e) => {
+                    // Insertion failed. Help the conflicting remove operation if needed.
+                    // NOTE: The paper version checks if any of the mark is set, which is
+                    // redundant.
+                    new_internal = e.desired;
+                    let new_internal_ref = unsafe { new_internal.deref() };
 
-                        let (leaf_link, new_leaf_link) = match leaf_pos {
-                            Direction::L => (&new_internal_ref.left, &new_internal_ref.right),
-                            Direction::R => (&new_internal_ref.right, &new_internal_ref.left),
-                        };
+                    let (leaf_link, new_leaf_link) = match leaf_pos {
+                        Direction::L => (&new_internal_ref.left, &new_internal_ref.right),
+                        Direction::R => (&new_internal_ref.right, &new_internal_ref.left),
+                    };
 
-                        let leaf_rc = leaf_link.swap(Rc::null(), Ordering::Relaxed, cs);
-                        new_leaf = new_leaf_link.swap(Rc::null(), Ordering::Relaxed, cs);
-                        leaf_dt.repay(leaf_rc);
+                    let leaf_rc = leaf_link.swap(Rc::null(), Ordering::Relaxed);
+                    new_leaf = new_leaf_link.swap(Rc::null(), Ordering::Relaxed);
+                    leaf_dt.repay(leaf_rc);
 
-                        if current.with_tag(Marks::empty().bits()) == record.leaf.as_ptr() {
-                            self.cleanup(&record, cs);
-                        }
+                    if e.current.with_tag(Marks::empty().bits()) == record.leaf.as_ptr() {
+                        self.cleanup(&record, cs);
                     }
-                    _ => unreachable!(),
-                },
+                }
             }
         }
     }
@@ -453,18 +477,15 @@ where
                     // In-place cleanup failed. Enter the cleanup phase.
                     break record.leaf;
                 }
-                Err(e) => match e {
-                    CompareExchangeErrorRc::Changed { current, .. } => {
-                        // Flagging failed.
-                        // case 1. record.leaf_addr(e.current) points to another node: restart.
-                        // case 2. Another thread flagged/tagged the edge to leaf: help and restart
-                        // NOTE: The paper version checks if any of the mark is set, which is redundant.
-                        if record.leaf.as_ptr() == current.with_tag(Marks::empty().bits()) {
-                            self.cleanup(&record, cs);
-                        }
+                Err(e) => {
+                    // Flagging failed.
+                    // case 1. record.leaf_addr(e.current) points to another node: restart.
+                    // case 2. Another thread flagged/tagged the edge to leaf: help and restart
+                    // NOTE: The paper version checks if any of the mark is set, which is redundant.
+                    if record.leaf.as_ptr() == e.current.with_tag(Marks::empty().bits()) {
+                        self.cleanup(&record, cs);
                     }
-                    CompareExchangeErrorRc::Closed { .. } => unreachable!(),
-                },
+                }
             }
         };
 

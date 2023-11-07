@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use circ::{AtomicRc, AtomicWeak, CsHP, Pointer, Rc, Snapshot, StrongPtr};
+use circ::{AtomicRc, AtomicWeak, CsHP, GraphNode, Pointer, Rc, Snapshot, StrongPtr};
 use crossbeam_utils::CachePadded;
 
 pub struct Holder<T> {
@@ -23,6 +23,16 @@ struct Node<T> {
     item: Option<T>,
     prev: AtomicWeak<Node<T>, CsHP>,
     next: CachePadded<AtomicRc<Node<T>, CsHP>>,
+}
+
+impl<T> GraphNode<CsHP> for Node<T> {
+    #[inline]
+    fn pop_outgoings(&self) -> Vec<Rc<Self, CsHP>>
+    where
+        Self: Sized,
+    {
+        vec![]
+    }
 }
 
 impl<T> Node<T> {
@@ -96,7 +106,7 @@ impl<T: Sync + Send> DoubleLink<T> {
                         .store(&*new, Ordering::Release, cs);
                     return;
                 }
-                Err(e) => node = e.desired(),
+                Err(e) => node = e.desired,
             }
         }
     }

@@ -1,4 +1,4 @@
-use circ::{AtomicRc, CsEBR, Pointer, Rc, Snapshot, StrongPtr, TaggedCnt};
+use circ::{AtomicRc, CsEBR, GraphNode, Pointer, Rc, Snapshot, StrongPtr, TaggedCnt};
 
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 
@@ -37,6 +37,19 @@ pub struct Node<K, V> {
     size: usize,
     left: AtomicRc<Node<K, V>, CsEBR>,
     right: AtomicRc<Node<K, V>, CsEBR>,
+}
+
+impl<K, V> GraphNode<CsEBR> for Node<K, V> {
+    #[inline]
+    fn pop_outgoings(&self) -> Vec<Rc<Self, CsEBR>>
+    where
+        Self: Sized,
+    {
+        vec![
+            self.left.swap(Rc::null(), Ordering::Relaxed),
+            self.right.swap(Rc::null(), Ordering::Relaxed),
+        ]
+    }
 }
 
 impl<K, V> Node<K, V>

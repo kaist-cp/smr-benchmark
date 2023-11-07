@@ -42,5 +42,11 @@ panic = "abort"
 inherits = "release"
 debug = true
 
+[profile.release-for-asan]
+inherits = "release"
+debug = true
+lto = false
+codegen-units = 16
+
 [features]
 sanitize = ["crossbeam-pebr/sanitize"]

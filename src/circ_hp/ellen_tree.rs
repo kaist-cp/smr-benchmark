@@ -1,5 +1,5 @@
 use bitflags::bitflags;
-use circ::{AtomicRc, CompareExchangeErrorRc, CsHP, Pointer, Rc, Snapshot, StrongPtr, Weak};
+use circ::{AtomicRc, CsHP, GraphNode, Pointer, Rc, Snapshot, StrongPtr, Weak};
 use std::{mem::swap, sync::atomic::Ordering};
 
 use super::{concurrent_map::OutputHolder, ConcurrentMap};
@@ -92,6 +92,16 @@ pub struct Node<K, V> {
     is_leaf: bool,
 }
 
+impl<K, V> GraphNode<CsHP> for Node<K, V> {
+    #[inline]
+    fn pop_outgoings(&self) -> Vec<Rc<Self, CsHP>>
+    where
+        Self: Sized,
+    {
+        vec![]
+    }
+}
+
 pub struct Update<K, V> {
     gp: Weak<Node<K, V>, CsHP>,
     gp_p_dir: Direction,
@@ -101,6 +111,16 @@ pub struct Update<K, V> {
     l_other: Rc<Node<K, V>, CsHP>,
     pupdate: Rc<Update<K, V>, CsHP>,
     new_internal: Rc<Node<K, V>, CsHP>,
+}
+
+impl<K, V> GraphNode<CsHP> for Update<K, V> {
+    #[inline]
+    fn pop_outgoings(&self) -> Vec<Rc<Self, CsHP>>
+    where
+        Self: Sized,
+    {
+        vec![]
+    }
 }
 
 impl<K, V> Node<K, V> {
@@ -359,7 +379,7 @@ where
                         return true;
                     }
                     Err(e) => unsafe {
-                        let new_pupdate = e.desired().into_inner().unwrap();
+                        let new_pupdate = e.desired.into_inner().unwrap();
                         drop(new_pupdate.new_internal.into_inner().unwrap());
                         self.help(
                             &mut cursor.helping_op1,
@@ -441,7 +461,7 @@ where
                         }
                     }
                     Err(e) => unsafe {
-                        drop(e.desired().into_inner().unwrap());
+                        drop(e.desired.into_inner().unwrap());
                         self.help(
                             &mut cursor.helping_op1,
                             &mut cursor.helping_op2,
@@ -495,26 +515,23 @@ where
                 self.help_marked(op, helper, cs);
                 return true;
             }
-            Err(e) => match e {
-                CompareExchangeErrorRc::Changed { current, .. } => {
-                    if current == op.as_ptr().with_tag(UpdateTag::MARK.bits()) {
-                        // (prev value) = <Mark, op>
-                        self.help_marked(op, helper, cs);
-                        return true;
-                    } else {
-                        let _ = gp_ref.update.compare_exchange_tag(
-                            op.with_tag(UpdateTag::DFLAG.bits()),
-                            UpdateTag::CLEAN.bits(),
-                            Ordering::Release,
-                            Ordering::Relaxed,
-                            cs,
-                        );
-                        self.help(aux, op, helper, cs);
-                        return false;
-                    }
+            Err(e) => {
+                if e.current == op.as_ptr().with_tag(UpdateTag::MARK.bits()) {
+                    // (prev value) = <Mark, op>
+                    self.help_marked(op, helper, cs);
+                    return true;
+                } else {
+                    let _ = gp_ref.update.compare_exchange_tag(
+                        op.with_tag(UpdateTag::DFLAG.bits()),
+                        UpdateTag::CLEAN.bits(),
+                        Ordering::Release,
+                        Ordering::Relaxed,
+                        cs,
+                    );
+                    self.help(aux, op, helper, cs);
+                    return false;
                 }
-                CompareExchangeErrorRc::Closed { .. } => unreachable!(),
-            },
+            }
         }
     }
 

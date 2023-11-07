@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use circ::{AtomicRc, CsEBR, Pointer, Rc, Snapshot, StrongPtr, Tagged, Weak};
+use circ::{AtomicRc, CsEBR, GraphNode, Pointer, Rc, Snapshot, StrongPtr, Weak};
 use crossbeam_utils::CachePadded;
 
 pub struct Output<T> {
@@ -20,6 +20,16 @@ struct Node<T> {
     item: Option<T>,
     prev: Weak<Node<T>, CsEBR>,
     next: CachePadded<AtomicRc<Node<T>, CsEBR>>,
+}
+
+impl<T> GraphNode<CsEBR> for Node<T> {
+    #[inline]
+    fn pop_outgoings(&self) -> Vec<Rc<Self, CsEBR>>
+    where
+        Self: Sized,
+    {
+        vec![self.next.swap(Rc::null(), Ordering::Relaxed)]
+    }
 }
 
 impl<T> Node<T> {
@@ -73,14 +83,7 @@ impl<T: Sync + Send> DoubleLink<T> {
             lprev.protect_weak(unsafe { &ltail.deref().prev }, cs);
             if let Some(lprev) = lprev.as_ref() {
                 if lprev.next.load(Ordering::SeqCst).is_null() {
-                    // Cannot use a normal store, as the link may contain a weak guard.
-                    let _ = lprev.next.compare_exchange_weak(
-                        Tagged::null(),
-                        ltail.upgrade(),
-                        Ordering::Relaxed,
-                        Ordering::Relaxed,
-                        cs,
-                    );
+                    lprev.next.store(ltail.upgrade(), Ordering::Relaxed, cs);
                 }
             }
             match self.tail.compare_exchange(
@@ -91,17 +94,12 @@ impl<T: Sync + Send> DoubleLink<T> {
                 cs,
             ) {
                 Ok(_) => {
-                    // Cannot use a normal store, as the link may contain a weak guard.
-                    let _ = unsafe { ltail.deref() }.next.compare_exchange_weak(
-                        Tagged::null(),
-                        sub,
-                        Ordering::Release,
-                        Ordering::Relaxed,
-                        cs,
-                    );
+                    unsafe { ltail.deref() }
+                        .next
+                        .store(sub, Ordering::Release, cs);
                     return;
                 }
-                Err(e) => node = e.desired(),
+                Err(e) => node = e.desired,
             }
         }
     }
@@ -116,22 +114,18 @@ impl<T: Sync + Send> DoubleLink<T> {
                 return None;
             }
 
-            let (lnext_rc, lnext_dt) = lnext.loan();
-
-            match self.head.compare_exchange(
-                lhead.as_ptr(),
-                lnext_rc,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-                cs,
-            ) {
-                Ok(_) => {
-                    lnext_dt.repay_frontier(unsafe { &lhead.deref().next }, 0, cs);
-                    return Some(Output { found: lnext });
-                }
-                Err(e) => {
-                    lnext_dt.repay(e.desired());
-                }
+            if self
+                .head
+                .compare_exchange(
+                    lhead.as_ptr(),
+                    lnext.upgrade(),
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                    cs,
+                )
+                .is_ok()
+            {
+                return Some(Output { found: lnext });
             }
         }
     }

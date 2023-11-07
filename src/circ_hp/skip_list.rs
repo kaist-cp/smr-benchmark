@@ -1,6 +1,6 @@
 use std::{fmt::Display, sync::atomic::Ordering};
 
-use circ::{AtomicRc, CompareExchangeErrorRc, Cs, CsHP, Pointer, Rc, Snapshot, StrongPtr};
+use circ::{AtomicRc, Cs, CsHP, GraphNode, Pointer, Rc, Snapshot, StrongPtr};
 
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 
@@ -13,6 +13,25 @@ struct Node<K, V> {
     value: V,
     next: Tower<K, V>,
     height: usize,
+}
+
+impl<K, V> GraphNode<CsHP> for Node<K, V> {
+    #[inline]
+    fn pop_outgoings(&self) -> Vec<Rc<Self, CsHP>>
+    where
+        Self: Sized,
+    {
+        self.next
+            .iter()
+            .filter_map(|next| {
+                if next.load(Ordering::Acquire).is_null() {
+                    None
+                } else {
+                    Some(next.swap(Rc::null(), Ordering::Relaxed))
+                }
+            })
+            .collect()
+    }
 }
 
 impl<K, V> Node<K, V>
@@ -75,21 +94,14 @@ where
                     cs,
                 ) {
                     Ok(_) => break,
-                    Err(CompareExchangeErrorRc::Changed { current, .. }) => {
+                    Err(e) => {
                         // If the level 0 pointer was already marked, somebody else removed the node.
-                        if level == 0 && (current.tag() & 1) != 0 {
+                        if level == 0 && (e.current.tag() & 1) != 0 {
                             return false;
                         }
-                        if current.tag() & 1 != 0 {
+                        if e.current.tag() & 1 != 0 {
                             break;
                         }
-                    }
-                    Err(CompareExchangeErrorRc::Closed { .. }) => {
-                        // If the level 0 pointer was already marked, somebody else removed the node.
-                        if level == 0 {
-                            return false;
-                        }
-                        break;
                     }
                 }
             }
@@ -322,8 +334,8 @@ where
                     break;
                 }
                 Err(e) => {
-                    new_node = e.desired();
-                    let succ_rc = new_node_ref.next[0].swap(Rc::null(), Ordering::Relaxed, cs);
+                    new_node = e.desired;
+                    let succ_rc = new_node_ref.next[0].swap(Rc::null(), Ordering::Relaxed);
                     succ_dt.repay(succ_rc);
                 }
             }
@@ -361,7 +373,7 @@ where
                 ) {
                     Ok(_) => {}
                     Err(e) => {
-                        succ_dt.repay(e.desired());
+                        succ_dt.repay(e.desired);
                         break 'build;
                     }
                 }
@@ -380,7 +392,7 @@ where
                         break;
                     }
                     Err(e) => {
-                        new_node = e.desired();
+                        new_node = e.desired;
                         // Repay the debt and try again.
                         // Note that someone might mark the inserted node.
                         let succ_rc = match new_node_ref.next[level].compare_exchange(
