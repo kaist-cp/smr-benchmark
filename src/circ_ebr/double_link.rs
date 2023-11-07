@@ -23,12 +23,22 @@ struct Node<T> {
 }
 
 impl<T> GraphNode<CsEBR> for Node<T> {
+    const UNIQUE_OUTDEGREE: bool = true;
+
     #[inline]
     fn pop_outgoings(&self) -> Vec<Rc<Self, CsEBR>>
     where
         Self: Sized,
     {
         vec![self.next.swap(Rc::null(), Ordering::Relaxed)]
+    }
+
+    #[inline]
+    fn pop_unique(&self) -> Rc<Self, CsEBR>
+    where
+        Self: Sized,
+    {
+        self.next.swap(Rc::null(), Ordering::Relaxed)
     }
 }
 

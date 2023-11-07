@@ -16,21 +16,22 @@ struct Node<K, V> {
 }
 
 impl<K, V> GraphNode<CsHP> for Node<K, V> {
+    const UNIQUE_OUTDEGREE: bool = false;
+
     #[inline]
     fn pop_outgoings(&self) -> Vec<Rc<Self, CsHP>>
     where
         Self: Sized,
     {
-        self.next
-            .iter()
-            .filter_map(|next| {
-                if next.load(Ordering::Acquire).is_null() {
-                    None
-                } else {
-                    Some(next.swap(Rc::null(), Ordering::Relaxed))
-                }
-            })
-            .collect()
+        vec![]
+    }
+
+    #[inline]
+    fn pop_unique(&self) -> Rc<Self, CsHP>
+    where
+        Self: Sized,
+    {
+        unimplemented!()
     }
 }
 

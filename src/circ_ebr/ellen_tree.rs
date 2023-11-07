@@ -92,12 +92,22 @@ pub struct Node<K, V> {
 }
 
 impl<K, V> GraphNode<CsEBR> for Node<K, V> {
+    const UNIQUE_OUTDEGREE: bool = false;
+
     #[inline]
     fn pop_outgoings(&self) -> Vec<Rc<Self, CsEBR>>
     where
         Self: Sized,
     {
         vec![]
+    }
+
+    #[inline]
+    fn pop_unique(&self) -> Rc<Self, CsEBR>
+    where
+        Self: Sized,
+    {
+        unimplemented!()
     }
 }
 
@@ -110,12 +120,22 @@ pub struct Update<K, V> {
 }
 
 impl<K, V> GraphNode<CsEBR> for Update<K, V> {
+    const UNIQUE_OUTDEGREE: bool = false;
+    
     #[inline]
     fn pop_outgoings(&self) -> Vec<Rc<Self, CsEBR>>
     where
         Self: Sized,
     {
         vec![]
+    }
+
+    #[inline]
+    fn pop_unique(&self) -> Rc<Self, CsEBR>
+    where
+        Self: Sized,
+    {
+        unimplemented!()
     }
 }
 

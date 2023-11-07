@@ -26,12 +26,22 @@ struct Node<T> {
 }
 
 impl<T> GraphNode<CsHP> for Node<T> {
+    const UNIQUE_OUTDEGREE: bool = false;
+
     #[inline]
     fn pop_outgoings(&self) -> Vec<Rc<Self, CsHP>>
     where
         Self: Sized,
     {
         vec![]
+    }
+
+    #[inline]
+    fn pop_unique(&self) -> Rc<Self, CsHP>
+    where
+        Self: Sized,
+    {
+        unimplemented!()
     }
 }
 
