@@ -9,7 +9,7 @@ pub use weaks::*;
 
 #[inline]
 pub fn set_counts_between_flush_ebr(counts: usize) {
-    crossbeam::epoch::set_bag_capacity(counts);
+    internal::ebr_impl::set_bag_capacity(counts);
 }
 
 #[inline]

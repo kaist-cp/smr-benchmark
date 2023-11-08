@@ -2,6 +2,7 @@ use std::mem;
 
 use atomic::Ordering;
 
+use super::ebr_impl::{pin, Guard};
 use crate::internal::utils::Counted;
 use crate::internal::{Acquired, Cs, RetireType, TaggedCnt};
 
@@ -50,12 +51,12 @@ impl<T> Acquired<T> for AcquiredEBR<T> {
 }
 
 pub struct CsEBR {
-    guard: Option<crossbeam::epoch::Guard>,
+    guard: Option<Guard>,
 }
 
-impl From<crossbeam::epoch::Guard> for CsEBR {
+impl From<Guard> for CsEBR {
     #[inline(always)]
-    fn from(guard: crossbeam::epoch::Guard) -> Self {
+    fn from(guard: Guard) -> Self {
         Self { guard: Some(guard) }
     }
 }
@@ -65,7 +66,7 @@ impl Cs for CsEBR {
 
     #[inline(always)]
     fn new() -> Self {
-        Self::from(crossbeam::epoch::pin())
+        Self::from(pin())
     }
 
     #[inline(always)]
