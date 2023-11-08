@@ -42,7 +42,7 @@ panic = "abort"
 inherits = "release"
 debug = true
 
-[profile.release-for-asan]
+[profile.release-simple]
 inherits = "release"
 debug = true
 lto = false

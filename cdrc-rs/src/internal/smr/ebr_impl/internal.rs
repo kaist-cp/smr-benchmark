@@ -51,7 +51,7 @@ use super::deferred::Deferred;
 use super::epoch::{AtomicEpoch, Epoch};
 use super::guard::{unprotected, Guard};
 use super::sync::list::{Entry, IsElement, IterError, List};
-use super::sync::queue::{Queue, TryPopResult};
+use super::sync::queue::Queue;
 
 #[allow(missing_docs)]
 pub static GLOBAL_GARBAGE_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -231,9 +231,8 @@ impl Global {
                 &|sealed_bag: &SealedBag| sealed_bag.is_expired(global_epoch),
                 guard,
             ) {
-                TryPopResult::Empty => break,
-                TryPopResult::ExchangeFailure => continue,
-                TryPopResult::Success(sealed_bag) => {
+                None => break,
+                Some(sealed_bag) => {
                     GLOBAL_GARBAGE_COUNT.fetch_sub(sealed_bag.bag.0.len(), Ordering::AcqRel);
                     drop(sealed_bag);
                 }
