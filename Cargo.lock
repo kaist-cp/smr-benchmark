@@ -141,8 +141,9 @@ version = "0.1.0"
 dependencies = [
  "atomic",
  "cfg-if 1.0.0",
- "crossbeam",
+ "crossbeam-utils 0.8.16",
  "membarrier 0.2.3 (git+https://github.com/jeehoonkang/membarrier-rs.git?branch=smr-benchmark)",
+ "memoffset",
  "rustc-hash",
  "scopeguard",
  "static_assertions 1.1.0",
@@ -175,8 +176,9 @@ version = "0.1.0"
 dependencies = [
  "atomic",
  "cfg-if 1.0.0",
- "crossbeam",
+ "crossbeam-utils 0.8.16",
  "membarrier 0.2.3 (git+https://github.com/jeehoonkang/membarrier-rs.git?branch=smr-benchmark)",
+ "memoffset",
  "rustc-hash",
  "scopeguard",
  "static_assertions 1.1.0",
@@ -240,56 +242,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "acbf1af155f9b9ef647e42cdc158db4b64a1b61f743629225fde6f3e0be2a7c7"
 
 [[package]]
-name = "crossbeam"
-version = "0.8.2"
-source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#3a49975c58c031e1a6fc707d3d52d9378e93daa6"
-dependencies = [
- "cfg-if 1.0.0",
- "crossbeam-channel",
- "crossbeam-deque",
- "crossbeam-epoch 0.9.13 (git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested)",
- "crossbeam-queue",
- "crossbeam-utils 0.8.14 (git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested)",
-]
-
-[[package]]
-name = "crossbeam-channel"
-version = "0.5.6"
-source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#3a49975c58c031e1a6fc707d3d52d9378e93daa6"
-dependencies = [
- "cfg-if 1.0.0",
- "crossbeam-utils 0.8.14 (git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested)",
-]
-
-[[package]]
-name = "crossbeam-deque"
-version = "0.8.2"
-source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#3a49975c58c031e1a6fc707d3d52d9378e93daa6"
-dependencies = [
- "cfg-if 1.0.0",
- "crossbeam-epoch 0.9.13 (git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested)",
- "crossbeam-utils 0.8.14 (git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested)",
-]
-
-[[package]]
 name = "crossbeam-epoch"
 version = "0.9.13"
 dependencies = [
  "autocfg",
  "cfg-if 1.0.0",
  "crossbeam-utils 0.8.14",
- "memoffset",
- "scopeguard",
-]
-
-[[package]]
-name = "crossbeam-epoch"
-version = "0.9.13"
-source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#3a49975c58c031e1a6fc707d3d52d9378e93daa6"
-dependencies = [
- "autocfg",
- "cfg-if 1.0.0",
- "crossbeam-utils 0.8.14 (git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested)",
  "memoffset",
  "scopeguard",
 ]
@@ -319,25 +277,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "crossbeam-queue"
-version = "0.3.8"
-source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#3a49975c58c031e1a6fc707d3d52d9378e93daa6"
-dependencies = [
- "cfg-if 1.0.0",
- "crossbeam-utils 0.8.14 (git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested)",
-]
-
-[[package]]
 name = "crossbeam-utils"
 version = "0.8.14"
-dependencies = [
- "cfg-if 1.0.0",
-]
-
-[[package]]
-name = "crossbeam-utils"
-version = "0.8.14"
-source = "git+https://github.com/powergee/crossbeam.git?branch=kaist-no-nested#3a49975c58c031e1a6fc707d3d52d9378e93daa6"
 dependencies = [
  "cfg-if 1.0.0",
 ]
@@ -845,7 +786,7 @@ dependencies = [
  "cfg-if 1.0.0",
  "circ",
  "clap",
- "crossbeam-epoch 0.9.13",
+ "crossbeam-epoch",
  "crossbeam-pebr-epoch",
  "crossbeam-utils 0.8.14",
  "csv",
