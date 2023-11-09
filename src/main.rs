@@ -325,6 +325,7 @@ fn setup(m: ArgMatches) -> (Config, Option<Writer<File>>) {
                         "peak_garb",
                         "avg_garb",
                         "key_range",
+                        "interval",
                     ])
                     .unwrap();
                 output.flush().unwrap();
@@ -779,6 +780,7 @@ fn bench<N: Unsigned>(config: &Config, output: Option<&mut Writer<File>>) {
                 peak_garb.to_string(),
                 avg_garb.to_string(),
                 (config.prefill * 2).to_string(),
+                config.interval.to_string(),
             ])
             .unwrap();
         output.flush().unwrap();
