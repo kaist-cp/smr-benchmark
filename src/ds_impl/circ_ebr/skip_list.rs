@@ -19,20 +19,17 @@ impl<K, V> GraphNode<CsEBR> for Node<K, V> {
     const UNIQUE_OUTDEGREE: bool = false;
 
     #[inline]
-    fn pop_outgoings(&self) -> Vec<Rc<Self, CsEBR>>
+    fn pop_outgoings(&self, result: &mut Vec<Rc<Self, CsEBR>>)
     where
         Self: Sized,
     {
-        self.next
-            .iter()
-            .filter_map(|next| {
-                if next.load(Ordering::Acquire).is_null() {
-                    None
-                } else {
-                    Some(next.swap(Rc::null(), Ordering::Relaxed))
-                }
-            })
-            .collect()
+        result.extend(self.next.iter().filter_map(|next| {
+            if next.load(Ordering::Acquire).is_null() {
+                None
+            } else {
+                Some(next.swap(Rc::null(), Ordering::Relaxed))
+            }
+        }));
     }
 
     #[inline]

@@ -29,11 +29,10 @@ impl<T> GraphNode<CsHP> for Node<T> {
     const UNIQUE_OUTDEGREE: bool = false;
 
     #[inline]
-    fn pop_outgoings(&self) -> Vec<Rc<Self, CsHP>>
+    fn pop_outgoings(&self, _: &mut Vec<Rc<Self, CsHP>>)
     where
         Self: Sized,
     {
-        vec![]
     }
 
     #[inline]

@@ -95,11 +95,10 @@ impl<K, V> GraphNode<CsEBR> for Node<K, V> {
     const UNIQUE_OUTDEGREE: bool = false;
 
     #[inline]
-    fn pop_outgoings(&self) -> Vec<Rc<Self, CsEBR>>
+    fn pop_outgoings(&self, _: &mut Vec<Rc<Self, CsEBR>>)
     where
         Self: Sized,
     {
-        vec![]
     }
 
     #[inline]
@@ -123,11 +122,10 @@ impl<K, V> GraphNode<CsEBR> for Update<K, V> {
     const UNIQUE_OUTDEGREE: bool = false;
 
     #[inline]
-    fn pop_outgoings(&self) -> Vec<Rc<Self, CsEBR>>
+    fn pop_outgoings(&self, _: &mut Vec<Rc<Self, CsEBR>>)
     where
         Self: Sized,
     {
-        vec![]
     }
 
     #[inline]
