@@ -11,7 +11,7 @@
 use core::mem::MaybeUninit;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
-use crossbeam_utils::{CachePadded, Backoff};
+use crossbeam_utils::{Backoff, CachePadded};
 
 use super::super::{unprotected, Atomic, Guard, Owned, Shared};
 
