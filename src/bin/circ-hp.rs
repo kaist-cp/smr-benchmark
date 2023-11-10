@@ -1,4 +1,4 @@
-use circ::{set_counts_between_flush_ebr, Cs, CsEBR};
+use circ::{hp_impl, set_counts_between_flush_hp, Cs, CsHP};
 use crossbeam_utils::thread::scope;
 use rand::prelude::*;
 use std::cmp::max;
@@ -9,7 +9,7 @@ use std::thread::available_parallelism;
 use std::time::Instant;
 
 use smr_benchmark::config::map::{setup, BagSize, BenchWriter, Config, Op, Perf, DS};
-use smr_benchmark::ds_impl::circ_ebr::{
+use smr_benchmark::ds_impl::circ_hp::{
     BonsaiTreeMap, ConcurrentMap, EFRBTree, HHSList, HList, HMList, HashMap, NMTreeMap, SkipList,
 };
 
@@ -57,13 +57,14 @@ impl PrefillStrategy {
                     for t in 0..threads {
                         s.spawn(move |_| {
                             let cs = unsafe { &Cs::unprotected() };
+                            let output = &mut M::empty_output();
                             let rng = &mut rand::thread_rng();
                             let count = config.prefill / threads
                                 + if t < config.prefill % threads { 1 } else { 0 };
                             for _ in 0..count {
                                 let key = config.key_dist.sample(rng);
                                 let value = key.clone();
-                                map.insert(key, value, cs);
+                                map.insert(key, value, output, cs);
                             }
                         });
                     }
@@ -72,6 +73,7 @@ impl PrefillStrategy {
             }
             PrefillStrategy::Decreasing => {
                 let cs = unsafe { &Cs::unprotected() };
+                let output = &mut M::empty_output();
                 let rng = &mut rand::thread_rng();
                 let mut keys = Vec::with_capacity(config.prefill);
                 for _ in 0..config.prefill {
@@ -80,7 +82,7 @@ impl PrefillStrategy {
                 keys.sort_by(|a, b| b.cmp(a));
                 for key in keys.drain(..) {
                     let value = key.clone();
-                    map.insert(key, value, cs);
+                    map.insert(key, value, output, cs);
                 }
             }
         }
@@ -94,8 +96,8 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
     strategy: PrefillStrategy,
 ) -> Perf {
     match config.bag_size {
-        BagSize::Small => set_counts_between_flush_ebr(64),
-        BagSize::Large => set_counts_between_flush_ebr(4096),
+        BagSize::Small => set_counts_between_flush_hp(64),
+        BagSize::Large => set_counts_between_flush_hp(4096),
     }
     let map = &M::new();
     strategy.prefill(config, map);
@@ -112,8 +114,8 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
                 let mut samples = 0usize;
                 let mut acc = 0usize;
                 let mut peak = 0usize;
-                let mut _garb_acc = 0usize;
-                let mut _garb_peak = 0usize;
+                let mut garb_acc = 0usize;
+                let mut garb_peak = 0usize;
                 barrier.clone().wait();
 
                 let start = Instant::now();
@@ -127,8 +129,9 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
                         acc += allocated;
                         peak = max(peak, allocated);
 
-                        // TODO: measure garbages for CIRC
-                        // (Is it reasonable to measure garbages for reference counting?)
+                        let garb = hp_impl::DEFAULT_DOMAIN.num_garbages();
+                        garb_acc += garb;
+                        garb_peak = max(garb_peak, garb);
 
                         next_sampling = now + config.sampling_period;
                     }
@@ -137,7 +140,7 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
 
                 if config.sampling {
                     mem_sender
-                        .send((peak, acc / samples, _garb_peak, _garb_acc / samples))
+                        .send((peak, acc / samples, garb_peak, garb_acc / samples))
                         .unwrap();
                 } else {
                     mem_sender.send((0, 0, 0, 0)).unwrap();
@@ -155,19 +158,20 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
                 barrier.clone().wait();
                 let start = Instant::now();
 
-                let mut cs = CsEBR::new();
+                let output = &mut M::empty_output();
+                let mut cs = CsHP::new();
                 while start.elapsed() < config.duration {
                     let key = config.key_dist.sample(rng);
                     match Op::OPS[config.op_dist.sample(&mut rng)] {
                         Op::Get => {
-                            map.get(&key, &cs);
+                            map.get(&key, output, &cs);
                         }
                         Op::Insert => {
                             let value = key.clone();
-                            map.insert(key, value, &cs);
+                            map.insert(key, value, output, &cs);
                         }
                         Op::Remove => {
-                            map.remove(&key, &cs);
+                            map.remove(&key, output, &cs);
                         }
                     }
                     ops += 1;

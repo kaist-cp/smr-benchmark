@@ -1,4 +1,4 @@
-use cdrc_rs::{set_counts_between_flush_hp, Cs, CsHP};
+use cdrc_rs::{hp_impl, set_counts_between_flush_hp, Cs, CsHP};
 use crossbeam_utils::thread::scope;
 use rand::prelude::*;
 use std::cmp::max;
@@ -122,8 +122,8 @@ fn bench_map<M: ConcurrentMap<usize, usize, CsHP> + Send + Sync>(
                 let mut samples = 0usize;
                 let mut acc = 0usize;
                 let mut peak = 0usize;
-                let mut _garb_acc = 0usize;
-                let mut _garb_peak = 0usize;
+                let mut garb_acc = 0usize;
+                let mut garb_peak = 0usize;
                 barrier.clone().wait();
 
                 let start = Instant::now();
@@ -137,8 +137,9 @@ fn bench_map<M: ConcurrentMap<usize, usize, CsHP> + Send + Sync>(
                         acc += allocated;
                         peak = max(peak, allocated);
 
-                        // TODO: measure garbages for CDRC
-                        // (Is it reasonable to measure garbages for reference counting?)
+                        let garb = hp_impl::DEFAULT_DOMAIN.num_garbages();
+                        garb_acc += garb;
+                        garb_peak = max(garb_peak, garb);
 
                         next_sampling = now + config.sampling_period;
                     }
@@ -147,7 +148,7 @@ fn bench_map<M: ConcurrentMap<usize, usize, CsHP> + Send + Sync>(
 
                 if config.sampling {
                     mem_sender
-                        .send((peak, acc / samples, _garb_peak, _garb_acc / samples))
+                        .send((peak, acc / samples, garb_peak, garb_acc / samples))
                         .unwrap();
                 } else {
                     mem_sender.send((0, 0, 0, 0)).unwrap();

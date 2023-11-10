@@ -125,9 +125,27 @@ impl fmt::Display for Perf {
         write!(
             f,
             "ops/s: {}, peak mem: {}, avg_mem: {}, peak garb: {}, avg garb: {}",
-            self.ops_per_sec, self.peak_mem, self.avg_mem, self.peak_garb, self.avg_garb
+            self.ops_per_sec,
+            readable_bytes(self.peak_mem),
+            readable_bytes(self.avg_mem),
+            self.peak_garb,
+            self.avg_garb
         )
     }
+}
+
+fn readable_bytes(num: usize) -> String {
+    const UNITS: &'static [&'static str] = &["B", "KiB", "MiB", "GiB"];
+    for (i, unit) in UNITS.iter().enumerate() {
+        if num / 2usize.pow(i as u32 * 10) < 1000 {
+            return format!("{:.3} {}", num as f64 / 2f64.powf(i as f64 * 10.0), unit);
+        }
+    }
+    format!(
+        "{:.3} {}",
+        num as f64 / 2f64.powf((UNITS.len() - 1) as f64 * 10.0),
+        UNITS.last().unwrap()
+    )
 }
 
 impl BenchWriter {
