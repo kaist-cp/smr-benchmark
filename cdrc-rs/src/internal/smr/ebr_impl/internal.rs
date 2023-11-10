@@ -496,6 +496,7 @@ impl Local {
                 if new_epoch.value() == self.global().epoch.load(Ordering::Acquire).value() {
                     break new_epoch;
                 }
+                self.epoch.store(Epoch::starting(), Ordering::Release);
             };
 
             // Reset the advance couter if epoch has advanced.
