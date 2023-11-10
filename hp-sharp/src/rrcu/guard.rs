@@ -46,7 +46,7 @@ impl ThreadRRCU for Thread {
     /// In a section body, only *rollback-safe* operations are allowed. For example, non-atomic
     /// writes on a global variable and system-calls(File I/O and etc.) are dangerous, as they
     /// may cause an unexpected inconsistency on the whole system after a crash.
-    #[inline(always)]
+    #[inline]
     unsafe fn pin<F>(&mut self, body: F)
     where
         F: FnMut(&mut CsGuard),

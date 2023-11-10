@@ -548,7 +548,7 @@ pub trait Protector {
         F: for<'r> FnMut(&'r mut CsGuard) -> Self::Target<'r>,
     {
         thread.pin(
-            #[inline(always)]
+            #[inline]
             |guard| {
                 // Execute the body of this read phase.
                 let result = body(guard);

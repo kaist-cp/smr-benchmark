@@ -1,7 +1,7 @@
 use super::concurrent_map::OutputHolder;
 use hp_sharp::{
-    Atomic, CsGuard, Invalidate, Owned, Pointer, Protector, Retire, Shared, Shield, Thread,
-    TraverseStatus, WriteResult,
+    Atomic, CsGuard, Invalidate, Owned, Protector, Retire, Shared, Shield, Thread, TraverseStatus,
+    WriteResult,
 };
 
 use std::cmp::Ordering::{Equal, Greater, Less};
@@ -84,7 +84,7 @@ impl<K: Default, V: Default> Default for Node<K, V> {
 
 struct Cursor<K, V> {
     prev: Shield<Node<K, V>>,
-    prev_next: usize,
+    prev_next: Shield<Node<K, V>>,
     // Tag of `curr` should always be zero so when `curr` is stored in a `prev`, we don't store a
     // marked pointer and cause cleanup to fail.
     curr: Shield<Node<K, V>>,
@@ -99,7 +99,7 @@ impl<K, V> Protector for Cursor<K, V> {
     fn empty(thread: &mut Thread) -> Self {
         Self {
             prev: Shield::null(thread),
-            prev_next: 0,
+            prev_next: Shield::null(thread),
             curr: Shield::null(thread),
             found: false,
         }
@@ -108,7 +108,7 @@ impl<K, V> Protector for Cursor<K, V> {
     #[inline]
     fn protect_unchecked(&mut self, read: &Self::Target<'_>) {
         self.prev.protect_unchecked(&read.prev);
-        self.prev_next = read.prev_next;
+        self.prev_next.protect_unchecked(&read.prev_next);
         self.curr.protect_unchecked(&read.curr);
         self.found = read.found;
     }
@@ -117,7 +117,7 @@ impl<K, V> Protector for Cursor<K, V> {
     fn as_target<'r>(&self, guard: &'r CsGuard) -> Option<Self::Target<'r>> {
         Some(SharedCursor {
             prev: self.prev.as_target(guard)?,
-            prev_next: self.prev_next,
+            prev_next: self.prev_next.as_target(guard)?,
             curr: self.curr.as_target(guard)?,
             found: self.found,
         })
@@ -126,7 +126,7 @@ impl<K, V> Protector for Cursor<K, V> {
     #[inline]
     fn release(&mut self) {
         self.prev.release();
-        self.prev_next = 0;
+        self.prev_next.release();
         self.curr.release();
         self.found = false;
     }
@@ -135,7 +135,7 @@ impl<K, V> Protector for Cursor<K, V> {
 // TODO(@jeonghyeon): automate
 struct SharedCursor<'r, K, V> {
     prev: Shared<'r, Node<K, V>>,
-    prev_next: usize,
+    prev_next: Shared<'r, Node<K, V>>,
     curr: Shared<'r, Node<K, V>>,
     found: bool,
 }
@@ -171,7 +171,7 @@ where
             .load(Ordering::Acquire, guard);
         Self {
             prev,
-            prev_next: curr.as_raw(),
+            prev_next: curr,
             curr,
             found: false,
         }
@@ -214,13 +214,19 @@ where
         let cursor = &mut output.0;
         unsafe {
             cursor.traverse(thread, |guard| {
-                let mut cursor = SharedCursor::new(&self.head, guard);
+                let mut prev = self.head.load(Ordering::Acquire, guard);
+                let mut curr = prev
+                    .as_ref(guard)
+                    .unwrap()
+                    .next
+                    .load(Ordering::Acquire, guard);
+                let mut prev_next = curr;
                 // Finding phase
                 // - cursor.curr: first unmarked node w/ key >= search key (4)
                 // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
                 // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
-                cursor.found = loop {
-                    let curr_node = some_or!(cursor.curr.as_ref(guard), break false);
+                let found = loop {
+                    let curr_node = some_or!(curr.as_ref(guard), break false);
                     let next = curr_node.next.load(Ordering::Acquire, guard);
 
                     // - finding stage is done if cursor.curr advancement stops
@@ -230,26 +236,31 @@ where
 
                     if next.tag() != 0 {
                         // We add a 0 tag here so that `self.curr`s tag is always 0.
-                        cursor.curr = next.with_tag(0);
+                        curr = next.with_tag(0);
                         continue;
                     }
 
                     match curr_node.key.cmp(key) {
                         Less => {
-                            cursor.prev = cursor.curr;
-                            cursor.prev_next = next.as_raw();
-                            cursor.curr = next;
+                            prev = curr;
+                            prev_next = next;
+                            curr = next;
                         }
                         Equal => break true,
                         Greater => break false,
                     }
                 };
-                cursor
+                SharedCursor {
+                    prev,
+                    prev_next,
+                    curr,
+                    found,
+                }
             });
         }
 
         // If prev and curr WERE adjacent, no need to clean up
-        if cursor.prev_next == cursor.curr.as_raw() {
+        if cursor.prev_next.as_raw() == cursor.curr.as_raw() {
             return true;
         }
 
@@ -260,7 +271,7 @@ where
             .unwrap()
             .next
             .compare_exchange(
-                unsafe { Shared::from_usize(cursor.prev_next) },
+                cursor.prev_next.shared(),
                 cursor.curr.shared(),
                 Ordering::Release,
                 Ordering::Relaxed,
@@ -277,7 +288,7 @@ where
             // retires this chain.
             let guard = CsGuard::unprotected();
 
-            let mut node = Shared::from_usize(cursor.prev_next);
+            let mut node = cursor.prev_next.shared();
             while node.with_tag(0) != cursor.curr.shared() {
                 let next = node.deref_unchecked().next.load(Ordering::Relaxed, &guard);
                 thread.retire(node);
@@ -466,7 +477,7 @@ where
                     match curr_node.key.cmp(key) {
                         Less => {
                             cursor.prev = cursor.curr;
-                            cursor.prev_next = next.as_raw();
+                            cursor.prev_next = next;
                             cursor.curr = next;
                             return TraverseStatus::Continue;
                         }
@@ -479,7 +490,7 @@ where
         }
 
         // If prev and curr WERE adjacent, no need to clean up
-        if cursor.prev_next == cursor.curr.as_raw() {
+        if cursor.prev_next.as_raw() == cursor.curr.as_raw() {
             return true;
         }
 
@@ -490,7 +501,7 @@ where
             .unwrap()
             .next
             .compare_exchange(
-                unsafe { Shared::from_usize(cursor.prev_next) },
+                cursor.prev_next.shared(),
                 cursor.curr.shared(),
                 Ordering::Release,
                 Ordering::Relaxed,
@@ -507,7 +518,7 @@ where
             // retires this chain.
             let guard = CsGuard::unprotected();
 
-            let mut node = Shared::from_usize(cursor.prev_next);
+            let mut node = cursor.prev_next.shared();
             while node.with_tag(0) != cursor.curr.shared() {
                 let next = node.deref_unchecked().next.load(Ordering::Relaxed, &guard);
                 thread.retire(node);
