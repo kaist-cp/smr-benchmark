@@ -14,7 +14,7 @@ use csv::Writer;
 use hp_sharp::GLOBAL;
 use rand::distributions::Uniform;
 use rand::prelude::*;
-use smr_benchmark::cdrc::OutputHolder;
+use smr_benchmark::ds_impl::cdrc::OutputHolder;
 use std::cmp::max;
 use std::fmt;
 use std::fs::{create_dir_all, File, OpenOptions};
@@ -25,9 +25,9 @@ use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
 use typenum::{Unsigned, U1};
 
-use smr_benchmark::{cdrc, cdrc_hp_sharp, ebr, vbr};
-use smr_benchmark::{hp, hp_pp, hp_sharp as hp_sharp_bench};
-use smr_benchmark::{nbr, pebr};
+use smr_benchmark::ds_impl::{cdrc, cdrc_hp_sharp, ebr, vbr};
+use smr_benchmark::ds_impl::{hp, hp_pp, hp_sharp as hp_sharp_bench};
+use smr_benchmark::ds_impl::{nbr, pebr};
 
 const NBR_CAP: NBRConfig = NBRConfig {
     bag_cap_pow2: 256,

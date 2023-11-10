@@ -3,12 +3,11 @@ name = "smr-benchmark"
 version = "0.1.0"
 authors = ["authors"]
 edition = "2021"
-default-run = "smr-benchmark"
 
 [dependencies]
 bitflags = "2.3"
 cfg-if = "1.0"
-clap = { version = "4.3.8", features = ["derive"] }
+clap = { version = "4.3.8", features = ["derive", "string"] }
 crossbeam-utils = { path = "./crossbeam-ebr/crossbeam-utils" }
 csv = "1.2.2"
 rand = "0.8"

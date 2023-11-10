@@ -17,6 +17,35 @@ cfg_if! {
         extern crate tikv_jemallocator;
         #[global_allocator]
         static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+        extern crate tikv_jemalloc_ctl;
+        pub struct MemSampler {
+            epoch_mib: tikv_jemalloc_ctl::epoch_mib,
+            allocated_mib: tikv_jemalloc_ctl::stats::allocated_mib,
+        }
+        impl MemSampler {
+            pub fn new() -> Self {
+                MemSampler {
+                    epoch_mib: tikv_jemalloc_ctl::epoch::mib().unwrap(),
+                    allocated_mib: tikv_jemalloc_ctl::stats::allocated::mib().unwrap(),
+                }
+            }
+            pub fn sample(&self) -> usize {
+                self.epoch_mib.advance().unwrap();
+                self.allocated_mib.read().unwrap()
+            }
+        }
+    } else {
+        pub struct MemSampler {}
+        impl MemSampler {
+            pub fn new() -> Self {
+                println!("NOTE: Memory usage benchmark is supported only for linux.");
+                MemSampler {}
+            }
+            pub fn sample(&self) -> usize {
+                0
+            }
+        }
     }
 }
 
@@ -25,20 +54,10 @@ extern crate crossbeam_pebr;
 extern crate crossbeam_utils;
 #[macro_use]
 extern crate bitflags;
+extern crate clap;
 extern crate typenum;
 
 #[macro_use]
 mod utils;
-
-pub mod cdrc;
-pub mod cdrc_hp_sharp;
-pub mod circ_ebr;
-pub mod circ_hp;
-pub mod ebr;
-pub mod hp;
-pub mod hp_pp;
-pub mod hp_sharp;
-pub mod nbr;
-pub mod nr;
-pub mod pebr;
-pub mod vbr;
+pub mod config;
+pub mod ds_impl;

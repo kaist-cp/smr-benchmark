@@ -20,7 +20,7 @@ use std::sync::atomic::{compiler_fence, Ordering};
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
 
-use smr_benchmark::{cdrc, circ_ebr, circ_hp, ebr, hp, nr};
+use smr_benchmark::ds_impl::{cdrc, circ_ebr, circ_hp, ebr, hp, nr};
 
 #[derive(PartialEq, Debug, ValueEnum, Clone)]
 #[allow(non_camel_case_types)]
