@@ -59,6 +59,14 @@ impl Op {
     pub const OPS: [Op; 3] = [Op::Get, Op::Insert, Op::Remove];
 }
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum GetRate {
+    WriteOnly = 0,
+    ReadWrite = 1,
+    ReadIntensive = 2,
+    ReadOnly = 3,
+}
+
 pub struct Config {
     pub ds: DS,
     pub mm: String,
@@ -72,7 +80,7 @@ pub struct Config {
     pub sampling: bool,
     pub sampling_period: Duration,
 
-    pub get_rate: u8,
+    pub get_rate: GetRate,
     pub op_dist: WeightedIndex<i32>,
     pub key_dist: Uniform<usize>,
     pub prefill: usize,
@@ -93,7 +101,7 @@ impl fmt::Display for Config {
             self.threads,
             self.non_coop,
             self.ops_per_cs,
-            self.get_rate,
+            self.get_rate as u8,
             self.bag_size,
         )
     }
@@ -139,7 +147,7 @@ impl BenchWriter {
                     config.bag_size.to_string(),
                     config.sampling_period.as_millis().to_string(),
                     config.non_coop.to_string(),
-                    config.get_rate.to_string(),
+                    (config.get_rate as u8).to_string(),
                     config.ops_per_cs.to_string(),
                     perf.ops_per_sec.to_string(),
                     perf.peak_mem.to_string(),
@@ -176,7 +184,7 @@ pub fn setup(mm: String) -> (Config, BenchWriter) {
             Arg::new("non-coop")
                 .short('n')
                 .help(
-                    "The degree of non-cooperation. \
+                    "The degree of non-cooperation (available on EBR and PEBR). \
                      1: 1ms, 2: 10ms, 3: stall",
                 )
                 .value_parser(value_parser!(u8).range(0..4))
@@ -245,7 +253,13 @@ pub fn setup(mm: String) -> (Config, BenchWriter) {
         _ => unreachable!("bag_size should be small or large"),
     };
     let non_coop = m.get_one::<u8>("non-coop").copied().unwrap();
-    let get_rate = m.get_one::<u8>("get rate").copied().unwrap();
+    let get_rate = match m.get_one::<u8>("get rate").copied().unwrap() {
+        0 => GetRate::WriteOnly,
+        1 => GetRate::ReadWrite,
+        2 => GetRate::ReadIntensive,
+        3 => GetRate::ReadOnly,
+        _ => unreachable!("get_rate is invalid"),
+    };
     let key_range = m.get_one::<usize>("range").copied().unwrap();
     let prefill = key_range / 2;
     let key_dist = Uniform::from(0..key_range);
@@ -260,10 +274,10 @@ pub fn setup(mm: String) -> (Config, BenchWriter) {
     let duration = Duration::from_secs(interval);
 
     let op_weights = match get_rate {
-        0 => &[0, 1, 1],
-        1 => &[2, 1, 1],
-        2 => &[18, 1, 1],
-        _ => &[1, 0, 0],
+        GetRate::WriteOnly => &[0, 1, 1],
+        GetRate::ReadWrite => &[2, 1, 1],
+        GetRate::ReadIntensive => &[18, 1, 1],
+        GetRate::ReadOnly => &[1, 0, 0],
     };
     let op_dist = WeightedIndex::new(op_weights).unwrap();
 
