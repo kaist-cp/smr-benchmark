@@ -319,8 +319,7 @@ where
         cursor.new_node.protect(&new_node, cs);
 
         loop {
-            let (succ_rc, succ_dt) = cursor.succs[0].loan();
-            new_node_ref.next[0].store(succ_rc, Ordering::Relaxed, cs);
+            new_node_ref.next[0].store(cursor.succs[0].upgrade(), Ordering::Relaxed, cs);
 
             match unsafe { cursor.pred(0).deref() }.next[0].compare_exchange(
                 cursor.succs[0].as_ptr(),
@@ -329,15 +328,8 @@ where
                 Ordering::SeqCst,
                 cs,
             ) {
-                Ok(succ_rc) => {
-                    succ_dt.repay(succ_rc);
-                    break;
-                }
-                Err(e) => {
-                    new_node = e.desired;
-                    let succ_rc = new_node_ref.next[0].swap(Rc::null(), Ordering::Relaxed);
-                    succ_dt.repay(succ_rc);
-                }
+                Ok(_) => break,
+                Err(e) => new_node = e.desired,
             }
 
             // We failed. Let's search for the key and try again.
@@ -361,21 +353,17 @@ where
                     break 'build;
                 }
 
-                let succ_ptr = cursor.succs[level].as_ptr();
-                let (succ_rc, succ_dt) = cursor.succs[level].loan();
-
-                match new_node_ref.next[level].compare_exchange(
-                    cursor.next.as_ptr(),
-                    succ_rc,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                    cs,
-                ) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        succ_dt.repay(e.desired);
-                        break 'build;
-                    }
+                if new_node_ref.next[level]
+                    .compare_exchange(
+                        cursor.next.as_ptr(),
+                        cursor.succs[level].upgrade(),
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                        cs,
+                    )
+                    .is_err()
+                {
+                    break 'build;
                 }
 
                 // Try installing the new node at the current level.
@@ -386,36 +374,9 @@ where
                     Ordering::SeqCst,
                     cs,
                 ) {
-                    Ok(succ_rc) => {
-                        succ_dt.repay(succ_rc);
-                        // Success! Continue on the next level.
-                        break;
-                    }
-                    Err(e) => {
-                        new_node = e.desired;
-                        // Repay the debt and try again.
-                        // Note that someone might mark the inserted node.
-                        let succ_rc = match new_node_ref.next[level].compare_exchange(
-                            succ_ptr,
-                            Rc::null().with_tag(2),
-                            Ordering::SeqCst,
-                            Ordering::SeqCst,
-                            cs,
-                        ) {
-                            Ok(succ_rc) => succ_rc,
-                            Err(_) => new_node_ref.next[level]
-                                .compare_exchange(
-                                    succ_ptr.with_tag(succ_ptr.tag() | 1),
-                                    Rc::null().with_tag(1 | 2),
-                                    Ordering::SeqCst,
-                                    Ordering::SeqCst,
-                                    cs,
-                                )
-                                .ok()
-                                .unwrap(),
-                        };
-                        succ_dt.repay(succ_rc.with_tag(0));
-                    }
+                    // Success! Continue on the next level.
+                    Ok(_) => break,
+                    Err(e) => new_node = e.desired,
                 }
 
                 // Installation failed.

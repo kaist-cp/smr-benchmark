@@ -248,31 +248,21 @@ impl<K: Ord, V> Cursor<K, V> {
         node: Rc<Node<K, V>, CsHP>,
         cs: &CsHP,
     ) -> Result<(), Rc<Node<K, V>, CsHP>> {
-        let (curr_rc, curr_dt) = self.curr.loan();
         unsafe { node.deref() }
             .next
-            .store(curr_rc, Ordering::Relaxed, cs);
+            .store(self.curr.upgrade(), Ordering::Relaxed, cs);
 
-        match unsafe { self.prev.deref() }.next.compare_exchange(
-            self.curr.as_ptr(),
-            node,
-            Ordering::Release,
-            Ordering::Relaxed,
-            cs,
-        ) {
-            Ok(curr_rc) => {
-                curr_dt.repay(curr_rc);
-                Ok(())
-            }
-            Err(e) => {
-                let node = e.desired;
-                let curr_rc = unsafe { node.deref() }
-                    .next
-                    .swap(Rc::null(), Ordering::Relaxed);
-                curr_dt.repay(curr_rc);
-                Err(node)
-            }
-        }
+        unsafe { self.prev.deref() }
+            .next
+            .compare_exchange(
+                self.curr.as_ptr(),
+                node,
+                Ordering::Release,
+                Ordering::Relaxed,
+                cs,
+            )
+            .map(|_| ())
+            .map_err(|e| e.desired)
     }
 
     /// removes the current node.

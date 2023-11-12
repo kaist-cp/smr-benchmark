@@ -293,8 +293,7 @@ where
         let new_node_ref = unsafe { new_node.deref() };
 
         loop {
-            let (succ_rc, succ_dt) = cursor.succs[0].loan();
-            new_node_ref.next[0].store(succ_rc, Ordering::Relaxed, cs);
+            new_node_ref.next[0].store(cursor.succs[0].upgrade(), Ordering::Relaxed, cs);
 
             match unsafe { cursor.preds[0].deref() }.next[0].compare_exchange(
                 cursor.succs[0].as_ptr(),
@@ -303,15 +302,8 @@ where
                 Ordering::SeqCst,
                 cs,
             ) {
-                Ok(succ_rc) => {
-                    succ_dt.repay(succ_rc);
-                    break;
-                }
-                Err(e) => {
-                    new_node = e.desired;
-                    let succ_rc = new_node_ref.next[0].swap(Rc::null(), Ordering::Relaxed);
-                    succ_dt.repay(succ_rc);
-                }
+                Ok(_) => break,
+                Err(e) => new_node = e.desired,
             }
 
             // We failed. Let's search for the key and try again.
@@ -325,7 +317,6 @@ where
 
         // The new node was successfully installed.
         // Build the rest of the tower above level 0.
-        let mut failed = 0;
         'build: for level in 1..height {
             let mut new_node = new_node_iter.next().unwrap();
             loop {
@@ -339,16 +330,16 @@ where
                     break 'build;
                 }
 
-                let (succ_rc, succ_dt) = cursor.succs[level].loan();
-
-                if let Err(e) = new_node_ref.next[level].compare_exchange(
-                    next.as_ptr(),
-                    succ_rc,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                    cs,
-                ) {
-                    succ_dt.repay(e.desired);
+                if new_node_ref.next[level]
+                    .compare_exchange(
+                        next.as_ptr(),
+                        cursor.succs[level].upgrade(),
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                        cs,
+                    )
+                    .is_err()
+                {
                     new_node_iter.halt(cs);
                     break 'build;
                 }
@@ -361,39 +352,9 @@ where
                     Ordering::SeqCst,
                     cs,
                 ) {
-                    Ok(succ_rc) => {
-                        succ_dt.repay(succ_rc);
-                        // Success! Continue on the next level.
-                        break;
-                    }
-                    Err(e) => {
-                        failed += 1;
-                        if failed % 10000 == 0 {
-                            println!(
-                                "failed {:#066b} {:#066b}",
-                                unsafe { cursor.preds[level].deref() }.next[level]
-                                    .load(Ordering::SeqCst)
-                                    .as_usize(),
-                                cursor.succs[level].as_ptr().as_usize()
-                            );
-                        }
-                        new_node = e.desired;
-                        // Repay the debt and try again.
-                        // Note that someone might mark the inserted node.
-                        let succ_rc = loop {
-                            let succ_ptr = new_node_ref.next[level].load(Ordering::Acquire);
-                            if let Ok(rc) = new_node_ref.next[level].compare_exchange(
-                                succ_ptr,
-                                Rc::null().with_tag(succ_ptr.tag() | 2),
-                                Ordering::SeqCst,
-                                Ordering::SeqCst,
-                                cs,
-                            ) {
-                                break rc;
-                            }
-                        };
-                        succ_dt.repay(succ_rc.with_tag(0));
-                    }
+                    // Success! Continue on the next level.
+                    Ok(_) => break,
+                    Err(e) => new_node = e.desired,
                 }
 
                 // Installation failed.

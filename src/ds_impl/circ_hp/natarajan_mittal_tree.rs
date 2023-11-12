@@ -403,10 +403,8 @@ where
             self.seek(&key, record, cs);
             let new_internal_node = unsafe { new_internal.deref_mut() };
 
-            let (leaf_rc, leaf_dt) = record.leaf.loan();
             let leaf_pos = match unsafe { record.leaf.deref() }.key.cmp(&key) {
                 cmp::Ordering::Equal => {
-                    leaf_dt.repay(leaf_rc);
                     unsafe { new_internal.into_inner() }.unwrap();
                     unsafe { new_leaf.into_inner() }.unwrap();
                     return false;
@@ -418,12 +416,14 @@ where
                         .store(new_leaf, Ordering::Relaxed, cs);
                     new_internal_node
                         .right
-                        .store(leaf_rc, Ordering::Relaxed, cs);
+                        .store(record.leaf.upgrade(), Ordering::Relaxed, cs);
                     Direction::R
                 }
                 cmp::Ordering::Less => {
                     new_internal_node.key = unsafe { new_leaf.deref().key.clone() };
-                    new_internal_node.left.store(leaf_rc, Ordering::Relaxed, cs);
+                    new_internal_node
+                        .left
+                        .store(record.leaf.upgrade(), Ordering::Relaxed, cs);
                     new_internal_node
                         .right
                         .store(new_leaf, Ordering::Relaxed, cs);
@@ -439,10 +439,7 @@ where
                 Ordering::Acquire,
                 cs,
             ) {
-                Ok(leaf_rc) => {
-                    leaf_dt.repay(leaf_rc);
-                    return true;
-                }
+                Ok(_) => return true,
                 Err(e) => {
                     // Insertion failed. Help the conflicting remove operation if needed.
                     // NOTE: The paper version checks if any of the mark is set, which is
@@ -450,14 +447,12 @@ where
                     new_internal = e.desired;
                     let new_internal_ref = unsafe { new_internal.deref() };
 
-                    let (leaf_link, new_leaf_link) = match leaf_pos {
-                        Direction::L => (&new_internal_ref.left, &new_internal_ref.right),
-                        Direction::R => (&new_internal_ref.right, &new_internal_ref.left),
+                    let new_leaf_link = match leaf_pos {
+                        Direction::L => &new_internal_ref.right,
+                        Direction::R => &new_internal_ref.left,
                     };
 
-                    let leaf_rc = leaf_link.swap(Rc::null(), Ordering::Relaxed);
                     new_leaf = new_leaf_link.swap(Rc::null(), Ordering::Relaxed);
-                    leaf_dt.repay(leaf_rc);
 
                     if e.current.with_tag(Marks::empty().bits()) == record.leaf.as_ptr() {
                         self.cleanup(record, cs);
