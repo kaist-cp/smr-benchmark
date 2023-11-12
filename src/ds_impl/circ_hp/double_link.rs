@@ -93,7 +93,7 @@ impl<T: Sync + Send> DoubleLink<T> {
             ltail.load(&self.tail, cs);
             unsafe { node.deref() }
                 .prev
-                .store(&*ltail, Ordering::Relaxed);
+                .store(&*ltail, Ordering::Relaxed, cs);
 
             // Try to help the previous enqueue to complete.
             lprev.load_from_weak(unsafe { &ltail.deref().prev }, cs);
