@@ -21,8 +21,8 @@ elif cpu_count <= 64:
     ts_map = list(map(str, [1] + list(range(8, 129, 8))))
     ts_queue = list(map(str, [1, 2, 4] + list(range(8, 129, 8))))
 else:
-    ts_map = list(map(str, [1] + list(range(10, 151, 10))))
-    ts_queue = list(map(str, [1, 3, 5] + list(range(10, 151, 10))))
+    ts_map = list(map(str, [1] + list(range(8, 193, 8))))
+    ts_queue = list(map(str, [1, 2, 4] + list(range(8, 193, 8))))
 
 if os.path.exists('.git'):
     subprocess.run(['git', 'submodule', 'update', '--init', '--recursive'])
@@ -63,7 +63,7 @@ for ds in dss:
 
 for mm in mms_queue:
     for t in ts_queue:
-        cmd = [os.path.join(BIN_PATH, "double_link"), '-i', str(i), '-t', str(t), '-o', os.path.join(RESULTS_PATH, 'double-link.csv')]
+        cmd = [os.path.join(BIN_PATH, "double_link"), '-m', mm, '-i', str(i), '-t', str(t), '-o', os.path.join(RESULTS_PATH, 'double-link.csv')]
         cmds.append(cmd)
 
 print('number of configurations: ', len(cmds))
