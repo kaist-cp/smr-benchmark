@@ -337,7 +337,7 @@ where
                 ));
 
                 let op = Update {
-                    p: Weak::from_strong(&cursor.p),
+                    p: cursor.p.upgrade().downgrade(),
                     l: cursor.l.upgrade(),
                     new_internal,
                     gp: Weak::null(),
@@ -392,8 +392,8 @@ where
                 self.help(cursor.pupdate, cs);
             } else {
                 let op = Update {
-                    gp: Weak::from_strong(&cursor.gp),
-                    p: Weak::from_strong(&cursor.p),
+                    gp: cursor.gp.upgrade().downgrade(),
+                    p: cursor.p.upgrade().downgrade(),
                     l: cursor.l.upgrade(),
                     pupdate: cursor.pupdate.upgrade(),
                     new_internal: Rc::null(),

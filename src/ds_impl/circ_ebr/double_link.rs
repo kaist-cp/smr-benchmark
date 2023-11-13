@@ -86,7 +86,7 @@ impl<T: Sync + Send> DoubleLink<T> {
 
         loop {
             let ltail = self.tail.load_ss(cs);
-            unsafe { node.deref_mut() }.prev = Weak::from_strong(&ltail);
+            unsafe { node.deref_mut() }.prev = ltail.upgrade().downgrade();
 
             // Try to help the previous enqueue to complete.
             let mut lprev = Snapshot::new();

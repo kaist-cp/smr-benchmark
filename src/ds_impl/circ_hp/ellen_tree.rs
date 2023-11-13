@@ -371,7 +371,7 @@ where
                 ));
 
                 let op = Update {
-                    p: Weak::from_strong(&finder.p),
+                    p: finder.p.upgrade().downgrade(),
                     p_l_dir: finder.p_l_dir,
                     l: finder.l.upgrade(),
                     l_other: finder.l_other.upgrade(),
@@ -442,9 +442,9 @@ where
                 );
             } else {
                 let op = Update {
-                    gp: Weak::from_strong(&finder.gp),
+                    gp: finder.gp.upgrade().downgrade(),
                     gp_p_dir: finder.gp_p_dir,
-                    p: Weak::from_strong(&finder.p),
+                    p: finder.p.upgrade().downgrade(),
                     p_l_dir: finder.p_l_dir,
                     l: finder.l.upgrade(),
                     l_other: finder.l_other.upgrade(),
