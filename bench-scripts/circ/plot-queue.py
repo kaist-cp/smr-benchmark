@@ -10,8 +10,9 @@ RESULTS_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "result
 # raw column names
 THREADS = "threads"
 THROUGHPUT = "throughput"
-THROUGHPUT_RATIO = "throughput-ratio"
+THROUGHPUT_RATIO = "throughput_ratio"
 PEAK_MEM = "peak_mem"
+PEAK_MEM_RATIO = "peak_mem_ratio"
 AVG_MEM = "avg_mem"
 
 # legend
@@ -34,11 +35,11 @@ SMR_ONLYs = [NR, EBR, CDRC_EBR, CDRC_EBR_FLUSH, CIRC_EBR]
 
 cpu_count = os.cpu_count()
 if not cpu_count or cpu_count <= 24:
-    ts = [1, 2, 3] + list(range(4, 33, 4))
+    ts = [1] + list(range(4, 33, 4))
 elif cpu_count <= 64:
-    ts = [1, 2, 4] + list(range(8, 129, 8))
+    ts = [1] + list(range(8, 129, 8))
 else:
-    ts = [1, 3, 5] + list(range(10, 151, 10))
+    ts = [1] + list(range(10, 151, 10))
 
 # https://matplotlib.org/stable/api/markers_api.html
 line_shapes = {
@@ -67,7 +68,7 @@ line_types = {
 }
 
 # line_name: SMR, SMR_I
-def draw(name, data, line_name, y_value, width, height, y_max=None, y_label=None, legend=False):
+def draw(name, data, line_name, y_value, width, height, y_max=None, y_label=None, y_log=False, legend=False):
     p = ggplot(
             data,
             aes(x=THREADS, y=y_value,
@@ -101,7 +102,10 @@ def draw(name, data, line_name, y_value, width, height, y_max=None, y_label=None
         p += theme(legend_position='none')
     
     if data.threads.max() >= cpu_count:
-        p += annotate(geom="rect", xmin=cpu_count, xmax=float("inf"), ymin=-float("inf"), ymax=float("inf"), fill = "#FF00000A")
+        p += annotate(geom="rect", xmin=cpu_count, xmax=float("inf"), ymin=(0 if y_log else -float("inf")), ymax=float("inf"), fill = "#FF00000A")
+
+    if y_log:
+        p += scale_y_continuous(trans='log10')
 
     p.save(name, width=width, height=height, units="in")
 
@@ -115,7 +119,7 @@ def draw_throughput(data, max_threads, width, height, legend):
 def draw_throughput_ratio(data, max_threads, width, height, legend):
     data = data[data.threads <= max_threads]
     y_label = 'Throughput ratio to RCU'
-    name = f'{RESULTS_PATH}/queue/double-link_xmax{max_threads}_throughput-ratio.pdf'
+    name = f'{RESULTS_PATH}/queue/double-link_xmax{max_threads}_throughput_ratio.pdf'
     draw(name, data, SMR_ONLY, THROUGHPUT_RATIO, width, height, y_label=y_label, legend=legend)
     return name
 
@@ -127,12 +131,18 @@ def draw_peak_mem(data, max_threads, width, height, legend):
     draw(name, data, SMR_ONLY, PEAK_MEM, width, height, y_max=y_max, y_label=y_label, legend=legend)
     return name
 
-def draw_avg_mem(data, max_threads, width, height, legend):
+def draw_peak_mem_ratio(data, max_threads, width, height, legend):
     data = data[data.threads <= max_threads]
-    y_label = 'Avg. memory usage (GiB)'
-    name = f'{RESULTS_PATH}/queue/double-link_xmax{max_threads}_avg_mem.pdf'
-    y_max = data[data.mm == CDRC_EBR].peak_mem.max() * 1.05
-    draw(name, data, SMR_ONLY, AVG_MEM, width, height, y_max=y_max, y_label=y_label, legend=legend)
+    y_label = 'Peak memory usage ratio to RCU'
+    name = f'{RESULTS_PATH}/queue/double-link_xmax{max_threads}_peak_mem_ratio.pdf'
+    draw(name, data, SMR_ONLY, PEAK_MEM_RATIO, width, height, y_label=y_label, legend=legend)
+    return name
+
+def draw_peak_mem_ratio_log(data, max_threads, width, height, legend):
+    data = data[data.threads <= max_threads]
+    y_label = 'Peak memory usage ratio to RCU'
+    name = f'{RESULTS_PATH}/queue/double-link_xmax{max_threads}_peak_mem_ratio_log.pdf'
+    draw(name, data, SMR_ONLY, PEAK_MEM_RATIO, width, height, y_label=y_label, y_log=True, legend=legend)
     return name
 
 if __name__ == '__main__':
@@ -147,6 +157,7 @@ if __name__ == '__main__':
 
     data = pd.read_csv(f'{RESULTS_PATH}/{DOUBLELINK}.csv')
     data = data[data.mm.isin(SMR_ONLYs)]
+    data = data[(1 == data.threads) | (8 <= data.threads)]
     data.throughput = data.throughput.map(lambda x: x / 1_000_000)
     data.peak_mem = data.peak_mem.map(lambda x: x / (2 ** 30))
     data.avg_mem = data.avg_mem.map(lambda x: x / (2 ** 30))
@@ -156,14 +167,16 @@ if __name__ == '__main__':
     for m in SMR_ONLYs:
         thr = avg[avg.mm == m].throughput.values
         avg.loc[avg.mm == m, THROUGHPUT_RATIO] = thr / base
+    
+    base = avg[avg.mm == EBR].peak_mem.values
+    for m in SMR_ONLYs:
+        mem = avg[avg.mm == m].peak_mem.values
+        avg.loc[avg.mm == m, PEAK_MEM_RATIO] = mem / base
 
     avg[SMR_ONLY] = pd.Categorical(avg.mm.map(str), SMR_ONLYs)
     avg['ds'] = 'double-link'
     draw_throughput(avg, 128, 10, 7, False)
     draw_throughput_ratio(avg, 128, 10, 7, False)
     draw_peak_mem(avg, 128, 10, 7, False)
-    draw_avg_mem(avg, 128, 10, 7, False)
-    draw_throughput(avg, 32, 7, 5, False)
-    draw_throughput_ratio(avg, 32, 7, 5, False)
-    draw_peak_mem(avg, 32, 7, 5, False)
-    draw_avg_mem(avg, 32, 7, 5, False)
+    draw_peak_mem_ratio(avg, 128, 10, 7, False)
+    draw_peak_mem_ratio_log(avg, 128, 10, 7, False)
