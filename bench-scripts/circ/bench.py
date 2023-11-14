@@ -16,13 +16,13 @@ gs = [0, 1, 2]
 cpu_count = os.cpu_count()
 if not cpu_count or cpu_count <= 24:
     ts_map = list(map(str, [1] + list(range(4, 33, 4))))
-    ts_queue = list(map(str, [1, 2, 3] + list(range(4, 33, 4))))
+    ts_queue = list(map(str, [1] + list(range(4, 33, 4))))
 elif cpu_count <= 64:
     ts_map = list(map(str, [1] + list(range(8, 129, 8))))
-    ts_queue = list(map(str, [1, 2, 4] + list(range(8, 129, 8))))
+    ts_queue = list(map(str, [1] + list(range(8, 129, 8))))
 else:
     ts_map = list(map(str, [1] + list(range(8, 193, 8))))
-    ts_queue = list(map(str, [1, 2, 4] + list(range(8, 193, 8))))
+    ts_queue = list(map(str, [1] + list(range(8, 193, 8))))
 
 if os.path.exists('.git'):
     subprocess.run(['git', 'submodule', 'update', '--init', '--recursive'])
