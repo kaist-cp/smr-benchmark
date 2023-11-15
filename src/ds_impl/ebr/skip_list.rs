@@ -150,6 +150,11 @@ where
 
             loop {
                 let curr_node = some_or!(unsafe { curr.as_ref() }, break);
+                let next = curr_node.next[level].load(Ordering::Acquire, guard);
+                if next.tag() & 1 != 0 {
+                    curr = next;
+                    continue;
+                }
                 match curr_node.key.cmp(key) {
                     std::cmp::Ordering::Less => {
                         pred = &curr_node.next;
@@ -303,6 +308,16 @@ where
                         .refs
                         .fetch_sub(height - level, Ordering::SeqCst);
                     break 'build;
+                }
+
+                // When searching for `key` and traversing the skip list from the highest level
+                // to the lowest, it is possible to observe a node with an equal key at higher
+                // levels and then find it missing at the lower levels if it gets removed
+                // during traversal. Even worse, it is possible to observe completely different
+                // nodes with the exact same key at different levels.
+                if unsafe { succ.as_ref() }.map(|s| &s.key) == Some(&new_node_ref.key) {
+                    cursor = self.find(&new_node_ref.key, guard);
+                    continue;
                 }
 
                 if new_node_ref.next[level]

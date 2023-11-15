@@ -134,7 +134,7 @@ impl fmt::Display for Perf {
     }
 }
 
-fn readable_bytes(num: usize) -> String {
+pub fn readable_bytes(num: usize) -> String {
     const UNITS: &'static [&'static str] = &["B", "KiB", "MiB", "GiB"];
     for (i, unit) in UNITS.iter().enumerate() {
         if num / 2usize.pow(i as u32 * 10) < 1000 {

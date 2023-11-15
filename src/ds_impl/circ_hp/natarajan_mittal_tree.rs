@@ -99,14 +99,14 @@ impl<K, V> GraphNode<CsHP> for Node<K, V> {
     const UNIQUE_OUTDEGREE: bool = false;
 
     #[inline]
-    fn pop_outgoings(&self, _: &mut Vec<Rc<Self, CsHP>>)
+    fn pop_outgoings(&self, _: &mut Vec<Rc<Self, CsHP>>, _: &CsHP)
     where
         Self: Sized,
     {
     }
 
     #[inline]
-    fn pop_unique(&self) -> Rc<Self, CsHP>
+    fn pop_unique(&self, _: &CsHP) -> Rc<Self, CsHP>
     where
         Self: Sized,
     {
@@ -452,7 +452,7 @@ where
                         Direction::R => &new_internal_ref.left,
                     };
 
-                    new_leaf = new_leaf_link.swap(Rc::null(), Ordering::Relaxed);
+                    new_leaf = new_leaf_link.swap(Rc::null(), Ordering::Relaxed, cs);
 
                     if e.current.with_tag(Marks::empty().bits()) == record.leaf.as_ptr() {
                         self.cleanup(record, cs);

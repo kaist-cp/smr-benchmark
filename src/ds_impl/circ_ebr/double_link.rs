@@ -26,19 +26,19 @@ impl<T> GraphNode<CsEBR> for Node<T> {
     const UNIQUE_OUTDEGREE: bool = true;
 
     #[inline]
-    fn pop_outgoings(&self, result: &mut Vec<Rc<Self, CsEBR>>)
+    fn pop_outgoings(&self, result: &mut Vec<Rc<Self, CsEBR>>, cs: &CsEBR)
     where
         Self: Sized,
     {
-        result.push(self.next.swap(Rc::null(), Ordering::Relaxed));
+        result.push(self.next.swap(Rc::null(), Ordering::Relaxed, cs));
     }
 
     #[inline]
-    fn pop_unique(&self) -> Rc<Self, CsEBR>
+    fn pop_unique(&self, cs: &CsEBR) -> Rc<Self, CsEBR>
     where
         Self: Sized,
     {
-        self.next.swap(Rc::null(), Ordering::Relaxed)
+        self.next.swap(Rc::null(), Ordering::Relaxed, cs)
     }
 }
 

@@ -43,16 +43,16 @@ impl<K, V> GraphNode<CsEBR> for Node<K, V> {
     const UNIQUE_OUTDEGREE: bool = false;
 
     #[inline]
-    fn pop_outgoings(&self, result: &mut Vec<Rc<Self, CsEBR>>)
+    fn pop_outgoings(&self, result: &mut Vec<Rc<Self, CsEBR>>, cs: &CsEBR)
     where
         Self: Sized,
     {
-        result.push(self.left.swap(Rc::null(), Ordering::Relaxed));
-        result.push(self.right.swap(Rc::null(), Ordering::Relaxed));
+        result.push(self.left.swap(Rc::null(), Ordering::Relaxed, cs));
+        result.push(self.right.swap(Rc::null(), Ordering::Relaxed, cs));
     }
 
     #[inline]
-    fn pop_unique(&self) -> Rc<Self, CsEBR>
+    fn pop_unique(&self, _: &CsEBR) -> Rc<Self, CsEBR>
     where
         Self: Sized,
     {

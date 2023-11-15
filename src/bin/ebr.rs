@@ -4,7 +4,7 @@ use std::cmp::max;
 use std::io::{stdout, Write};
 use std::mem::ManuallyDrop;
 use std::path::Path;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{fence, Ordering};
 use std::sync::{mpsc, Arc, Barrier};
 use std::thread::available_parallelism;
 use std::time::Instant;
@@ -110,6 +110,8 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync, N: Unsigned>(
 
     let collector = &crossbeam_ebr::Collector::new();
 
+    let prev_epoch = collector.global_epoch().value();
+
     let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
     let (ops_sender, ops_receiver) = mpsc::channel();
     let (mem_sender, mem_receiver) = mpsc::channel();
@@ -210,6 +212,12 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync, N: Unsigned>(
     })
     .unwrap();
     println!("end");
+
+    fence(Ordering::SeqCst);
+    let next_epoch = collector.global_epoch().value();
+    println!("prev: {prev_epoch}");
+    println!("next: {next_epoch}");
+    println!("diff: {}", next_epoch - prev_epoch);
 
     let mut ops = 0;
     for _ in 0..config.threads {
