@@ -19,7 +19,7 @@ impl<K, V> GraphNode<CsEBR> for Node<K, V> {
     const UNIQUE_OUTDEGREE: bool = false;
 
     #[inline]
-    fn pop_outgoings(&self, result: &mut Vec<Rc<Self, CsEBR>>, cs: &CsEBR)
+    fn pop_outgoings(&self, result: &mut Vec<Rc<Self, CsEBR>>)
     where
         Self: Sized,
     {
@@ -27,13 +27,13 @@ impl<K, V> GraphNode<CsEBR> for Node<K, V> {
             if next.load(Ordering::Acquire).is_null() {
                 None
             } else {
-                Some(next.swap(Rc::null(), Ordering::Relaxed, cs))
+                Some(next.swap(Rc::null(), Ordering::Relaxed))
             }
         }));
     }
 
     #[inline]
-    fn pop_unique(&self, _: &CsEBR) -> Rc<Self, CsEBR>
+    fn pop_unique(&self) -> Rc<Self, CsEBR>
     where
         Self: Sized,
     {
@@ -115,28 +115,12 @@ where
         }
         true
     }
-
-    pub fn mark_level(&self, level: usize, cs: &CsEBR) -> usize {
-        loop {
-            let aux = self.next[level].load_ss(cs);
-            match self.next[level].compare_exchange_tag(
-                &aux,
-                1 | aux.tag(),
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-                cs,
-            ) {
-                Ok(curr) => return curr.tag(),
-                Err(_) => continue,
-            }
-        }
-    }
 }
 
 pub struct Cursor<K, V> {
     preds: [Snapshot<Node<K, V>, CsEBR>; MAX_HEIGHT],
     succs: [Snapshot<Node<K, V>, CsEBR>; MAX_HEIGHT],
-    found: Option<(Snapshot<Node<K, V>, CsEBR>, usize, usize)>,
+    found: Option<Snapshot<Node<K, V>, CsEBR>>,
 }
 
 impl<K, V> OutputHolder<V> for Snapshot<Node<K, V>, CsEBR> {
@@ -227,14 +211,14 @@ where
                 let mut curr = unsafe { pred.deref() }.next[level].load_ss(cs);
                 // If the next node of `pred` is marked, that means `pred` is removed and we have
                 // to restart the search.
-                if curr.tag() & 1 != 0 {
+                if curr.tag() == 1 {
                     continue 'search;
                 }
 
                 while let Some(curr_ref) = curr.as_ref() {
                     let mut succ = curr_ref.next[level].load_ss(cs);
 
-                    if succ.tag() & 1 != 0 {
+                    if succ.tag() == 1 {
                         succ.set_tag(0);
                         if self.help_unlink(&pred, &curr, &succ, level, cs) {
                             curr = succ;
@@ -251,13 +235,7 @@ where
                     match curr_ref.key.cmp(key) {
                         std::cmp::Ordering::Greater => break,
                         std::cmp::Ordering::Equal => {
-                            if level == 0 {
-                                if let Some((found, max, _)) = cursor.found.take() {
-                                    cursor.found = Some((found, max, level));
-                                } else {
-                                    cursor.found = Some((curr, level, level));
-                                }
-                            }
+                            cursor.found = Some(curr);
                             break;
                         }
                         std::cmp::Ordering::Less => {}
@@ -272,13 +250,6 @@ where
                 cursor.succs[level] = curr;
             }
 
-            if let Some((found, max, min)) = cursor.found.take() {
-                if min == 0 {
-                    cursor.found = Some((found, max, min));
-                } else {
-                    cursor.found = None;
-                }
-            }
             return cursor;
         }
     }
@@ -359,16 +330,6 @@ where
                     break 'build;
                 }
 
-                // When searching for `key` and traversing the skip list from the highest level
-                // to the lowest, it is possible to observe a node with an equal key at higher
-                // levels and then find it missing at the lower levels if it gets removed
-                // during traversal. Even worse, it is possible to observe completely different
-                // nodes with the exact same key at different levels.
-                if cursor.succs[level].as_ref().map(|s| &s.key) == Some(&new_node_ref.key) {
-                    cursor = self.find(&new_node_ref.key, cs);
-                    continue;
-                }
-
                 if new_node_ref.next[level]
                     .compare_exchange(
                         next.as_ptr(),
@@ -391,98 +352,46 @@ where
                     Ordering::SeqCst,
                     cs,
                 ) {
-                    Ok(_) => {
-                        // Success! Continue on the next level.
-                        break;
-                    }
-                    Err(e) => {
-                        // Installation failed.
-                        new_node = e.desired;
-                        cursor = self.find(&new_node_ref.key, cs);
-                    }
+                    // Success! Continue on the next level.
+                    Ok(_) => break,
+                    Err(e) => new_node = e.desired,
                 }
-            }
-        }
 
-        // If any pointer in the tower is marked, that means our node is in the process of
-        // removal or already removed. It is possible that another thread (either partially or
-        // completely) removed the new node while we were building the tower, and just after
-        // that we installed the new node at one of the higher levels. In order to undo that
-        // installation, we must repeat the search, which will unlink the new node at that
-        // level.
-        if new_node_ref.next[height - 1].load(Ordering::SeqCst).tag() == 1 {
-            self.find(&new_node_ref.key, cs);
+                // Installation failed.
+                cursor = self.find(&new_node_ref.key, cs);
+            }
         }
 
         true
     }
 
     pub fn remove(&self, key: &K, cs: &CsEBR) -> Option<Snapshot<Node<K, V>, CsEBR>> {
-        'remove: loop {
+        loop {
             let cursor = self.find(key, cs);
-            let (found, max, _) = cursor.found?.clone();
-            let node = unsafe { found.deref() };
+            let node = unsafe { cursor.found?.deref() };
 
-            for level in (max + 1..node.height).rev() {
-                node.mark_level(level, cs);
-            }
-
-            for level in (0..=max).rev() {
-                // Mark the current level.
-                loop {
-                    let next = node.next[level].load_ss(cs);
-                    if next.tag() & 1 != 0 {
-                        if level == 0 {
-                            // The bottom level is already marked, so our removal is not committed
-                            // and other thread has removed the found node.
-                            continue 'remove;
-                        }
-                        // If the current level is not the bottom, let's break this loop and
-                        // try helping the unlink.
-                        break;
+            // Try removing the node by marking its tower.
+            if node.mark_tower(cs) {
+                for level in (0..node.height).rev() {
+                    let mut next = node.next[level].load_ss(cs);
+                    if (next.tag() & 2) != 0 {
+                        continue;
                     }
-                    match node.next[level].compare_exchange_tag(
+                    // Try linking the predecessor and successor at this level.
+                    next.set_tag(0);
+                    if !self.help_unlink(
+                        &cursor.preds[level],
+                        cursor.found.as_ref().unwrap(),
                         &next,
-                        1 | next.tag(),
-                        Ordering::SeqCst,
-                        Ordering::SeqCst,
+                        level,
                         cs,
                     ) {
-                        Ok(_) => break,
-                        Err(e) => {
-                            if level == 0 && (e.current.tag() & 1) != 0 {
-                                // The bottom level is already marked, so our removal is not
-                                // committed and other thread has removed the found node.
-                                continue 'remove;
-                            }
-                            if e.current.tag() & 1 != 0 {
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                let mut next = node.next[level].load_ss(cs);
-                if next.tag() & 2 != 0 {
-                    // This level is not yet installed by an inserting thread (and it is null).
-                    // In this case, just skip unlinking and go to the next level.
-                    continue;
-                }
-                // Try linking the predecessor and successor at this level.
-                next.set_tag(0);
-                if !self.help_unlink(&cursor.preds[level], &found, &next, level, cs) {
-                    if level == 0 {
-                        // If we successfully marked the bottom level but failed to unlink it,
-                        // other threads must have helped this removal,
-                        // so let's return the result delightfully.
+                        self.find(key, cs);
                         break;
                     }
-                    // Otherwise, we need to restart the search and help unlinking.
-                    continue 'remove;
                 }
+                return Some(cursor.found.unwrap());
             }
-
-            return Some(found);
         }
     }
 }

@@ -4,14 +4,12 @@ use rand::prelude::*;
 use std::cmp::max;
 use std::io::{stdout, Write};
 use std::path::Path;
-use std::sync::atomic::{fence, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc, Barrier};
 use std::thread::available_parallelism;
 use std::time::Instant;
 
-use smr_benchmark::config::map::{
-    readable_bytes, setup, BagSize, BenchWriter, Config, Op, Perf, DS,
-};
+use smr_benchmark::config::map::{setup, BagSize, BenchWriter, Config, Op, Perf, DS};
 use smr_benchmark::ds_impl::circ_ebr::{
     BonsaiTreeMap, ConcurrentMap, EFRBTree, HHSList, HList, HMList, HashMap, NMTreeMap, SkipList,
 };
@@ -103,9 +101,6 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
     let map = &M::new();
     strategy.prefill(config, map);
 
-    fence(Ordering::SeqCst);
-    let prev_epoch = circ::ebr_impl::default_collector().global_epoch().value();
-
     let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
     let (ops_sender, ops_receiver) = mpsc::channel();
     let (mem_sender, mem_receiver) = mpsc::channel();
@@ -187,48 +182,6 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
     })
     .unwrap();
     println!("end");
-
-    // dbg!(unsafe { circ::ebr_impl::default_collector().collect_queue() });
-
-    fence(Ordering::SeqCst);
-    let next_epoch = circ::ebr_impl::default_collector().global_epoch().value();
-    println!("prev: {prev_epoch}");
-    println!("next: {next_epoch}");
-    println!("diff: {}", next_epoch - prev_epoch);
-
-    // for (i, slot) in circ::DISPOSED.iter().enumerate() {
-    //     let count = slot.load(Ordering::Relaxed);
-    //     if count != 0 {
-    //         println!("{i}: {}", slot.load(Ordering::Relaxed));
-    //     }
-    // }
-    println!("ex: {}", circ::DISPOSED_EX.load(Ordering::Relaxed));
-    println!(
-        "approximated max: {}",
-        circ::APPROX_MAX.load(Ordering::Relaxed)
-    );
-    println!(
-        "total disposed: {}",
-        circ::TOTAL_DISPOSED.load(Ordering::Relaxed)
-    );
-    println!(
-        "average: {}",
-        circ::TOTAL_DISPOSED.load(Ordering::Relaxed) as f64
-            / circ::DISPOSE_CALL.load(Ordering::Relaxed) as f64
-    );
-
-    println!(
-        "before starting eager collection: {}",
-        readable_bytes(config.mem_sampler.sample())
-    );
-    // for i in 0usize.. {
-    //     CsEBR::new().guard().unwrap().flush();
-    //     let mem = config.mem_sampler.sample();
-    //     println!("after {}th eager collections: {}", i, readable_bytes(mem));
-    //     if mem < 30 * 1024 * 1024 {
-    //         break;
-    //     }
-    // }
 
     let mut ops = 0;
     for _ in 0..config.threads {
