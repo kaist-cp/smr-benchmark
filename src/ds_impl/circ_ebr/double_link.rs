@@ -26,19 +26,19 @@ impl<T> GraphNode<CsEBR> for Node<T> {
     const UNIQUE_OUTDEGREE: bool = true;
 
     #[inline]
-    fn pop_outgoings(&self, result: &mut Vec<Rc<Self, CsEBR>>)
+    fn pop_outgoings(&mut self, result: &mut Vec<Rc<Self, CsEBR>>)
     where
         Self: Sized,
     {
-        result.push(self.next.swap(Rc::null(), Ordering::Relaxed));
+        result.push(self.next.take());
     }
 
     #[inline]
-    fn pop_unique(&self) -> Rc<Self, CsEBR>
+    fn pop_unique(&mut self) -> Rc<Self, CsEBR>
     where
         Self: Sized,
     {
-        self.next.swap(Rc::null(), Ordering::Relaxed)
+        self.next.take()
     }
 }
 
@@ -86,7 +86,7 @@ impl<T: Sync + Send> DoubleLink<T> {
 
         loop {
             let ltail = self.tail.load_ss(cs);
-            unsafe { node.deref_mut() }.prev = ltail.upgrade().downgrade();
+            unsafe { node.deref_mut() }.prev = ltail.downgrade();
 
             // Try to help the previous enqueue to complete.
             let mut lprev = Snapshot::new();

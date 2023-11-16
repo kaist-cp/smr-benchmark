@@ -129,46 +129,6 @@ impl<T, C: Cs> AtomicWeak<T, C> {
         }
     }
 
-    /// Atomically compares the underlying pointer with expected, and if they refer to
-    /// the same managed object, replaces the current pointer with a copy of desired
-    /// (incrementing its reference count) and returns true. Otherwise, returns false.
-    ///
-    /// It is guaranteed that the current pointer on a failure is protected by `current_snap`.
-    /// It is lock-free but not wait-free. Use `compare_exchange` for an wait-free implementation.
-    #[inline(always)]
-    pub fn compare_exchange_protecting_current<'g, P>(
-        &self,
-        expected: TaggedCnt<T>,
-        mut desired: P,
-        current_snap: &mut Snapshot<T, C>,
-        success: Ordering,
-        failure: Ordering,
-        cs: &'g C,
-    ) -> Result<Weak<T, C>, CompareExchangeErrorWeak<T, P>>
-    where
-        P: WeakPtr<T, C>,
-    {
-        loop {
-            current_snap.load_from_weak(self, cs);
-            if current_snap.as_ptr() != expected {
-                return Err(CompareExchangeErrorWeak {
-                    desired,
-                    current: current_snap.as_ptr(),
-                });
-            }
-            match self.compare_exchange(expected, desired, success, failure, cs) {
-                Ok(weak) => return Ok(weak),
-                Err(e) => {
-                    if e.current == current_snap.as_ptr() {
-                        return Err(e);
-                    } else {
-                        desired = e.desired;
-                    }
-                }
-            }
-        }
-    }
-
     #[inline(always)]
     pub fn fetch_or<'g>(&self, tag: usize, order: Ordering, _: &'g C) -> TaggedCnt<T> {
         // HACK: The size and alignment of `Atomic<TaggedCnt<T>>` will be same with `AtomicUsize`.
@@ -237,17 +197,16 @@ impl<T, C: Cs> Weak<T, C> {
     where
         P: StrongPtr<T, C>,
     {
+        let weak = Self {
+            ptr: ptr.as_ptr(),
+            _marker: PhantomData,
+        };
         unsafe {
             if let Some(cnt) = ptr.as_ptr().as_raw().as_ref() {
-                if cs.increment_weak_cnt(cnt) {
-                    return Self {
-                        ptr: ptr.as_ptr(),
-                        _marker: PhantomData,
-                    };
-                }
+                assert!(cs.increment_weak_cnt(cnt));
             }
         }
-        Self::null()
+        weak
     }
 
     #[inline(always)]

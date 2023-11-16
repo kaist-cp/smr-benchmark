@@ -96,14 +96,14 @@ impl<K, V> GraphNode<CsHP> for Node<K, V> {
     const UNIQUE_OUTDEGREE: bool = false;
 
     #[inline]
-    fn pop_outgoings(&self, _: &mut Vec<Rc<Self, CsHP>>)
+    fn pop_outgoings(&mut self, _: &mut Vec<Rc<Self, CsHP>>)
     where
         Self: Sized,
     {
     }
 
     #[inline]
-    fn pop_unique(&self) -> Rc<Self, CsHP>
+    fn pop_unique(&mut self) -> Rc<Self, CsHP>
     where
         Self: Sized,
     {
@@ -126,14 +126,14 @@ impl<K, V> GraphNode<CsHP> for Update<K, V> {
     const UNIQUE_OUTDEGREE: bool = false;
 
     #[inline]
-    fn pop_outgoings(&self, _: &mut Vec<Rc<Self, CsHP>>)
+    fn pop_outgoings(&mut self, _: &mut Vec<Rc<Self, CsHP>>)
     where
         Self: Sized,
     {
     }
 
     #[inline]
-    fn pop_unique(&self) -> Rc<Self, CsHP>
+    fn pop_unique(&mut self) -> Rc<Self, CsHP>
     where
         Self: Sized,
     {
@@ -371,7 +371,7 @@ where
                 ));
 
                 let op = Update {
-                    p: finder.p.upgrade().downgrade(),
+                    p: finder.p.downgrade(),
                     p_l_dir: finder.p_l_dir,
                     l: finder.l.upgrade(),
                     l_other: finder.l_other.upgrade(),
@@ -442,9 +442,9 @@ where
                 );
             } else {
                 let op = Update {
-                    gp: finder.gp.upgrade().downgrade(),
+                    gp: finder.gp.downgrade(),
                     gp_p_dir: finder.gp_p_dir,
-                    p: finder.p.upgrade().downgrade(),
+                    p: finder.p.downgrade(),
                     p_l_dir: finder.p_l_dir,
                     l: finder.l.upgrade(),
                     l_other: finder.l_other.upgrade(),

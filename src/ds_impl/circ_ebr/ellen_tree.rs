@@ -95,14 +95,14 @@ impl<K, V> GraphNode<CsEBR> for Node<K, V> {
     const UNIQUE_OUTDEGREE: bool = false;
 
     #[inline]
-    fn pop_outgoings(&self, _: &mut Vec<Rc<Self, CsEBR>>)
+    fn pop_outgoings(&mut self, _: &mut Vec<Rc<Self, CsEBR>>)
     where
         Self: Sized,
     {
     }
 
     #[inline]
-    fn pop_unique(&self) -> Rc<Self, CsEBR>
+    fn pop_unique(&mut self) -> Rc<Self, CsEBR>
     where
         Self: Sized,
     {
@@ -122,14 +122,14 @@ impl<K, V> GraphNode<CsEBR> for Update<K, V> {
     const UNIQUE_OUTDEGREE: bool = false;
 
     #[inline]
-    fn pop_outgoings(&self, _: &mut Vec<Rc<Self, CsEBR>>)
+    fn pop_outgoings(&mut self, _: &mut Vec<Rc<Self, CsEBR>>)
     where
         Self: Sized,
     {
     }
 
     #[inline]
-    fn pop_unique(&self) -> Rc<Self, CsEBR>
+    fn pop_unique(&mut self) -> Rc<Self, CsEBR>
     where
         Self: Sized,
     {
@@ -337,7 +337,7 @@ where
                 ));
 
                 let op = Update {
-                    p: cursor.p.upgrade().downgrade(),
+                    p: cursor.p.downgrade(),
                     l: cursor.l.upgrade(),
                     new_internal,
                     gp: Weak::null(),
@@ -392,8 +392,8 @@ where
                 self.help(cursor.pupdate, cs);
             } else {
                 let op = Update {
-                    gp: cursor.gp.upgrade().downgrade(),
-                    p: cursor.p.upgrade().downgrade(),
+                    gp: cursor.gp.downgrade(),
+                    p: cursor.p.downgrade(),
                     l: cursor.l.upgrade(),
                     pupdate: cursor.pupdate.upgrade(),
                     new_internal: Rc::null(),

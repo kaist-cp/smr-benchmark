@@ -68,7 +68,12 @@ pub mod tests {
                     keys.shuffle(&mut rng);
                     let cs = &mut CsEBR::new();
                     for i in keys {
-                        assert_eq!(i.to_string(), *map.get(&i, cs).unwrap().output());
+                        let result = map.get(&i, cs);
+                        if 0 <= i && i < THREADS / 2 {
+                            assert!(result.is_none());
+                        } else {
+                            assert_eq!(i.to_string(), *result.unwrap().output());
+                        }
                         cs.clear();
                     }
                 });

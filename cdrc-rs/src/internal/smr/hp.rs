@@ -51,6 +51,13 @@ impl<T> Acquired<T> for AcquiredHP<T> {
     fn eq(&self, other: &Self) -> bool {
         self.ptr == other.ptr
     }
+
+    #[inline]
+    unsafe fn copy_to(&self, other: &mut Self) {
+        other.ptr = self.ptr;
+        other.hazptr.protect_raw(other.ptr.as_raw());
+        membarrier::light_membarrier();
+    }
 }
 
 pub struct CsHP {

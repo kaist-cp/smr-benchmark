@@ -29,14 +29,14 @@ impl<T> GraphNode<CsHP> for Node<T> {
     const UNIQUE_OUTDEGREE: bool = false;
 
     #[inline]
-    fn pop_outgoings(&self, _: &mut Vec<Rc<Self, CsHP>>)
+    fn pop_outgoings(&mut self, _: &mut Vec<Rc<Self, CsHP>>)
     where
         Self: Sized,
     {
     }
 
     #[inline]
-    fn pop_unique(&self) -> Rc<Self, CsHP>
+    fn pop_unique(&mut self) -> Rc<Self, CsHP>
     where
         Self: Sized,
     {
@@ -93,7 +93,7 @@ impl<T: Sync + Send> DoubleLink<T> {
             ltail.load(&self.tail, cs);
             unsafe { node.deref() }
                 .prev
-                .store(&*ltail, Ordering::Relaxed, cs);
+                .store(ltail.downgrade(), Ordering::Relaxed, cs);
 
             // Try to help the previous enqueue to complete.
             lprev.load_from_weak(unsafe { &ltail.deref().prev }, cs);
