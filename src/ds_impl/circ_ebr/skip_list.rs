@@ -1,18 +1,78 @@
 use std::{fmt::Display, mem::forget, sync::atomic::Ordering};
 
-use circ::{AtomicRc, Cs, CsEBR, GraphNode, Pointer, Rc, Snapshot, StrongPtr};
+use circ::{AtomicRc, CsEBR, GraphNode, Pointer, Rc, Snapshot, StrongPtr};
 
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 
 const MAX_HEIGHT: usize = 32;
 
+#[derive(Clone, PartialEq, Eq)]
+enum Key<K> {
+    Fin(K),
+    Inf,
+}
+
+impl<K> PartialEq<K> for Key<K>
+where
+    K: PartialEq,
+{
+    fn eq(&self, rhs: &K) -> bool {
+        match self {
+            Key::Fin(k) => k == rhs,
+            _ => false,
+        }
+    }
+}
+
+impl<K> PartialOrd<K> for Key<K>
+where
+    K: PartialOrd,
+{
+    fn partial_cmp(&self, rhs: &K) -> Option<std::cmp::Ordering> {
+        match self {
+            Key::Fin(k) => k.partial_cmp(rhs),
+            _ => Some(std::cmp::Ordering::Greater),
+        }
+    }
+}
+
+impl<K> Key<K>
+where
+    K: Ord,
+{
+    fn cmp(&self, rhs: &K) -> std::cmp::Ordering {
+        match self {
+            Key::Fin(k) => k.cmp(rhs),
+            _ => std::cmp::Ordering::Greater,
+        }
+    }
+}
+
 type Tower<K, V> = [AtomicRc<Node<K, V>, CsEBR>; MAX_HEIGHT];
 
 pub struct Node<K, V> {
-    key: K,
+    key: Key<K>,
     value: V,
     next: Tower<K, V>,
     height: usize,
+}
+
+bitflags! {
+    #[derive(Clone, Copy)]
+    struct Tags: usize {
+        const MARKED = 0b01;
+        const INSERTING = 0b10;
+    }
+}
+
+impl Tags {
+    fn marked(self) -> bool {
+        !(self & Tags::MARKED).is_empty()
+    }
+
+    fn inserting(self) -> bool {
+        !(self & Tags::INSERTING).is_empty()
+    }
 }
 
 impl<K, V> GraphNode<CsEBR> for Node<K, V> {
@@ -47,23 +107,29 @@ where
     V: Default,
 {
     pub fn new(key: K, value: V) -> Self {
-        let cs = unsafe { &CsEBR::unprotected() };
         let height = Self::generate_height();
         let next: [AtomicRc<Node<K, V>, CsEBR>; MAX_HEIGHT] = Default::default();
-        for link in next.iter().take(height) {
-            link.store(Rc::null().with_tag(2), Ordering::Relaxed, cs);
-        }
         Self {
-            key,
+            key: Key::Fin(key),
             value,
             next,
             height,
         }
     }
 
-    pub fn head() -> Self {
+    pub fn head(tail: Self) -> Self {
+        let tail = Rc::new_many(tail);
         Self {
-            key: K::default(),
+            key: Key::Fin(K::default()),
+            value: V::default(),
+            next: tail.map(|node| AtomicRc::from(node)),
+            height: MAX_HEIGHT,
+        }
+    }
+
+    pub fn tail() -> Self {
+        Self {
+            key: Key::Inf,
             value: V::default(),
             next: Default::default(),
             height: MAX_HEIGHT,
@@ -83,45 +149,12 @@ where
         height
     }
 
-    pub fn mark_tower(&self, cs: &CsEBR) -> bool {
-        for level in (0..self.height).rev() {
-            loop {
-                let aux = self.next[level].load_ss(cs);
-                if aux.tag() & 1 != 0 {
-                    if level == 0 {
-                        return false;
-                    }
-                    break;
-                }
-                match self.next[level].compare_exchange_tag(
-                    &aux,
-                    1 | aux.tag(),
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                    cs,
-                ) {
-                    Ok(_) => break,
-                    Err(e) => {
-                        // If the level 0 pointer was already marked, somebody else removed the node.
-                        if level == 0 && (e.current.tag() & 1) != 0 {
-                            return false;
-                        }
-                        if e.current.tag() & 1 != 0 {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        true
-    }
-
     pub fn mark_level(&self, level: usize, cs: &CsEBR) -> usize {
         loop {
             let aux = self.next[level].load_ss(cs);
             match self.next[level].compare_exchange_tag(
                 &aux,
-                1 | aux.tag(),
+                Tags::MARKED.bits() | aux.tag(),
                 Ordering::SeqCst,
                 Ordering::SeqCst,
                 cs,
@@ -130,6 +163,22 @@ where
                 Err(_) => continue,
             }
         }
+    }
+
+    fn bottom_tag(&self, cs: &CsEBR) -> Tags {
+        let mut next = self.next[0].load_ss(cs);
+        next.set_tag(0);
+        let next_tag = match self.next[0].compare_exchange_tag(
+            next,
+            0,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+            cs,
+        ) {
+            Ok(_) => 0,
+            Err(e) => e.current.tag(),
+        };
+        Tags::from_bits_truncate(next_tag)
     }
 }
 
@@ -166,8 +215,10 @@ where
     V: Clone + Default,
 {
     pub fn new() -> Self {
+        let tail = Node::tail();
+        let head = Node::head(tail);
         Self {
-            head: AtomicRc::new(Node::head()),
+            head: AtomicRc::new(head),
         }
     }
 
@@ -188,17 +239,18 @@ where
 
             loop {
                 let curr_node = some_or!(curr.as_ref(), break);
+                let next = curr_node.next[level].load_ss(cs);
+                let next_tag = Tags::from_bits_truncate(next.tag());
+                if !next_tag.is_empty() {
+                    curr = next;
+                    continue;
+                }
                 match curr_node.key.cmp(key) {
                     std::cmp::Ordering::Less => {
                         pred = curr;
                         curr = curr_node.next[level].load_ss(cs);
                     }
-                    std::cmp::Ordering::Equal => {
-                        if curr_node.next[level].load(Ordering::Acquire).tag() == 0 {
-                            return Some(curr);
-                        }
-                        return None;
-                    }
+                    std::cmp::Ordering::Equal => return Some(curr),
                     std::cmp::Ordering::Greater => break,
                 }
             }
@@ -227,16 +279,17 @@ where
                 let mut curr = unsafe { pred.deref() }.next[level].load_ss(cs);
                 // If the next node of `pred` is marked, that means `pred` is removed and we have
                 // to restart the search.
-                if curr.tag() & 1 != 0 {
+                if Tags::from_bits_truncate(curr.tag()).marked() {
+                    assert!(!Tags::from_bits_truncate(curr.tag()).inserting());
                     continue 'search;
                 }
 
                 while let Some(curr_ref) = curr.as_ref() {
                     let mut succ = curr_ref.next[level].load_ss(cs);
 
-                    if succ.tag() & 1 != 0 {
-                        succ.set_tag(0);
+                    if Tags::from_bits_truncate(succ.tag()).marked() {
                         if self.help_unlink(&pred, &curr, &succ, level, cs) {
+                            succ.set_tag(Tags::empty().bits());
                             curr = succ;
                             continue;
                         } else {
@@ -251,12 +304,15 @@ where
                     match curr_ref.key.cmp(key) {
                         std::cmp::Ordering::Greater => break,
                         std::cmp::Ordering::Equal => {
-                            if level == 0 {
-                                if let Some((found, max, _)) = cursor.found.take() {
-                                    cursor.found = Some((found, max, level));
+                            if let Some((found, _, max)) = cursor.found.take() {
+                                if found == curr {
+                                    cursor.found = Some((found, level, max));
                                 } else {
-                                    cursor.found = Some((curr, level, level));
+                                    // Same key, but different nodes.
+                                    cursor.found = Some((curr, level, level))
                                 }
+                            } else {
+                                cursor.found = Some((curr, level, level))
                             }
                             break;
                         }
@@ -272,13 +328,14 @@ where
                 cursor.succs[level] = curr;
             }
 
-            if let Some((found, max, min)) = cursor.found.take() {
+            if let Some((found, min, max)) = cursor.found.take() {
                 if min == 0 {
-                    cursor.found = Some((found, max, min));
+                    cursor.found = Some((found, min, max));
                 } else {
                     cursor.found = None;
                 }
             }
+
             return cursor;
         }
     }
@@ -291,9 +348,11 @@ where
         level: usize,
         cs: &CsEBR,
     ) -> bool {
+        let curr_tag = curr.tag();
+        assert!(!Tags::from_bits_truncate(curr_tag).marked());
         match unsafe { pred.deref() }.next[level].compare_exchange(
-            curr.as_ptr().with_tag(0),
-            succ.upgrade(),
+            curr.as_ptr(),
+            succ.upgrade().with_tag(curr_tag),
             Ordering::Release,
             Ordering::Relaxed,
             cs,
@@ -311,18 +370,23 @@ where
 
     pub fn insert(&self, key: K, value: V, cs: &CsEBR) -> bool {
         let mut cursor = self.find(&key, cs);
-        if cursor.found.is_some() {
+        if let Some((found, _, _)) = cursor.found {
+            self.interrupt_if_inserting(found, cs);
             return false;
         }
 
-        let inner = Node::new(key, value);
+        let inner = Node::new(key.clone(), value);
         let height = inner.height;
         let mut new_node_iter = Rc::new_many_iter(inner, height);
         let mut new_node = new_node_iter.next().unwrap();
         let new_node_ref = unsafe { new_node.deref() };
 
         loop {
-            new_node_ref.next[0].store(cursor.succs[0].upgrade(), Ordering::Relaxed, cs);
+            new_node_ref.next[0].swap(
+                cursor.succs[0].upgrade().with_tag(Tags::INSERTING.bits()),
+                Ordering::SeqCst,
+                cs,
+            );
 
             match unsafe { cursor.preds[0].deref() }.next[0].compare_exchange(
                 cursor.succs[0].as_ptr(),
@@ -336,10 +400,11 @@ where
             }
 
             // We failed. Let's search for the key and try again.
-            cursor = self.find(&new_node_ref.key, cs);
-            if cursor.found.is_some() {
+            cursor = self.find(&key, cs);
+            if let Some((found, _, _)) = cursor.found {
                 unsafe { new_node.into_inner_unchecked() };
                 forget(new_node_iter);
+                self.interrupt_if_inserting(found, cs);
                 return false;
             }
         }
@@ -350,11 +415,11 @@ where
             let mut new_node = new_node_iter.next().unwrap();
             loop {
                 let next = new_node_ref.next[level].load_ss(cs);
+                let next_tag = Tags::from_bits_truncate(next.tag());
 
-                // If the current pointer is marked, that means another thread is already
-                // removing the node we've just inserted. In that case, let's just stop
-                // building the tower.
-                if (next.tag() & 1) != 0 {
+                // Other concurrent inserter or remover have interrupted this insertion.
+                // In this case, just stop constructing the upper levels.
+                if next_tag.marked() {
                     new_node_iter.halt(cs);
                     break 'build;
                 }
@@ -365,7 +430,7 @@ where
                 // during traversal. Even worse, it is possible to observe completely different
                 // nodes with the exact same key at different levels.
                 if cursor.succs[level].as_ref().map(|s| &s.key) == Some(&new_node_ref.key) {
-                    cursor = self.find(&new_node_ref.key, cs);
+                    cursor = self.find(&key, cs);
                     continue;
                 }
 
@@ -398,90 +463,99 @@ where
                     Err(e) => {
                         // Installation failed.
                         new_node = e.desired;
-                        cursor = self.find(&new_node_ref.key, cs);
+                        cursor = self.find(&key, cs);
                     }
                 }
             }
         }
 
-        // If any pointer in the tower is marked, that means our node is in the process of
-        // removal or already removed. It is possible that another thread (either partially or
-        // completely) removed the new node while we were building the tower, and just after
-        // that we installed the new node at one of the higher levels. In order to undo that
-        // installation, we must repeat the search, which will unlink the new node at that
-        // level.
-        if new_node_ref.next[height - 1].load(Ordering::SeqCst).tag() == 1 {
-            self.find(&new_node_ref.key, cs);
+        // Finally, let's remove the `INSERTING` tag at the bottom.
+        let mut next = new_node_ref.next[0].load_ss(cs);
+        while Tags::from_bits_truncate(next.tag()).inserting() {
+            if new_node_ref.next[0]
+                .compare_exchange_tag(
+                    next,
+                    next.tag() & !Tags::INSERTING.bits(),
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                    cs,
+                )
+                .is_err()
+            {
+                next = new_node_ref.next[0].load_ss(cs);
+            }
         }
 
         true
     }
 
+    fn interrupt_if_inserting(&self, node: Snapshot<Node<K, V>, CsEBR>, cs: &CsEBR) {
+        let node_ref = unsafe { node.deref() };
+        if !node_ref.bottom_tag(cs).inserting() {
+            return;
+        }
+
+        for level in (1..node_ref.height).rev() {
+            if node_ref.next[level]
+                .compare_exchange_tag(
+                    Snapshot::new(),
+                    Tags::MARKED.bits(),
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                    cs,
+                )
+                .is_err()
+            {
+                break;
+            }
+        }
+
+        while Tags::from_bits_truncate(node_ref.next[0].load(Ordering::Acquire).tag()).inserting() {
+            core::hint::spin_loop();
+        }
+    }
+
     pub fn remove(&self, key: &K, cs: &CsEBR) -> Option<Snapshot<Node<K, V>, CsEBR>> {
         'remove: loop {
             let cursor = self.find(key, cs);
-            let (found, max, _) = cursor.found?.clone();
+            let (found, _, max) = cursor.found?.clone();
             let node = unsafe { found.deref() };
+            if node.bottom_tag(cs).inserting() {
+                self.interrupt_if_inserting(found, cs);
+                return None;
+            }
 
-            for level in (max + 1..node.height).rev() {
+            for level in (1..node.height).rev() {
                 node.mark_level(level, cs);
-            }
 
-            for level in (0..=max).rev() {
-                // Mark the current level.
-                loop {
+                if level <= max {
                     let next = node.next[level].load_ss(cs);
-                    if next.tag() & 1 != 0 {
-                        if level == 0 {
-                            // The bottom level is already marked, so our removal is not committed
-                            // and other thread has removed the found node.
-                            continue 'remove;
-                        }
-                        // If the current level is not the bottom, let's break this loop and
-                        // try helping the unlink.
-                        break;
+                    // Try linking the predecessor and successor at this level.
+                    if unsafe { cursor.preds[level].deref() }.next[level]
+                        .compare_exchange(
+                            found.as_ptr().with_tag(Tags::empty().bits()),
+                            next.upgrade().with_tag(0),
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                            cs,
+                        )
+                        .is_err()
+                    {
+                        continue 'remove;
                     }
-                    match node.next[level].compare_exchange_tag(
-                        &next,
-                        1 | next.tag(),
-                        Ordering::SeqCst,
-                        Ordering::SeqCst,
-                        cs,
-                    ) {
-                        Ok(_) => break,
-                        Err(e) => {
-                            if level == 0 && (e.current.tag() & 1) != 0 {
-                                // The bottom level is already marked, so our removal is not
-                                // committed and other thread has removed the found node.
-                                continue 'remove;
-                            }
-                            if e.current.tag() & 1 != 0 {
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                let mut next = node.next[level].load_ss(cs);
-                if next.tag() & 2 != 0 {
-                    // This level is not yet installed by an inserting thread (and it is null).
-                    // In this case, just skip unlinking and go to the next level.
-                    continue;
-                }
-                // Try linking the predecessor and successor at this level.
-                next.set_tag(0);
-                if !self.help_unlink(&cursor.preds[level], &found, &next, level, cs) {
-                    if level == 0 {
-                        // If we successfully marked the bottom level but failed to unlink it,
-                        // other threads must have helped this removal,
-                        // so let's return the result delightfully.
-                        break;
-                    }
-                    // Otherwise, we need to restart the search and help unlinking.
-                    continue 'remove;
                 }
             }
 
+            // Finally, mark the bottom level.
+            node.mark_level(0, cs);
+            let next = node.next[0].load_ss(cs);
+            let _ = unsafe { cursor.preds[0].deref() }.next[0].compare_exchange(
+                found.as_ptr().with_tag(Tags::empty().bits()),
+                next.upgrade().with_tag(0),
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+                cs,
+            );
             return Some(found);
         }
     }
