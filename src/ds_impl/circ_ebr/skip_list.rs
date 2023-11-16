@@ -462,6 +462,26 @@ where
                     }
                     Err(e) => {
                         // Installation failed.
+                        if new_node_ref.next[level]
+                            .compare_exchange(
+                                cursor.succs[level].as_ptr(),
+                                Rc::null(),
+                                Ordering::SeqCst,
+                                Ordering::SeqCst,
+                                cs,
+                            )
+                            .is_err()
+                        {
+                            assert!(new_node_ref.next[level]
+                                .compare_exchange(
+                                    cursor.succs[level].as_ptr().with_tag(Tags::MARKED.bits()),
+                                    Rc::null().with_tag(Tags::MARKED.bits()),
+                                    Ordering::SeqCst,
+                                    Ordering::SeqCst,
+                                    cs,
+                                )
+                                .is_ok());
+                        }
                         new_node = e.desired;
                         cursor = self.find(&key, cs);
                     }
