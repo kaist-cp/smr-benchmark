@@ -14,3 +14,10 @@ setjmp = { git = "https://github.com/powergee/setjmp.rs.git" }
 arrayvec = "0.7.3"
 rustc-hash = "1.1.0"
 bitflags = "2.3.3"
+
+[dev-dependencies]
+rand = "0.8"
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true

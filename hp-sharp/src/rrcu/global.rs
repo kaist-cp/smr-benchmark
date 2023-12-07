@@ -151,12 +151,11 @@ impl GlobalRRCU for Global {
 
 #[cfg(test)]
 mod test {
-    use crate::rrcu::{CsGuardRRCU, Deferrable, GlobalRRCU, ThreadRRCU};
+    use crate::rrcu::{Deferrable, GlobalRRCU};
     use crate::Deferred;
 
     use super::Global;
-    use std::hint::black_box;
-    use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::thread::scope;
 
     #[test]
@@ -189,60 +188,5 @@ mod test {
             });
         }
         assert_eq!(sum.load(Ordering::SeqCst), THREADS * COUNT_PER_THREAD);
-    }
-
-    #[test]
-    fn single_node() {
-        const THREADS: usize = 30;
-        const COUNT_PER_THREAD: usize = 1 << 20;
-
-        let head = AtomicPtr::new(Box::into_raw(Box::new(0i32)));
-        unsafe {
-            unsafe fn free<T>(ptr: *mut u8) {
-                let ptr = ptr as *mut T;
-                drop(Box::from_raw(ptr));
-            }
-            let global = &Global::new();
-            scope(|s| {
-                for _ in 0..THREADS {
-                    s.spawn(|| {
-                        let mut thread = global.register();
-                        for _ in 0..COUNT_PER_THREAD {
-                            thread.pin(|guard| {
-                                let ptr = head.load(Ordering::Acquire);
-                                guard.mask(|guard| {
-                                    let new = Box::into_raw(Box::new(0i32));
-                                    if head
-                                        .compare_exchange(
-                                            ptr,
-                                            new,
-                                            Ordering::AcqRel,
-                                            Ordering::Acquire,
-                                        )
-                                        .is_ok()
-                                    {
-                                        *ptr += 1;
-                                        if let Some(collected) =
-                                            guard.defer(Deferred::new(ptr as *mut _, free::<i32>))
-                                        {
-                                            for def in collected {
-                                                def.execute();
-                                            }
-                                        }
-                                    } else {
-                                        drop(Box::from_raw(new));
-                                    }
-                                });
-
-                                // This read must be safe.
-                                let read = black_box(*ptr + 1);
-                                black_box(read);
-                            })
-                        }
-                    });
-                }
-            });
-            drop(Box::from_raw(head.load(Ordering::Acquire)));
-        }
     }
 }

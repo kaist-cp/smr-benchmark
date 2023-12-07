@@ -1,7 +1,7 @@
 use std::sync::atomic::compiler_fence;
 
 use atomic::{fence, Ordering};
-use nix::sys::{signal::pthread_sigmask, signal::SigmaskHow, signalfd::SigSet};
+use nix::sys::signal::{pthread_sigmask, SigSet, SigmaskHow};
 
 use super::rollback;
 use crate::rrcu::GlobalRRCU;
