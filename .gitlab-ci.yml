@@ -45,8 +45,13 @@ check:
     - cargo clippy -p hp-sharp -- -D warnings
     - cargo audit
 
-    - cargo test -p hp-sharp -- --nocapture
-    - cargo test --release -p hp-sharp -- --nocapture
+    # Note: Using `-p` flag to individually test `hp-sharp` doesn't work,
+    # because `hp-sharp` requires dev-dependencies.
+    - cd hp-sharp
+    - cargo test -- --nocapture
+    - cargo test --release -- --nocapture
+    - cd ..
+
     - cargo test -- --nocapture --test-threads 1
     - cargo test --release -- --nocapture --test-threads 1
 
