@@ -1,18 +1,14 @@
 use std::{
     marker::PhantomData,
-    mem::{align_of, forget, swap, transmute, zeroed, MaybeUninit},
+    mem::{align_of, forget, transmute, zeroed, MaybeUninit},
     ops::{Deref, DerefMut},
     sync::atomic::{compiler_fence, AtomicUsize},
 };
 
 use atomic::Ordering;
 
-use crate::{
-    rrcu::{CsGuardRRCU, RaGuardRRCU, ThreadRRCU},
-    CsGuard, RaGuard, Thread,
-};
-
-use super::{hazard::HazardPointer, Guard, Invalidate, Retire};
+use crate::handle::{CsGuard, Handle, Invalidate, RaGuard, RollbackProof, Thread};
+use crate::hazard::HazardPointer;
 
 /// A result of unsuccessful `compare_exchange`.
 pub struct CompareExchangeError<'g, T: ?Sized, P: Pointer> {
@@ -52,20 +48,20 @@ impl<T> Atomic<T> {
 
     /// Stores a [`Shared`] pointer into the atomic pointer, returning the previous [`Shared`].
     #[inline]
-    pub fn swap<G: Retire>(&self, ptr: Shared<T>, order: Ordering, _: &G) -> Shared<T> {
+    pub fn swap<G: RollbackProof>(&self, ptr: Shared<T>, order: Ordering, _: &G) -> Shared<T> {
         let prev = self.link.swap(ptr.inner, order);
         Shared::new(prev)
     }
 
     /// Stores a [`Shared`] pointer into the atomic pointer.
     #[inline]
-    pub fn store<G: Retire>(&self, ptr: Shared<T>, order: Ordering, _: &G) {
+    pub fn store<G: RollbackProof>(&self, ptr: Shared<T>, order: Ordering, _: &G) {
         self.link.store(ptr.inner, order);
     }
 
     /// Loads a [`Shared`] from the atomic pointer.
     #[inline]
-    pub fn load<'r, G: Guard>(&self, order: Ordering, _: &G) -> Shared<'r, T> {
+    pub fn load<'r, G: Handle>(&self, order: Ordering, _: &G) -> Shared<'r, T> {
         let ptr = self.link.load(order);
         Shared::new(ptr)
     }
@@ -79,7 +75,7 @@ impl<T> Atomic<T> {
     /// [`CompareExchangeError`] which contains an actual value from the atomic pointer and
     /// the ownership of `new` pointer which was given as a parameter is returned.
     #[inline]
-    pub fn compare_exchange<'g, P: Pointer, G: Retire>(
+    pub fn compare_exchange<'g, P: Pointer, G: RollbackProof>(
         &self,
         current: Shared<'_, T>,
         new: P,
@@ -104,7 +100,12 @@ impl<T> Atomic<T> {
     /// Performs a bitwise "or" operation on the current tag and the argument `tag`, and sets the
     /// new tag to the result. Returns the previous pointer.
     #[inline]
-    pub fn fetch_or<'r, G: Retire>(&self, tag: usize, order: Ordering, _: &'r G) -> Shared<'r, T> {
+    pub fn fetch_or<'r, G: RollbackProof>(
+        &self,
+        tag: usize,
+        order: Ordering,
+        _: &'r G,
+    ) -> Shared<'r, T> {
         Shared::new(self.link.fetch_or(decompose_data::<T>(tag).1, order))
     }
 
@@ -361,10 +362,14 @@ unsafe impl<T> Sync for Shield<T> {}
 impl<T> Shield<T> {
     #[inline]
     pub fn null(thread: &mut Thread) -> Self {
-        Self {
-            hazptr: HazardPointer::new(thread),
-            inner: 0,
-            _marker: PhantomData,
+        if let Some(local) = thread.as_local_mut() {
+            Self {
+                hazptr: HazardPointer::new(local),
+                inner: 0,
+                _marker: PhantomData,
+            }
+        } else {
+            panic!("Cannot create a `Shield` from an unprotected `Thread`.")
         }
     }
 
@@ -413,13 +418,6 @@ impl<T> Shield<T> {
         self.inner = data_with_tag::<T>(self.inner, tag);
     }
 
-    /// Returns the same pointer, but wrapped with `tag`. `tag` is truncated to be fit into the
-    /// unused bits of the pointer to `T`.
-    #[inline]
-    pub fn with_tag<'s>(&'s self, tag: usize) -> TaggedShield<'s, T> {
-        TaggedShield { inner: self, tag }
-    }
-
     /// Releases the inner hazard pointer.
     #[inline]
     pub fn release(&mut self) {
@@ -444,27 +442,6 @@ impl<T> Shield<T> {
     pub unsafe fn store(&mut self, ptr: Shared<T>) {
         self.inner = ptr.into_usize();
     }
-}
-
-/// A reference of a [`Shield`] with a overwriting tag value.
-///
-/// # Motivation
-///
-/// `with_tag` for [`Rc`] and [`Shared`] can be implemented by taking the ownership of the original
-/// pointer and returning the same one but tagged with the given value. However, for [`Shield`],
-/// taking ownership is not a good option because [`Shield`]s usually live as fields of [`Defender`]
-/// and we cannot take partial ownership in most cases.
-///
-/// Before proposing [`TaggedShield`], we just provided `set_tag` only for a [`Shield`], which changes
-/// a tag value only. Unfortunately, it was not easy to use because there were many circumstances
-/// where we just want to make a temporary tagged operand for atomic operators.
-/// (especially, [`AtomicRc`].)
-///
-/// For this reason, a method to easily produce a tagged [`Shield`] pointer for a temporary use is
-/// needed.
-pub struct TaggedShield<'s, T> {
-    pub(crate) inner: &'s Shield<T>,
-    pub(crate) tag: usize,
 }
 
 /// A trait for either `Owned` or `Shared` pointers.
@@ -543,9 +520,9 @@ pub trait Protector {
     /// writes on a global variable and system-calls(File I/O and etc.) are dangerous, as they
     /// may cause an unexpected inconsistency on the whole system after a crash.
     #[inline]
-    unsafe fn traverse<F>(&mut self, thread: &mut Thread, mut body: F)
+    unsafe fn traverse<F>(&mut self, thread: &mut Thread, mut body: F) -> bool
     where
-        F: for<'r> FnMut(&'r mut CsGuard) -> Self::Target<'r>,
+        F: for<'r> FnMut(&'r mut CsGuard) -> Option<Self::Target<'r>>,
     {
         thread.pin(
             #[inline]
@@ -553,11 +530,14 @@ pub trait Protector {
                 // Execute the body of this read phase.
                 let result = body(guard);
                 // Store pointers in hazard slots. (A fence is not necessary.)
-                self.protect_unchecked(&result);
+                if let Some(result) = result {
+                    self.protect_unchecked(&result);
+                }
 
                 // If we successfully protected pointers without an intermediate crash,
                 // it has the same meaning with a well-known HP validation:
                 // we can safely assume that the pointers are not reclaimed yet.
+                result.is_some()
             },
         )
     }
@@ -568,18 +548,23 @@ pub trait Protector {
     /// The whole critical section restarts after this `mask` section ends, if a reclaimer sent
     /// a signal, or we advanced our epoch to reclaim a full local garbage bag.
     #[inline]
-    unsafe fn traverse_mask<'r, F>(&mut self, cs: &CsGuard, to_deref: Self::Target<'r>, body: F)
+    unsafe fn traverse_mask<'r, F, R>(
+        &mut self,
+        cs: &CsGuard,
+        to_deref: Self::Target<'r>,
+        body: F,
+    ) -> R
     where
-        F: FnOnce(&Self, &mut RaGuard) -> WriteResult,
+        F: FnOnce(&Self, &mut RaGuard) -> R,
+        R: Copy,
     {
-        let backup_idx = cs.backup_idx.clone();
         cs.mask(|guard| {
             let result = {
                 // Store pointers in hazard slots and issue a fence.
                 self.protect_unchecked(&to_deref);
                 compiler_fence(Ordering::SeqCst);
 
-                // Restart if the thread is crashed while protecting.
+                // Restart if the thread is signaled while protecting.
                 if guard.must_rollback() {
                     guard.repin();
                 }
@@ -588,117 +573,8 @@ pub trait Protector {
             };
 
             compiler_fence(Ordering::SeqCst);
-            if result == WriteResult::RepinEpoch {
-                // Invalidate any saved checkpoints.
-                if let Some(backup_idx) = backup_idx {
-                    unsafe { backup_idx.as_ref() }.store(2, Ordering::Relaxed);
-                }
-                guard.repin();
-            }
-        });
-    }
-
-    /// Starts a crashable critical section where we cannot perform operations with side-effects,
-    /// such as system calls, non-atomic write on a global variable, etc.
-    ///
-    /// This is similar to `traverse`, as it manages CRCU critical section. However, this
-    /// `traverse_loop` prevents a starvation in crash-intensive workload by saving intermediate
-    /// results on a backup [`Protector`].
-    ///
-    /// After finishing the section, it protects the final `Target` pointers, so that they can be
-    /// dereferenced outside of the phase.
-    ///
-    /// # Safety
-    ///
-    /// In a section body, only *rollback-safe* operations are allowed. For example, non-atomic
-    /// writes on a global variable and system-calls(File I/O and etc.) are dangerous, as they
-    /// may cause an unexpected inconsistency on the whole system after a crash.
-    #[inline]
-    unsafe fn traverse_loop<F1, F2>(
-        &mut self,
-        backup: &mut Self,
-        thread: &mut Thread,
-        init_result: F1,
-        step_forward: F2,
-    ) where
-        F1: for<'r> Fn(&'r mut CsGuard) -> Self::Target<'r>,
-        F2: for<'r> Fn(&mut Self::Target<'r>, &'r mut CsGuard) -> TraverseStatus,
-        Self: Sized,
-    {
-        const ITER_BETWEEN_CHECKPOINTS: usize = 512;
-
-        // `backup_idx` indicates where we have stored the latest backup to `backup_def`.
-        // 0 = `defs[0]`, 1 = `defs[1]`, otherwise = no backup
-        // We use an atomic type instead of regular one, to perform writes atomically,
-        // so that stored data is consistent even if a crash occured during a write.
-        let backup_idx = AtomicUsize::new(2);
-        {
-            let defs = [&mut *self, backup];
-
-            thread.pin(|guard| {
-                // Load the saved intermediate result, if one exists.
-                guard.set_backup(&backup_idx);
-
-                // Initialize the first `result`. It is either a checkpointed result or an very
-                // first result(probably pointing a root of a data structure) returned by
-                // `init_result`.
-                let mut result = defs
-                    .get(backup_idx.load(Ordering::Relaxed))
-                    .and_then(|def| transmute(def.as_target(&guard)))
-                    .unwrap_or_else(|| {
-                        // As `F1` takes a mutable reference to `guard`, `init_result` returns
-                        // `Read<'r>` and `guard`'s lifetime becomes an another arbitrary value.
-                        // They must be synchronized to use them on `step_forward`.
-                        transmute(init_result(guard))
-                    });
-
-                for iter in 0.. {
-                    // Execute a single step.
-                    //
-                    // `transmute` synchronizes the lifetime parameters of `result` and `guard`.
-                    // After a single `step_forward`, the lifetimes become different to each other,
-                    // for example, `'r` and `'g` respectively. On the next iteration, they are
-                    // synchronized again with the same value.
-                    let step_result = step_forward(transmute(&mut result), guard);
-
-                    let finished = step_result == TraverseStatus::Finished;
-                    // TODO(@jeonghyeon): Apply an adaptive checkpointing.
-                    let should_checkpoint = step_result == TraverseStatus::Continue
-                        && iter % ITER_BETWEEN_CHECKPOINTS == 0;
-
-                    if finished || should_checkpoint {
-                        // Select an available protector to protect a backup.
-                        let (curr_idx, next_idx) = {
-                            let backup_idx = backup_idx.load(Ordering::Relaxed);
-                            (backup_idx % 2, (backup_idx + 1) % 2)
-                        };
-
-                        // Store pointers in hazard slots and issue a fence.
-                        defs[next_idx].protect_unchecked(&result);
-                        compiler_fence(Ordering::SeqCst);
-
-                        // Success! We are not ejected so the protection is valid!
-                        // Finalize backup process by storing a new backup index to `backup_idx`
-                        backup_idx.store(next_idx, Ordering::Relaxed);
-                        compiler_fence(Ordering::SeqCst);
-                        defs[curr_idx].release();
-                    }
-
-                    // The task is finished! Break the loop and return the result.
-                    if finished {
-                        break;
-                    }
-                }
-            });
-        }
-
-        // We want that `self` contains the final result.
-        // If the latest backup is `backup`, than swap `self` and `backup`.
-        let backup_idx = backup_idx.load(Ordering::Relaxed);
-        assert!(backup_idx < 2);
-        if backup_idx == 1 {
-            swap(self, backup);
-        }
+            result
+        })
     }
 }
 
@@ -810,24 +686,6 @@ impl_protector_for_array! {
     25 26 27 28 29 30 31 32
 }
 
-/// A result of a single step of an iterative critical section.
-#[derive(PartialEq, Eq)]
-pub enum TraverseStatus {
-    /// The entire task is finished.
-    Finished,
-    /// We need to take one or more steps.
-    Continue,
-}
-
-/// A result of a non-crashable section.
-#[derive(PartialEq, Eq)]
-pub enum WriteResult {
-    /// The section is normally finished. Resume the task.
-    Finished,
-    /// Give up the current epoch and restart the whole critical section.
-    RepinEpoch,
-}
-
 /// Panics if the pointer is not properly unaligned.
 #[inline]
 pub fn ensure_aligned<T>(raw: *const T) {
@@ -860,150 +718,4 @@ pub fn decompose_data<T>(data: usize) -> (*mut T, usize) {
 #[inline]
 pub fn highest_tag<T>() -> usize {
     1 << (usize::BITS - low_bits::<T>().leading_zeros() - 1)
-}
-
-#[cfg(test)]
-mod test {
-    use std::thread::scope;
-
-    use atomic::Ordering;
-
-    use crate::{
-        hpsharp::{GlobalHPSharp, Invalidate, Owned, Retire},
-        CsGuard, Global,
-    };
-
-    use super::{Atomic, Protector, Shared, Shield};
-
-    struct Node {
-        next: Atomic<Node>,
-    }
-
-    impl Invalidate for Node {
-        fn invalidate(&self) {
-            // We do not use traverse_loop here.
-        }
-
-        fn is_invalidated(&self, _: &CsGuard) -> bool {
-            // We do not use traverse_loop here.
-            false
-        }
-    }
-
-    struct Cursor {
-        prev: Shield<Node>,
-        curr: Shield<Node>,
-    }
-
-    impl Protector for Cursor {
-        type Target<'r> = SharedCursor<'r>;
-
-        fn empty(thread: &mut crate::Thread) -> Self {
-            Self {
-                prev: Shield::null(thread),
-                curr: Shield::null(thread),
-            }
-        }
-
-        fn protect_unchecked(&mut self, read: &Self::Target<'_>) {
-            self.prev.protect_unchecked(&read.prev);
-            self.curr.protect_unchecked(&read.curr);
-        }
-
-        fn as_target<'r>(&self, guard: &'r CsGuard) -> Option<Self::Target<'r>> {
-            Some(SharedCursor {
-                prev: self.prev.as_target(guard)?,
-                curr: self.curr.as_target(guard)?,
-            })
-        }
-
-        fn release(&mut self) {
-            self.prev.release();
-            self.curr.release();
-        }
-    }
-
-    #[derive(Clone, Copy)]
-    struct SharedCursor<'r> {
-        prev: Shared<'r, Node>,
-        curr: Shared<'r, Node>,
-    }
-
-    #[test]
-    fn double_node() {
-        const THREADS: usize = 30;
-        const COUNT_PER_THREAD: usize = 1 << 20;
-
-        let head = Atomic::new(Node {
-            next: Atomic::new(Node {
-                next: Atomic::null(),
-            }),
-        });
-
-        unsafe {
-            let global = Global::new();
-            scope(|s| {
-                for _ in 0..THREADS {
-                    s.spawn(|| {
-                        let mut thread = global.register();
-                        let mut cursor = Cursor::empty(&mut thread);
-                        for _ in 0..COUNT_PER_THREAD {
-                            loop {
-                                cursor.traverse(&mut thread, |guard| {
-                                    let mut cursor = SharedCursor {
-                                        prev: Shared::null(),
-                                        curr: Shared::null(),
-                                    };
-
-                                    cursor.prev = head.load(Ordering::Acquire, guard);
-                                    cursor.curr = cursor
-                                        .prev
-                                        .as_ref(guard)
-                                        .unwrap()
-                                        .next
-                                        .load(Ordering::Acquire, guard);
-
-                                    cursor
-                                });
-
-                                let new = Owned::new(Node {
-                                    next: Atomic::new(Node {
-                                        next: Atomic::null(),
-                                    }),
-                                });
-
-                                match head.compare_exchange(
-                                    cursor.prev.shared(),
-                                    new,
-                                    Ordering::AcqRel,
-                                    Ordering::Acquire,
-                                    &thread,
-                                ) {
-                                    Ok(_) => {
-                                        thread.retire(cursor.prev.shared());
-                                        thread.retire(cursor.curr.shared());
-                                        break;
-                                    }
-                                    Err(e) => {
-                                        let new = e.new;
-                                        drop(
-                                            new.next
-                                                .load(Ordering::Relaxed, &CsGuard::unprotected())
-                                                .into_owned(),
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    });
-                }
-            });
-            let head = head.into_owned();
-            drop(
-                head.next
-                    .load(Ordering::Relaxed, &CsGuard::unprotected())
-                    .into_owned(),
-            );
-        }
-    }
 }

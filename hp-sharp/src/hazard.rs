@@ -2,29 +2,26 @@ use std::{ptr::null_mut, sync::atomic::AtomicPtr};
 
 use atomic::{fence, Ordering};
 
-use crate::Thread;
+use crate::internal::Local;
 
 /// A low-level owner of hazard pointer slot.
 ///
 /// A `Shield` owns a `HazardPointer` as its field.
 pub(crate) struct HazardPointer {
-    thread: *const Thread,
+    local: *const Local,
     idx: usize,
 }
 
 impl HazardPointer {
     /// Creates a hazard pointer in the given thread.
-    pub fn new(thread: &mut Thread) -> Self {
-        let idx = thread.acquire();
-        Self { thread, idx }
+    pub(crate) fn new(local: &mut Local) -> Self {
+        let idx = local.acquire_slot();
+        Self { local, idx }
     }
 
     #[inline]
     fn slot(&self) -> &AtomicPtr<u8> {
-        unsafe {
-            let array = &*(*(*self.thread).local).hazptrs.load(Ordering::Relaxed);
-            array.get_unchecked(self.idx)
-        }
+        unsafe { (*self.local).slot_unchecked(self.idx) }
     }
 
     /// Protect the given address.
@@ -80,6 +77,6 @@ impl HazardPointer {
 impl Drop for HazardPointer {
     fn drop(&mut self) {
         self.reset_protection();
-        unsafe { (*self.thread.cast_mut()).release(self.idx) };
+        unsafe { (*self.local.cast_mut()).release_slot(self.idx) };
     }
 }
