@@ -1,5 +1,4 @@
 use std::mem::ManuallyDrop;
-use std::ptr::{null, null_mut};
 use std::sync::atomic::{compiler_fence, fence, Ordering};
 
 use crate::deferred::Deferred;
@@ -29,11 +28,6 @@ pub struct Thread {
 }
 
 impl Thread {
-    /// Creates an unprotected `Thread`.
-    pub unsafe fn unprotected() -> Self {
-        Self { local: null_mut() }
-    }
-
     pub(crate) fn from_raw(local: *mut Local) -> Self {
         Self { local }
     }
@@ -59,7 +53,7 @@ impl Thread {
     /// writes on a global variable and system-calls(File I/O and etc.) are dangerous, as they
     /// may cause an unexpected inconsistency on the whole system after a crash.
     #[inline]
-    pub unsafe fn pin<F, R>(&mut self, body: F) -> R
+    pub unsafe fn critical_section<F, R>(&mut self, body: F) -> R
     where
         F: FnMut(&mut CsGuard) -> R,
         R: Copy,
@@ -161,14 +155,6 @@ impl CsGuard {
         Self { local, rb }
     }
 
-    /// Creates an unprotected `CsGuard`.
-    pub unsafe fn unprotected() -> Self {
-        Self {
-            local: null_mut(),
-            rb: Rollbacker,
-        }
-    }
-
     /// Starts a non-crashable section where we can conduct operations with global side-effects.
     ///
     /// In this section, we do not restart immediately when we receive signals from reclaimers.
@@ -186,12 +172,9 @@ impl CsGuard {
         F: FnOnce(&mut RaGuard) -> R,
         R: Copy,
     {
-        compiler_fence(Ordering::SeqCst);
-        let result = self.rb.atomic(|rb| {
-            let mut guard = RaGuard {
-                local: self.local,
-                rb,
-            };
+        fence(Ordering::SeqCst);
+        let result = self.rb.atomic(|_| {
+            let mut guard = RaGuard { local: self.local };
             let result = body(&mut guard);
             result
         });
@@ -208,30 +191,6 @@ impl Handle for CsGuard {}
 /// deletion for a data structure.
 pub struct RaGuard {
     local: *mut Local,
-    rb: *const Rollbacker,
-}
-
-impl RaGuard {
-    /// Creates an unprotected `RaGuard`.
-    pub unsafe fn unprotected() -> Self {
-        Self {
-            local: null_mut(),
-            rb: null(),
-        }
-    }
-
-    /// Repins its critical section if we are crashed(in other words, ejected).
-    ///
-    /// Developers must ensure that there is no possibilities of memory leaks across this.
-    #[inline]
-    pub(crate) fn repin(&self) -> ! {
-        unsafe { &*self.rb }.restart()
-    }
-
-    #[inline]
-    pub(crate) fn must_rollback(&self) -> bool {
-        unsafe { &*self.rb }.must_rollback()
-    }
 }
 
 impl Handle for RaGuard {}
@@ -241,3 +200,24 @@ impl RollbackProof for RaGuard {
         ManuallyDrop::new(Thread { local: self.local }).retire(ptr);
     }
 }
+
+/// A dummy guard that do not provide an epoch protection.
+pub struct Unprotected;
+
+impl Unprotected {
+    /// Creates a dummy guard that do not provide an epoch protection.
+    /// With this guard, one can perform any operations on atomic pointers.
+    /// Of course, it is `unsafe`. However, it is useful when it is guaranteed that
+    /// an exclusive ownership of a portion of data is acquired (e.g. `drop` of a
+    /// concurrent data structure).
+    ///
+    /// # Safety
+    ///
+    /// Use this dummy guard only when you have an exclusive ownership of a data
+    /// you are operating on.
+    pub unsafe fn new() -> Self {
+        Self
+    }
+}
+
+impl Handle for Unprotected {}

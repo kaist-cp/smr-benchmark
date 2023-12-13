@@ -31,7 +31,8 @@ mod test {
 
     use super::THREAD;
     use crate::handle::{CsGuard, Invalidate, RollbackProof, Thread};
-    use crate::pointers::{Atomic, Owned, Protector, Shared, Shield};
+    use crate::pointers::{Atomic, Owned, Shield};
+    use crate::Unprotected;
 
     struct Node {
         next: Atomic<Node>,
@@ -49,38 +50,13 @@ mod test {
         curr: Shield<Node>,
     }
 
-    impl Protector for Cursor {
-        type Target<'r> = SharedCursor<'r>;
-
-        fn empty(thread: &mut crate::Thread) -> Self {
+    impl Cursor {
+        fn default(thread: &mut crate::Thread) -> Self {
             Self {
                 prev: Shield::null(thread),
                 curr: Shield::null(thread),
             }
         }
-
-        fn protect_unchecked(&mut self, read: &Self::Target<'_>) {
-            self.prev.protect_unchecked(&read.prev);
-            self.curr.protect_unchecked(&read.curr);
-        }
-
-        fn as_target<'r>(&self, guard: &'r CsGuard) -> Option<Self::Target<'r>> {
-            Some(SharedCursor {
-                prev: self.prev.as_target(guard)?,
-                curr: self.curr.as_target(guard)?,
-            })
-        }
-
-        fn release(&mut self) {
-            self.prev.release();
-            self.curr.release();
-        }
-    }
-
-    #[derive(Clone, Copy)]
-    struct SharedCursor<'r> {
-        prev: Shared<'r, Node>,
-        curr: Shared<'r, Node>,
     }
 
     const THREADS: usize = 30;
@@ -102,32 +78,22 @@ mod test {
             let head = head.into_owned();
             drop(
                 head.next
-                    .load(Ordering::Relaxed, &CsGuard::unprotected())
+                    .load(Ordering::Relaxed, &Unprotected::new())
                     .into_owned(),
             );
         }
     }
 
     fn double_node_work(thread: &mut Thread, head: &Atomic<Node>) {
-        let mut cursor = Cursor::empty(thread);
+        let mut cursor = Cursor::default(thread);
         for _ in 0..COUNT_PER_THREAD {
             loop {
                 unsafe {
-                    cursor.traverse(thread, |guard| {
-                        let mut cursor = SharedCursor {
-                            prev: Shared::null(),
-                            curr: Shared::null(),
-                        };
-
-                        cursor.prev = head.load(Ordering::Acquire, guard);
-                        cursor.curr = cursor
-                            .prev
-                            .as_ref(guard)
-                            .unwrap()
-                            .next
-                            .load(Ordering::Acquire, guard);
-
-                        Some(cursor)
+                    thread.critical_section(|guard| {
+                        let prev = head.load(Ordering::Acquire, guard);
+                        let curr = prev.as_ref().unwrap().next.load(Ordering::Acquire, guard);
+                        cursor.prev.protect(prev);
+                        cursor.curr.protect(curr);
                     });
                 }
 
@@ -153,7 +119,7 @@ mod test {
                         let new = e.new;
                         drop(
                             new.next
-                                .load(Ordering::Relaxed, &CsGuard::unprotected())
+                                .load(Ordering::Relaxed, &Unprotected::new())
                                 .into_owned(),
                         );
                     },

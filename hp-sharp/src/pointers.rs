@@ -1,13 +1,13 @@
 use std::{
     marker::PhantomData,
-    mem::{align_of, forget, transmute, zeroed, MaybeUninit},
+    mem::{align_of, forget},
     ops::{Deref, DerefMut},
-    sync::atomic::{compiler_fence, AtomicUsize},
+    sync::atomic::AtomicUsize,
 };
 
 use atomic::Ordering;
 
-use crate::handle::{CsGuard, Handle, Invalidate, RaGuard, RollbackProof, Thread};
+use crate::handle::{Handle, RollbackProof, Thread};
 use crate::hazard::HazardPointer;
 
 /// A result of unsuccessful `compare_exchange`.
@@ -200,9 +200,9 @@ impl<'r, T> Shared<'r, T> {
     /// Returns `None` if the pointer is null, or else a reference to the object wrapped in `Some`.
     ///
     /// It is possible to directly dereference a [`Shared`] if and only if the current context is
-    /// in a critical section which can be started by `traverse` and `traverse_loop` method.
+    /// in a critical section.
     #[inline]
-    pub fn as_ref(&self, _: &CsGuard) -> Option<&'r T> {
+    pub unsafe fn as_ref(&self) -> Option<&'r T> {
         unsafe { decompose_data::<T>(self.inner).0.as_ref() }
     }
 
@@ -211,9 +211,9 @@ impl<'r, T> Shared<'r, T> {
     /// Returns `None` if the pointer is null, or else a reference to the object wrapped in `Some`.
     ///
     /// It is possible to directly dereference a [`Shared`] if and only if the current context is
-    /// in a critical section which can be started by `traverse` and `traverse_loop` method.
+    /// in a critical section.
     #[inline]
-    pub fn as_mut(&mut self, _: &CsGuard) -> Option<&'r mut T> {
+    pub unsafe fn as_mut(&mut self) -> Option<&'r mut T> {
         unsafe { decompose_data::<T>(self.inner).0.as_mut() }
     }
 
@@ -223,7 +223,7 @@ impl<'r, T> Shared<'r, T> {
     ///
     /// The `self` must be a valid memory location.
     #[inline]
-    pub unsafe fn deref_unchecked(&self) -> &T {
+    pub unsafe fn deref(&self) -> &T {
         &*decompose_data::<T>(self.inner).0
     }
 
@@ -233,7 +233,7 @@ impl<'r, T> Shared<'r, T> {
     ///
     /// The `self` must be a valid memory location.
     #[inline]
-    pub unsafe fn deref_mut_unchecked(&mut self) -> &mut T {
+    pub unsafe fn deref_mut(&mut self) -> &mut T {
         &mut *decompose_data::<T>(self.inner).0
     }
 
@@ -373,6 +373,20 @@ impl<T> Shield<T> {
         }
     }
 
+    /// Stores the given pointer in a hazard slot without any validations.
+    ///
+    /// Just storing a pointer in a hazard slot doesn't guarantee that the pointer is
+    /// truly protected, as the memory block may already be reclaimed. We must validate whether
+    /// the memory block is reclaimed or not, by reloading the atomic pointer or checking the
+    /// local RRCU epoch.
+    #[inline]
+    pub fn protect(&mut self, ptr: Shared<'_, T>) {
+        let raw = ptr.untagged().as_raw();
+        self.hazptr
+            .protect_raw(raw as *const T as *mut T, Ordering::Relaxed);
+        self.inner = raw;
+    }
+
     /// Converts the pointer to a reference.
     ///
     /// Returns `None` if the pointer is null, or else a reference to the object wrapped in `Some`.
@@ -436,12 +450,6 @@ impl<T> Shield<T> {
     pub fn shared<'r>(&'r self) -> Shared<'r, T> {
         Shared::new(self.inner)
     }
-
-    /// Stores a pointer value only to an inner variable. It doesn't protect the pointer.
-    #[inline]
-    pub unsafe fn store(&mut self, ptr: Shared<T>) {
-        self.inner = ptr.into_usize();
-    }
 }
 
 /// A trait for either `Owned` or `Shared` pointers.
@@ -483,207 +491,6 @@ impl<T> Pointer for Owned<T> {
             _marker: PhantomData,
         }
     }
-}
-
-/// A trait for `Shield` which can protect `Shared`.
-pub trait Protector {
-    /// A set of `Shared` pointers which is protected by an epoch.
-    type Target<'r>: Clone + Copy;
-
-    /// Returns a default [`Protector`] with nulls for [`Shield`]s and defaults for other types.
-    fn empty(thread: &mut Thread) -> Self;
-
-    /// Stores the given `Target` pointers in hazard slots without any validations.
-    ///
-    /// Just storing a pointer in a hazard slot doesn't guarantee that the pointer is
-    /// truly protected, as the memory block may already be reclaimed. We must validate whether
-    /// the memory block is reclaimed or not, by reloading the atomic pointer or checking the
-    /// local CRCU epoch.
-    fn protect_unchecked(&mut self, read: &Self::Target<'_>);
-
-    /// Loads currently protected pointers and checks whether any of them are invalidated.
-    /// If not, creates a new `Target` and returns it.
-    fn as_target<'r>(&self, guard: &'r CsGuard) -> Option<Self::Target<'r>>;
-
-    /// Resets all hazard slots, allowing the previous memory block to be reclaimed.
-    fn release(&mut self);
-
-    /// Starts a crashable critical section where we cannot perform operations with side-effects,
-    /// such as system calls, non-atomic write on a global variable, etc.
-    ///
-    /// After finishing the section, it protects the returned `Target` pointers, so that they can be
-    /// dereferenced outside of the phase.
-    ///
-    /// # Safety
-    ///
-    /// In a section body, only *rollback-safe* operations are allowed. For example, non-atomic
-    /// writes on a global variable and system-calls(File I/O and etc.) are dangerous, as they
-    /// may cause an unexpected inconsistency on the whole system after a crash.
-    #[inline]
-    unsafe fn traverse<F>(&mut self, thread: &mut Thread, mut body: F) -> bool
-    where
-        F: for<'r> FnMut(&'r mut CsGuard) -> Option<Self::Target<'r>>,
-    {
-        thread.pin(
-            #[inline]
-            |guard| {
-                // Execute the body of this read phase.
-                let result = body(guard);
-                // Store pointers in hazard slots. (A fence is not necessary.)
-                if let Some(result) = result {
-                    self.protect_unchecked(&result);
-                }
-
-                // If we successfully protected pointers without an intermediate crash,
-                // it has the same meaning with a well-known HP validation:
-                // we can safely assume that the pointers are not reclaimed yet.
-                result.is_some()
-            },
-        )
-    }
-
-    /// Starts a non-crashable section where we can conduct operations with global side-effects.
-    ///
-    /// In this section, we do not restart immediately when we receive signals from reclaimers.
-    /// The whole critical section restarts after this `mask` section ends, if a reclaimer sent
-    /// a signal, or we advanced our epoch to reclaim a full local garbage bag.
-    #[inline]
-    unsafe fn traverse_mask<'r, F, R>(
-        &mut self,
-        cs: &CsGuard,
-        to_deref: Self::Target<'r>,
-        body: F,
-    ) -> R
-    where
-        F: FnOnce(&Self, &mut RaGuard) -> R,
-        R: Copy,
-    {
-        cs.mask(|guard| {
-            let result = {
-                // Store pointers in hazard slots and issue a fence.
-                self.protect_unchecked(&to_deref);
-                compiler_fence(Ordering::SeqCst);
-
-                // Restart if the thread is signaled while protecting.
-                if guard.must_rollback() {
-                    guard.repin();
-                }
-
-                body(self, guard)
-            };
-
-            compiler_fence(Ordering::SeqCst);
-            result
-        })
-    }
-}
-
-/// An empty [`Protector`].
-impl Protector for () {
-    type Target<'r> = ();
-
-    #[inline]
-    fn empty(_: &mut Thread) -> Self {
-        ()
-    }
-
-    #[inline]
-    fn protect_unchecked(&mut self, _: &Self::Target<'_>) {}
-
-    #[inline]
-    fn as_target<'r>(&self, _: &'r CsGuard) -> Option<Self::Target<'r>> {
-        Some(())
-    }
-
-    #[inline]
-    fn release(&mut self) {}
-}
-
-/// A unit [`Protector`] with a single [`Shield`].
-impl<T: Invalidate> Protector for Shield<T> {
-    type Target<'r> = Shared<'r, T>;
-
-    #[inline]
-    fn empty(thread: &mut Thread) -> Self {
-        Shield::null(thread)
-    }
-
-    #[inline]
-    fn protect_unchecked(&mut self, read: &Self::Target<'_>) {
-        let raw = read.untagged().as_raw();
-        self.hazptr
-            .protect_raw(raw as *const T as *mut T, Ordering::Relaxed);
-        self.inner = raw;
-    }
-
-    #[inline]
-    fn as_target<'r>(&self, guard: &'r CsGuard) -> Option<Self::Target<'r>> {
-        let read = Shared::new(self.inner);
-        if let Some(value) = self.as_ref() {
-            if value.is_invalidated(guard) {
-                return None;
-            }
-        }
-        Some(read)
-    }
-
-    #[inline]
-    fn release(&mut self) {
-        Shield::release(self)
-    }
-}
-
-macro_rules! impl_protector_for_array {(
-    $($N:literal)*
-) => (
-    $(
-        impl<T: Invalidate> Protector for [Shield<T>; $N] {
-            type Target<'r> = [Shared<'r, T>; $N];
-
-            #[inline]
-            fn empty(thread: &mut Thread) -> Self {
-                let mut result: [MaybeUninit<Shield<T>>; $N] = unsafe { zeroed() };
-                for shield in result.iter_mut() {
-                    shield.write(Shield::null(thread));
-                }
-                unsafe { transmute(result) }
-            }
-
-            #[inline]
-            fn protect_unchecked(&mut self, read: &Self::Target<'_>) {
-                for (shield, shared) in self.iter_mut().zip(read) {
-                    shield.protect_unchecked(shared);
-                }
-            }
-
-            #[inline]
-            fn as_target<'r>(&self, guard: &'r CsGuard) -> Option<Self::Target<'r>> {
-                let mut result: [MaybeUninit<Shared<'r, T>>; $N] = unsafe { zeroed() };
-                for (shield, shared) in self.iter().zip(result.iter_mut()) {
-                    match shield.as_target(guard) {
-                        Some(read) => shared.write(read),
-                        None => return None,
-                    };
-                }
-                Some(unsafe { transmute(result) })
-            }
-
-            #[inline]
-            fn release(&mut self) {
-                for shield in self {
-                    shield.release();
-                }
-            }
-        }
-    )*
-)}
-
-impl_protector_for_array! {
-    00
-    01 02 03 04 05 06 07 08
-    09 10 11 12 13 14 15 16
-    17 18 19 20 21 22 23 24
-    25 26 27 28 29 30 31 32
 }
 
 /// Panics if the pointer is not properly unaligned.

@@ -107,12 +107,6 @@ impl Rollbacker {
         compiler_fence(Ordering::SeqCst);
         unsafe { siglongjmp(CHKPT.as_mut_ptr(), 1) }
     }
-
-    #[inline]
-    pub fn must_rollback(&self) -> bool {
-        compiler_fence(Ordering::SeqCst);
-        Status::from_bits_truncate(STATUS.load(Ordering::Relaxed)).contains(Status::InCaRb)
-    }
 }
 
 impl Drop for Rollbacker {
