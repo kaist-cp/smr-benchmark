@@ -1,7 +1,6 @@
 use super::concurrent_map::OutputHolder;
 use hp_sharp::{
-    Atomic, CsGuard, Invalidate, Owned, Protector, Retire, Shared, Shield, Thread, TraverseStatus,
-    WriteResult,
+    Atomic, CsGuard, Invalidate, Owned, RollbackProof, Shared, Shield, Thread, Unprotected,
 };
 
 use std::cmp::Ordering::{Equal, Greater, Less};
@@ -17,12 +16,7 @@ struct Node<K, V> {
 // TODO(@jeonghyeon): automate
 impl<K, V> Invalidate for Node<K, V> {
     #[inline]
-    fn invalidate(&self) {
-        // A logical deletion is equivalent to an invalidation.
-    }
-
-    #[inline]
-    fn is_invalidated(&self, guard: &CsGuard) -> bool {
+    fn is_invalidated(&self, guard: &Unprotected) -> bool {
         (self.next.load(Ordering::Acquire, guard).tag() & 1) != 0
     }
 }
@@ -46,10 +40,10 @@ impl<K, V> Drop for List<K, V> {
     #[inline]
     fn drop(&mut self) {
         unsafe {
-            let guard = CsGuard::unprotected();
+            let guard = Unprotected::new();
             let mut curr = self.head.load(Ordering::Relaxed, &guard);
 
-            while let Some(curr_ref) = curr.as_ref(&guard) {
+            while let Some(curr_ref) = curr.as_ref() {
                 let next = curr_ref.next.load(Ordering::Relaxed, &guard);
                 drop(curr.into_owned());
                 curr = next;
@@ -88,106 +82,34 @@ struct Cursor<K, V> {
     // Tag of `curr` should always be zero so when `curr` is stored in a `prev`, we don't store a
     // marked pointer and cause cleanup to fail.
     curr: Shield<Node<K, V>>,
-    found: bool,
 }
 
-// TODO(@jeonghyeon): automate
-impl<K, V> Protector for Cursor<K, V> {
-    type Target<'r> = SharedCursor<'r, K, V>;
-
+impl<K, V> Cursor<K, V> {
     #[inline]
     fn empty(thread: &mut Thread) -> Self {
         Self {
             prev: Shield::null(thread),
             prev_next: Shield::null(thread),
             curr: Shield::null(thread),
-            found: false,
-        }
-    }
-
-    #[inline]
-    fn protect_unchecked(&mut self, read: &Self::Target<'_>) {
-        self.prev.protect_unchecked(&read.prev);
-        self.prev_next.protect_unchecked(&read.prev_next);
-        self.curr.protect_unchecked(&read.curr);
-        self.found = read.found;
-    }
-
-    #[inline]
-    fn as_target<'r>(&self, guard: &'r CsGuard) -> Option<Self::Target<'r>> {
-        Some(SharedCursor {
-            prev: self.prev.as_target(guard)?,
-            prev_next: self.prev_next.as_target(guard)?,
-            curr: self.curr.as_target(guard)?,
-            found: self.found,
-        })
-    }
-
-    #[inline]
-    fn release(&mut self) {
-        self.prev.release();
-        self.prev_next.release();
-        self.curr.release();
-        self.found = false;
-    }
-}
-
-// TODO(@jeonghyeon): automate
-struct SharedCursor<'r, K, V> {
-    prev: Shared<'r, Node<K, V>>,
-    prev_next: Shared<'r, Node<K, V>>,
-    curr: Shared<'r, Node<K, V>>,
-    found: bool,
-}
-
-// TODO(@jeonghyeon): automate
-impl<'r, K, V> Clone for SharedCursor<'r, K, V> {
-    #[inline]
-    fn clone(&self) -> Self {
-        Self {
-            prev: self.prev.clone(),
-            prev_next: self.prev_next,
-            curr: self.curr.clone(),
-            found: self.found,
         }
     }
 }
 
-// TODO(@jeonghyeon): automate
-impl<'r, K, V> Copy for SharedCursor<'r, K, V> {}
-
-impl<'r, K, V> SharedCursor<'r, K, V>
-where
-    K: Ord,
-{
-    /// Creates a cursor.
-    #[inline]
-    fn new(head: &Atomic<Node<K, V>>, guard: &'r CsGuard) -> Self {
-        let prev = head.load(Ordering::Relaxed, guard);
-        let curr = prev
-            .as_ref(guard)
-            .unwrap()
-            .next
-            .load(Ordering::Acquire, guard);
-        Self {
-            prev,
-            prev_next: curr,
-            curr,
-            found: false,
-        }
-    }
+fn initialize<'g, K, V>(
+    head: &Atomic<Node<K, V>>,
+    guard: &'g CsGuard,
+) -> (Shared<'g, Node<K, V>>, Shared<'g, Node<K, V>>) {
+    let prev = head.load(Ordering::Relaxed, guard);
+    let curr = unsafe { prev.deref() }.next.load(Ordering::Acquire, guard);
+    (prev, curr)
 }
 
-pub struct Output<K, V>(Cursor<K, V>, Cursor<K, V>, Shield<Node<K, V>>);
+pub struct Output<K, V>(Cursor<K, V>, Cursor<K, V>);
 
 impl<K, V> OutputHolder<V> for Output<K, V> {
     #[inline]
     fn default(thread: &mut Thread) -> Self {
-        Self(
-            Cursor::empty(thread),
-            Cursor::empty(thread),
-            Shield::empty(thread),
-        )
+        Self(Cursor::empty(thread), Cursor::empty(thread))
     }
 
     #[inline]
@@ -210,23 +132,25 @@ where
 
     /// Clean up a chain of logically removed nodes in each traversal.
     #[inline]
-    fn harris_traverse(&self, key: &K, output: &mut Output<K, V>, thread: &mut Thread) -> bool {
+    fn harris_traverse(
+        &self,
+        key: &K,
+        output: &mut Output<K, V>,
+        thread: &mut Thread,
+    ) -> Result<bool, ()> {
         let cursor = &mut output.0;
-        unsafe {
-            cursor.traverse(thread, |guard| {
-                let mut prev = self.head.load(Ordering::Acquire, guard);
-                let mut curr = prev
-                    .as_ref(guard)
-                    .unwrap()
-                    .next
-                    .load(Ordering::Acquire, guard);
+        let found = unsafe {
+            thread.critical_section(|guard| {
+                let (mut prev, mut curr) = initialize(&self.head, guard);
                 let mut prev_next = curr;
                 // Finding phase
                 // - cursor.curr: first unmarked node w/ key >= search key (4)
                 // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
                 // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
                 let found = loop {
-                    let curr_node = some_or!(curr.as_ref(guard), break false);
+                    let Some(curr_node) = curr.as_ref() else {
+                        break false;
+                    };
                     let next = curr_node.next.load(Ordering::Acquire, guard);
 
                     // - finding stage is done if cursor.curr advancement stops
@@ -250,18 +174,17 @@ where
                         Greater => break false,
                     }
                 };
-                SharedCursor {
-                    prev,
-                    prev_next,
-                    curr,
-                    found,
-                }
-            });
-        }
+
+                cursor.prev.protect(prev);
+                cursor.curr.protect(curr);
+                cursor.prev_next.protect(prev_next);
+                found
+            })
+        };
 
         // If prev and curr WERE adjacent, no need to clean up
         if cursor.prev_next.as_raw() == cursor.curr.as_raw() {
-            return true;
+            return Ok(found);
         }
 
         // cleanup marked nodes between prev and curr
@@ -279,23 +202,23 @@ where
             )
             .is_err()
         {
-            return false;
+            return Err(());
         }
 
         // retire from cursor.prev.load() to cursor.curr (exclusive)
         unsafe {
             // Safety: As this thread is a winner of the physical CAS, it is the only one who
             // retires this chain.
-            let guard = CsGuard::unprotected();
+            let guard = Unprotected::new();
 
             let mut node = cursor.prev_next.shared();
             while node.with_tag(0) != cursor.curr.shared() {
-                let next = node.deref_unchecked().next.load(Ordering::Relaxed, &guard);
+                let next = node.deref().next.load(Ordering::Relaxed, &guard);
                 thread.retire(node);
                 node = next;
             }
         }
-        return true;
+        Ok(found)
     }
 
     #[inline]
@@ -304,69 +227,54 @@ where
         key: &K,
         output: &mut Output<K, V>,
         thread: &mut Thread,
-    ) -> bool {
-        let aux = &mut output.2;
-        let prot = &mut output.0;
+    ) -> Result<bool, ()> {
+        let cursor = &mut output.0;
         unsafe {
-            prot.traverse(thread, |guard| {
-                let mut cursor = SharedCursor::new(&self.head, guard);
-                cursor.found = loop {
-                    let curr_node = some_or!(cursor.curr.as_ref(guard), break false);
-                    let next = curr_node.next.load(Ordering::Acquire, guard);
+            thread.critical_section(|guard| {
+                let (mut prev, mut curr) = initialize(&self.head, guard);
+                let found = loop {
+                    let Some(curr_node) = curr.as_ref() else {
+                        break false;
+                    };
+                    let mut next = curr_node.next.load(Ordering::Acquire, guard);
 
                     // NOTE: original version aborts here if self.prev is tagged
 
                     if next.tag() != 0 {
-                        self.harris_michael_traverse_unlink(aux, next, &mut cursor, guard);
+                        next = next.with_tag(0);
+                        cursor.prev.protect(prev);
+                        cursor.curr.protect(curr);
+                        guard.mask(|guard| {
+                            prev.deref()
+                                .next
+                                .compare_exchange(
+                                    curr,
+                                    next,
+                                    Ordering::Release,
+                                    Ordering::Relaxed,
+                                    guard,
+                                )
+                                .map(|_| guard.retire(curr))
+                                .map_err(|_| ())
+                        })?;
                         continue;
                     }
 
                     match curr_node.key.cmp(key) {
                         Less => {
-                            cursor.prev = cursor.curr;
-                            cursor.curr = next;
+                            prev = curr;
+                            curr = next;
                         }
                         Equal => break true,
                         Greater => break false,
                     }
                 };
-                cursor
-            });
-        }
-        // Always success to traverse.
-        true
-    }
 
-    #[inline(never)]
-    #[cold]
-    unsafe fn harris_michael_traverse_unlink<'g>(
-        &self,
-        aux: &mut Shield<Node<K, V>>,
-        mut next: Shared<'g, Node<K, V>>,
-        cursor: &mut SharedCursor<'g, K, V>,
-        guard: &'g CsGuard,
-    ) {
-        next = next.with_tag(0);
-        aux.traverse_mask(guard, cursor.prev, |prev, guard| {
-            if prev
-                .deref_unchecked()
-                .next
-                .compare_exchange(
-                    cursor.curr,
-                    next,
-                    Ordering::Release,
-                    Ordering::Relaxed,
-                    guard,
-                )
-                .is_err()
-            {
-                WriteResult::RepinEpoch
-            } else {
-                guard.retire(cursor.curr);
-                WriteResult::Finished
-            }
-        });
-        cursor.curr = next;
+                cursor.prev.protect(prev);
+                cursor.curr.protect(curr);
+                Ok(found)
+            })
+        }
     }
 
     #[inline]
@@ -375,13 +283,15 @@ where
         key: &K,
         output: &mut Output<K, V>,
         thread: &mut Thread,
-    ) -> bool {
+    ) -> Result<bool, ()> {
         let cursor = &mut output.0;
         unsafe {
-            cursor.curr.traverse(thread, |guard| {
-                let mut curr = self.head.load(Ordering::Acquire, guard);
-                cursor.found = loop {
-                    let curr_node = some_or!(curr.as_ref(guard), break false);
+            thread.critical_section(|guard| {
+                let (_, mut curr) = initialize(&self.head, guard);
+                let found = loop {
+                    let Some(curr_node) = curr.as_ref() else {
+                        break false;
+                    };
                     let next = curr_node.next.load(Ordering::Acquire, guard);
                     match curr_node.key.cmp(key) {
                         Less => {
@@ -392,172 +302,42 @@ where
                         Greater => break false,
                     }
                 };
-                curr
-            });
+                cursor.curr.protect(curr);
+                Ok(found)
+            })
         }
-        true
     }
 
     #[inline]
-    fn harris_herlihy_shavit_traverse_loop(
-        &self,
-        key: &K,
-        output: &mut Output<K, V>,
-        thread: &mut Thread,
-    ) -> bool {
-        let cursor = &mut output.0;
-        let backup = &mut output.1;
-        unsafe {
-            cursor.traverse_loop(
-                backup,
-                thread,
-                |guard| SharedCursor::new(&self.head, guard),
-                |cursor, guard| {
-                    let curr_node = match cursor.curr.as_ref(guard) {
-                        Some(node) => node,
-                        None => {
-                            cursor.found = false;
-                            return TraverseStatus::Finished;
-                        }
-                    };
-                    let next = curr_node.next.load(Ordering::Acquire, guard);
-                    match curr_node.key.cmp(key) {
-                        Less => {
-                            cursor.prev = cursor.curr;
-                            cursor.curr = next;
-                            return TraverseStatus::Continue;
-                        }
-                        Equal => cursor.found = next.tag() == 0,
-                        Greater => cursor.found = false,
-                    }
-                    TraverseStatus::Finished
-                },
-            );
-        }
-        // Always success to traverse.
-        true
-    }
-
-    /// Clean up a chain of logically removed nodes in each traversal.
-    #[inline]
-    fn harris_traverse_loop(
-        &self,
-        key: &K,
-        output: &mut Output<K, V>,
-        thread: &mut Thread,
-    ) -> bool {
-        let cursor = &mut output.0;
-        let backup = &mut output.1;
-        unsafe {
-            cursor.traverse_loop(
-                backup,
-                thread,
-                |guard| SharedCursor::new(&self.head, guard),
-                |cursor, guard| {
-                    let curr_node = match cursor.curr.as_ref(guard) {
-                        Some(node) => node,
-                        None => {
-                            cursor.found = false;
-                            return TraverseStatus::Finished;
-                        }
-                    };
-                    let next = curr_node.next.load(Ordering::Acquire, guard);
-
-                    // - finding stage is done if cursor.curr advancement stops
-                    // - advance cursor.curr if (.next is marked) || (cursor.curr < key)
-                    // - stop cursor.curr if (not marked) && (cursor.curr >= key)
-                    // - advance cursor.prev if not marked
-
-                    if next.tag() != 0 {
-                        // We add a 0 tag here so that `self.curr`s tag is always 0.
-                        cursor.curr = next.with_tag(0);
-                        return TraverseStatus::Continue;
-                    }
-
-                    match curr_node.key.cmp(key) {
-                        Less => {
-                            cursor.prev = cursor.curr;
-                            cursor.prev_next = next;
-                            cursor.curr = next;
-                            return TraverseStatus::Continue;
-                        }
-                        Equal => cursor.found = true,
-                        Greater => cursor.found = false,
-                    }
-                    TraverseStatus::Finished
-                },
-            );
-        }
-
-        // If prev and curr WERE adjacent, no need to clean up
-        if cursor.prev_next.as_raw() == cursor.curr.as_raw() {
-            return true;
-        }
-
-        // cleanup marked nodes between prev and curr
-        if cursor
-            .prev
-            .as_ref()
-            .unwrap()
-            .next
-            .compare_exchange(
-                cursor.prev_next.shared(),
-                cursor.curr.shared(),
-                Ordering::Release,
-                Ordering::Relaxed,
-                thread,
-            )
-            .is_err()
-        {
-            return false;
-        }
-
-        // retire from cursor.prev.load() to cursor.curr (exclusive)
-        unsafe {
-            // Safety: As this thread is a winner of the physical CAS, it is the only one who
-            // retires this chain.
-            let guard = CsGuard::unprotected();
-
-            let mut node = cursor.prev_next.shared();
-            while node.with_tag(0) != cursor.curr.shared() {
-                let next = node.deref_unchecked().next.load(Ordering::Relaxed, &guard);
-                thread.retire(node);
-                node = next;
+    pub fn get<F>(&self, find: &F, key: &K, output: &mut Output<K, V>, thread: &mut Thread) -> bool
+    where
+        F: Fn(&List<K, V>, &K, &mut Output<K, V>, &mut Thread) -> Result<bool, ()>,
+    {
+        loop {
+            if let Ok(found) = find(self, key, output, thread) {
+                return found;
             }
         }
-        return true;
-    }
-
-    #[inline]
-    pub fn get<F>(&self, find: F, key: &K, output: &mut Output<K, V>, thread: &mut Thread) -> bool
-    where
-        F: Fn(&List<K, V>, &K, &mut Output<K, V>, &mut Thread) -> bool,
-    {
-        while !find(self, key, output, thread) {}
-        output.0.found
     }
 
     #[inline]
     pub fn insert<F>(
         &self,
-        find: F,
+        find: &F,
         key: K,
         value: V,
         output: &mut Output<K, V>,
         thread: &mut Thread,
     ) -> bool
     where
-        F: Fn(&List<K, V>, &K, &mut Output<K, V>, &mut Thread) -> bool,
+        F: Fn(&List<K, V>, &K, &mut Output<K, V>, &mut Thread) -> Result<bool, ()>,
     {
         let mut new_node = Owned::new(Node::new(key, value));
         loop {
-            if !find(self, &new_node.key, output, thread) {
-                continue;
-            }
-            let cursor = &mut output.0;
-            if cursor.found {
+            if self.get(&find, &new_node.key, output, thread) {
                 return false;
             }
+            let cursor = &mut output.0;
 
             new_node
                 .next
@@ -579,22 +359,19 @@ where
     #[inline]
     pub fn remove<F>(
         &self,
-        find: F,
+        find: &F,
         key: &K,
         output: &mut Output<K, V>,
         thread: &mut Thread,
     ) -> bool
     where
-        F: Fn(&List<K, V>, &K, &mut Output<K, V>, &mut Thread) -> bool,
+        F: Fn(&List<K, V>, &K, &mut Output<K, V>, &mut Thread) -> Result<bool, ()>,
     {
         loop {
-            if !find(self, key, output, thread) {
-                continue;
+            if !self.get(&find, &key, output, thread) {
+                return true;
             }
             let cursor = &mut output.0;
-            if !cursor.found {
-                return false;
-            }
 
             let curr_node = cursor.curr.as_ref().unwrap();
             let next = curr_node.next.fetch_or(1, Ordering::AcqRel, thread);
@@ -624,11 +401,16 @@ where
     }
 
     #[inline]
+    #[allow(unused)] // TODO: remove after implementing TraverseLoop
     pub fn pop(&self, output: &mut Output<K, V>, thread: &mut Thread) -> bool {
         let cursor = &mut output.0;
         unsafe {
             loop {
-                cursor.traverse(thread, |guard| SharedCursor::new(&self.head, guard));
+                thread.critical_section(|guard| {
+                    let (prev, curr) = initialize(&self.head, guard);
+                    cursor.prev.protect(prev);
+                    cursor.curr.protect(curr);
+                });
                 let curr_node = match cursor.curr.as_ref() {
                     Some(node) => node,
                     None => return false,
@@ -642,7 +424,7 @@ where
 
                 if cursor
                     .prev
-                    .deref_unchecked()
+                    .deref()
                     .next
                     .compare_exchange(
                         cursor.curr.shared(),
@@ -684,7 +466,7 @@ pub mod traverse {
 
         #[inline(always)]
         fn get(&self, key: &K, output: &mut Self::Output, thread: &mut hp_sharp::Thread) -> bool {
-            self.inner.get(List::harris_traverse, key, output, thread)
+            self.inner.get(&List::harris_traverse, key, output, thread)
         }
 
         #[inline(always)]
@@ -696,7 +478,7 @@ pub mod traverse {
             thread: &mut hp_sharp::Thread,
         ) -> bool {
             self.inner
-                .insert(List::harris_traverse, key, value, output, thread)
+                .insert(&List::harris_traverse, key, value, output, thread)
         }
 
         #[inline(always)]
@@ -707,7 +489,7 @@ pub mod traverse {
             thread: &mut hp_sharp::Thread,
         ) -> bool {
             self.inner
-                .remove(List::harris_traverse, key, output, thread)
+                .remove(&List::harris_traverse, key, output, thread)
         }
     }
 
@@ -730,7 +512,7 @@ pub mod traverse {
         #[inline(always)]
         fn get(&self, key: &K, output: &mut Self::Output, thread: &mut hp_sharp::Thread) -> bool {
             self.inner
-                .get(List::harris_michael_traverse, key, output, thread)
+                .get(&List::harris_michael_traverse, key, output, thread)
         }
 
         #[inline(always)]
@@ -742,7 +524,7 @@ pub mod traverse {
             thread: &mut hp_sharp::Thread,
         ) -> bool {
             self.inner
-                .insert(List::harris_michael_traverse, key, value, output, thread)
+                .insert(&List::harris_michael_traverse, key, value, output, thread)
         }
 
         #[inline(always)]
@@ -753,7 +535,7 @@ pub mod traverse {
             thread: &mut hp_sharp::Thread,
         ) -> bool {
             self.inner
-                .remove(List::harris_michael_traverse, key, output, thread)
+                .remove(&List::harris_michael_traverse, key, output, thread)
         }
     }
 
@@ -776,7 +558,7 @@ pub mod traverse {
         #[inline(always)]
         fn get(&self, key: &K, output: &mut Self::Output, thread: &mut hp_sharp::Thread) -> bool {
             self.inner
-                .get(List::harris_herlihy_shavit_traverse, key, output, thread)
+                .get(&List::harris_herlihy_shavit_traverse, key, output, thread)
         }
 
         #[inline(always)]
@@ -788,7 +570,7 @@ pub mod traverse {
             thread: &mut hp_sharp::Thread,
         ) -> bool {
             self.inner
-                .insert(List::harris_traverse, key, value, output, thread)
+                .insert(&List::harris_traverse, key, value, output, thread)
         }
 
         #[inline(always)]
@@ -799,7 +581,7 @@ pub mod traverse {
             thread: &mut hp_sharp::Thread,
         ) -> bool {
             self.inner
-                .remove(List::harris_traverse, key, output, thread)
+                .remove(&List::harris_traverse, key, output, thread)
         }
     }
 
@@ -819,151 +601,151 @@ pub mod traverse {
     }
 }
 
-pub mod traverse_loop {
-    use super::{List, Output};
-    use crate::ds_impl::hp_sharp::concurrent_map;
-    use concurrent_map::ConcurrentMap;
+// pub mod traverse_loop {
+//     use super::{List, Output};
+//     use crate::ds_impl::hp_sharp::concurrent_map;
+//     use concurrent_map::ConcurrentMap;
 
-    pub struct HList<K, V> {
-        inner: List<K, V>,
-    }
+//     pub struct HList<K, V> {
+//         inner: List<K, V>,
+//     }
 
-    impl<K, V> ConcurrentMap<K, V> for HList<K, V>
-    where
-        K: Ord + Default,
-        V: Default,
-    {
-        type Output = Output<K, V>;
+//     impl<K, V> ConcurrentMap<K, V> for HList<K, V>
+//     where
+//         K: Ord + Default,
+//         V: Default,
+//     {
+//         type Output = Output<K, V>;
 
-        #[inline]
-        fn new() -> Self {
-            Self { inner: List::new() }
-        }
+//         #[inline]
+//         fn new() -> Self {
+//             Self { inner: List::new() }
+//         }
 
-        #[inline(always)]
-        fn get(&self, key: &K, output: &mut Self::Output, thread: &mut hp_sharp::Thread) -> bool {
-            self.inner
-                .get(List::harris_traverse_loop, key, output, thread)
-        }
+//         #[inline(always)]
+//         fn get(&self, key: &K, output: &mut Self::Output, thread: &mut hp_sharp::Thread) -> bool {
+//             self.inner
+//                 .get(List::harris_traverse_loop, key, output, thread)
+//         }
 
-        #[inline(always)]
-        fn insert(
-            &self,
-            key: K,
-            value: V,
-            output: &mut Self::Output,
-            thread: &mut hp_sharp::Thread,
-        ) -> bool {
-            self.inner
-                .insert(List::harris_traverse_loop, key, value, output, thread)
-        }
+//         #[inline(always)]
+//         fn insert(
+//             &self,
+//             key: K,
+//             value: V,
+//             output: &mut Self::Output,
+//             thread: &mut hp_sharp::Thread,
+//         ) -> bool {
+//             self.inner
+//                 .insert(List::harris_traverse_loop, key, value, output, thread)
+//         }
 
-        #[inline(always)]
-        fn remove<'domain, 'hp>(
-            &self,
-            key: &K,
-            output: &mut Self::Output,
-            thread: &mut hp_sharp::Thread,
-        ) -> bool {
-            self.inner
-                .remove(List::harris_traverse_loop, key, output, thread)
-        }
-    }
+//         #[inline(always)]
+//         fn remove<'domain, 'hp>(
+//             &self,
+//             key: &K,
+//             output: &mut Self::Output,
+//             thread: &mut hp_sharp::Thread,
+//         ) -> bool {
+//             self.inner
+//                 .remove(List::harris_traverse_loop, key, output, thread)
+//         }
+//     }
 
-    pub struct HHSList<K, V> {
-        inner: List<K, V>,
-    }
+//     pub struct HHSList<K, V> {
+//         inner: List<K, V>,
+//     }
 
-    impl<K, V> HHSList<K, V>
-    where
-        K: Ord + Default,
-        V: Default,
-    {
-        #[inline]
-        pub fn pop(&self, output: &mut Output<K, V>, thread: &mut hp_sharp::Thread) -> bool {
-            self.inner.pop(output, thread)
-        }
-    }
+//     impl<K, V> HHSList<K, V>
+//     where
+//         K: Ord + Default,
+//         V: Default,
+//     {
+//         #[inline]
+//         pub fn pop(&self, output: &mut Output<K, V>, thread: &mut hp_sharp::Thread) -> bool {
+//             self.inner.pop(output, thread)
+//         }
+//     }
 
-    impl<K, V> ConcurrentMap<K, V> for HHSList<K, V>
-    where
-        K: Ord + Default,
-        V: Default,
-    {
-        type Output = Output<K, V>;
+//     impl<K, V> ConcurrentMap<K, V> for HHSList<K, V>
+//     where
+//         K: Ord + Default,
+//         V: Default,
+//     {
+//         type Output = Output<K, V>;
 
-        #[inline]
-        fn new() -> Self {
-            Self { inner: List::new() }
-        }
+//         #[inline]
+//         fn new() -> Self {
+//             Self { inner: List::new() }
+//         }
 
-        #[inline(always)]
-        fn get(&self, key: &K, output: &mut Self::Output, thread: &mut hp_sharp::Thread) -> bool {
-            self.inner.get(
-                List::harris_herlihy_shavit_traverse_loop,
-                key,
-                output,
-                thread,
-            )
-        }
+//         #[inline(always)]
+//         fn get(&self, key: &K, output: &mut Self::Output, thread: &mut hp_sharp::Thread) -> bool {
+//             self.inner.get(
+//                 List::harris_herlihy_shavit_traverse_loop,
+//                 key,
+//                 output,
+//                 thread,
+//             )
+//         }
 
-        #[inline(always)]
-        fn insert(
-            &self,
-            key: K,
-            value: V,
-            output: &mut Self::Output,
-            thread: &mut hp_sharp::Thread,
-        ) -> bool {
-            self.inner
-                .insert(List::harris_traverse_loop, key, value, output, thread)
-        }
+//         #[inline(always)]
+//         fn insert(
+//             &self,
+//             key: K,
+//             value: V,
+//             output: &mut Self::Output,
+//             thread: &mut hp_sharp::Thread,
+//         ) -> bool {
+//             self.inner
+//                 .insert(List::harris_traverse_loop, key, value, output, thread)
+//         }
 
-        #[inline(always)]
-        fn remove<'domain, 'hp>(
-            &self,
-            key: &K,
-            output: &mut Self::Output,
-            thread: &mut hp_sharp::Thread,
-        ) -> bool {
-            self.inner
-                .remove(List::harris_traverse_loop, key, output, thread)
-        }
-    }
+//         #[inline(always)]
+//         fn remove<'domain, 'hp>(
+//             &self,
+//             key: &K,
+//             output: &mut Self::Output,
+//             thread: &mut hp_sharp::Thread,
+//         ) -> bool {
+//             self.inner
+//                 .remove(List::harris_traverse_loop, key, output, thread)
+//         }
+//     }
 
-    #[test]
-    fn smoke_h_list() {
-        concurrent_map::tests::smoke::<HList<i32, String>>();
-    }
+//     #[test]
+//     fn smoke_h_list() {
+//         concurrent_map::tests::smoke::<HList<i32, String>>();
+//     }
 
-    #[test]
-    fn smoke_hhs_list() {
-        concurrent_map::tests::smoke::<HHSList<i32, String>>();
-    }
+//     #[test]
+//     fn smoke_hhs_list() {
+//         concurrent_map::tests::smoke::<HHSList<i32, String>>();
+//     }
 
-    #[test]
-    fn litmus_hhs_pop() {
-        use concurrent_map::OutputHolder;
-        hp_sharp::THREAD.with(|thread| {
-            let thread = &mut **thread.borrow_mut();
-            let output = &mut HHSList::empty_output(thread);
-            let map = HHSList::new();
+//     #[test]
+//     fn litmus_hhs_pop() {
+//         use concurrent_map::OutputHolder;
+//         hp_sharp::THREAD.with(|thread| {
+//             let thread = &mut **thread.borrow_mut();
+//             let output = &mut HHSList::empty_output(thread);
+//             let map = HHSList::new();
 
-            map.insert(1, "1", output, thread);
-            map.insert(2, "2", output, thread);
-            map.insert(3, "3", output, thread);
+//             map.insert(1, "1", output, thread);
+//             map.insert(2, "2", output, thread);
+//             map.insert(3, "3", output, thread);
 
-            fn validate_output(output: &Output<i32, &str>, target: &str) {
-                assert!(output.output().eq(&target));
-            }
+//             fn validate_output(output: &Output<i32, &str>, target: &str) {
+//                 assert!(output.output().eq(&target));
+//             }
 
-            assert!(map.pop(output, thread));
-            validate_output(output, "1");
-            assert!(map.pop(output, thread));
-            validate_output(output, "2");
-            assert!(map.pop(output, thread));
-            validate_output(output, "3");
-            assert!(!map.pop(output, thread));
-        });
-    }
-}
+//             assert!(map.pop(output, thread));
+//             validate_output(output, "1");
+//             assert!(map.pop(output, thread));
+//             validate_output(output, "2");
+//             assert!(map.pop(output, thread));
+//             validate_output(output, "3");
+//             assert!(!map.pop(output, thread));
+//         });
+//     }
+// }

@@ -362,13 +362,13 @@ impl Local {
         compiler_fence(Ordering::SeqCst);
 
         // Execute the body of this section.
-        let mut guard = CsGuard::new(self, rb);
-        let result = body(&mut guard);
+        let result = body(&mut CsGuard::new(self, rb));
         compiler_fence(Ordering::SeqCst);
 
         // We are now out of the critical(crashable) section.
         // Unpin the local epoch to help reclaimers to freely collect bags.
         self.unpin_inner();
+        compiler_fence(Ordering::SeqCst);
 
         // Finaly, close this critical section by dropping `rb`.
         result
@@ -409,13 +409,13 @@ impl Local {
             compiler_fence(Ordering::SeqCst);
 
             // Execute the body of this section.
-            let mut guard = CsGuard::new(self, rb);
-            let result = body(&mut guard);
+            let result = body(&mut CsGuard::new(self, rb));
             compiler_fence(Ordering::SeqCst);
 
             // We are now out of the critical(crashable) section.
             // Unpin the local epoch to help reclaimers to freely collect bags.
             self.unpin_inner();
+            compiler_fence(Ordering::SeqCst);
 
             // Finaly, close this critical section by dropping `rb`.
 
@@ -537,7 +537,7 @@ impl Local {
             self.available_indices.sort_unstable();
             let len = self.available_indices.len();
             debug_assert!(Self::HAZARD_ARRAY_INIT_SIZE <= len);
-            debug_assert!((Self::HAZARD_ARRAY_INIT_SIZE / len).count_ones() == 1);
+            debug_assert_eq!((len / Self::HAZARD_ARRAY_INIT_SIZE).count_ones(), 1);
             debug_assert_eq!(self.available_indices, (0..len).collect::<Vec<_>>());
         }
 

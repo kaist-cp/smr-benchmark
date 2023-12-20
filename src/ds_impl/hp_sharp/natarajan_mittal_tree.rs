@@ -1,7 +1,7 @@
 use std::{cmp, sync::atomic::Ordering};
 
 use hp_sharp::{
-    Atomic, CsGuard, Invalidate, Owned, Pointer, Protector, Retire, Shared, Shield, Thread,
+    Atomic, Invalidate, Owned, Pointer, RollbackProof, Shared, Shield, Thread, Unprotected,
 };
 
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
@@ -89,8 +89,6 @@ where
 
 struct Node<K, V> {
     key: Key<K>,
-    // TODO(@jeehoonkang): how about having another type that is either (1) value, or (2) left and
-    // right.
     value: Option<V>,
     left: Atomic<Node<K, V>>,
     right: Atomic<Node<K, V>>,
@@ -99,12 +97,7 @@ struct Node<K, V> {
 // TODO(@jeonghyeon): automate
 impl<K, V> Invalidate for Node<K, V> {
     #[inline]
-    fn invalidate(&self) {
-        // We do not use `traverse_loop` for this data structure.
-    }
-
-    #[inline]
-    fn is_invalidated(&self, _: &CsGuard) -> bool {
+    fn is_invalidated(&self, _: &Unprotected) -> bool {
         false
         // We do not use `traverse_loop` for this data structure.
     }
@@ -144,23 +137,20 @@ enum Direction {
     R,
 }
 
-pub struct Output<K, V>(SeekRecord<K, V>, SeekRecord<K, V>);
-
-impl<K, V> OutputHolder<V> for Output<K, V> {
+impl<K, V> OutputHolder<V> for SeekRecord<K, V> {
     fn default(handle: &mut Thread) -> Self {
-        Self(SeekRecord::empty(handle), SeekRecord::empty(handle))
+        Self::empty(handle)
     }
 
     fn output(&self) -> &V {
-        self.0.leaf.as_ref().unwrap().value.as_ref().unwrap()
+        self.leaf.as_ref().unwrap().value.as_ref().unwrap()
     }
 }
 
 /// All Shared<_> are unmarked.
 ///
 /// All of the edges of path from `successor` to `parent` are in the process of removal.
-// TODO(@jeonghyeon): automate
-struct SeekRecord<K, V> {
+pub struct SeekRecord<K, V> {
     /// Parent of `successor`
     ancestor: Shield<Node<K, V>>,
     /// The first internal node with a marked outgoing edge
@@ -175,36 +165,7 @@ struct SeekRecord<K, V> {
     leaf_dir: Direction,
 }
 
-// TODO(@jeonghyeon): automate
-struct SharedSeekRecord<'r, K, V> {
-    /// Parent of `successor`
-    ancestor: Shared<'r, Node<K, V>>,
-    /// The first internal node with a marked outgoing edge
-    successor: Shared<'r, Node<K, V>>,
-    /// The direction of successor from ancestor.
-    successor_dir: Direction,
-    /// Parent of `leaf`
-    parent: Shared<'r, Node<K, V>>,
-    /// The end of the access path.
-    leaf: Shared<'r, Node<K, V>>,
-    /// The direction of leaf from parent.
-    leaf_dir: Direction,
-}
-
-// TODO(@jeonghyeon): automate
-impl<'r, K, V> Clone for SharedSeekRecord<'r, K, V> {
-    fn clone(&self) -> Self {
-        Self { ..*self }
-    }
-}
-
-// TODO(@jeonghyeon): automate
-impl<'r, K, V> Copy for SharedSeekRecord<'r, K, V> {}
-
-impl<K, V> Protector for SeekRecord<K, V> {
-    type Target<'r> = SharedSeekRecord<'r, K, V>;
-
-    #[inline]
+impl<K, V> SeekRecord<K, V> {
     fn empty(handle: &mut Thread) -> Self {
         Self {
             ancestor: Shield::null(handle),
@@ -215,63 +176,32 @@ impl<K, V> Protector for SeekRecord<K, V> {
             leaf_dir: Direction::L,
         }
     }
-
-    #[inline]
-    fn protect_unchecked(&mut self, read: &Self::Target<'_>) {
-        self.ancestor.protect_unchecked(&read.ancestor);
-        self.successor.protect_unchecked(&read.successor);
-        self.successor_dir = read.successor_dir;
-        self.parent.protect_unchecked(&read.parent);
-        self.leaf.protect_unchecked(&read.leaf);
-        self.leaf_dir = read.leaf_dir;
-    }
-
-    #[inline]
-    fn as_target<'r>(&self, guard: &'r CsGuard) -> Option<Self::Target<'r>> {
-        Some(SharedSeekRecord {
-            ancestor: self.ancestor.as_target(guard)?,
-            successor: self.successor.as_target(guard)?,
-            successor_dir: self.successor_dir,
-            parent: self.parent.as_target(guard)?,
-            leaf: self.leaf.as_target(guard)?,
-            leaf_dir: self.leaf_dir,
-        })
-    }
-
-    #[inline]
-    fn release(&mut self) {
-        self.ancestor.release();
-        self.successor.release();
-        self.parent.release();
-        self.leaf.release();
-    }
 }
 
 // TODO(@jeehoonkang): code duplication...
 impl<K, V> SeekRecord<K, V> {
     fn successor_addr<'g>(&'g self) -> &'g Atomic<Node<K, V>> {
         match self.successor_dir {
-            Direction::L => unsafe { &self.ancestor.deref_unchecked().left },
-            Direction::R => unsafe { &self.ancestor.deref_unchecked().right },
+            Direction::L => unsafe { &self.ancestor.deref().left },
+            Direction::R => unsafe { &self.ancestor.deref().right },
         }
     }
 
     fn leaf_addr<'g>(&'g self) -> &'g Atomic<Node<K, V>> {
         match self.leaf_dir {
-            Direction::L => unsafe { &self.parent.deref_unchecked().left },
-            Direction::R => unsafe { &self.parent.deref_unchecked().right },
+            Direction::L => unsafe { &self.parent.deref().left },
+            Direction::R => unsafe { &self.parent.deref().right },
         }
     }
 
     fn leaf_sibling_addr<'g>(&'g self) -> &'g Atomic<Node<K, V>> {
         match self.leaf_dir {
-            Direction::L => unsafe { &self.parent.deref_unchecked().right },
-            Direction::R => unsafe { &self.parent.deref_unchecked().left },
+            Direction::L => unsafe { &self.parent.deref().right },
+            Direction::R => unsafe { &self.parent.deref().left },
         }
     }
 }
 
-// COMMENT(@jeehoonkang): write down the invariant of the tree
 pub struct NMTreeMap<K, V> {
     r: Node<K, V>,
 }
@@ -289,7 +219,7 @@ where
 impl<K, V> Drop for NMTreeMap<K, V> {
     fn drop(&mut self) {
         unsafe {
-            let guard = &CsGuard::unprotected();
+            let guard = &Unprotected::new();
             let mut stack = vec![
                 self.r.left.load(Ordering::Relaxed, guard),
                 self.r.right.load(Ordering::Relaxed, guard),
@@ -301,7 +231,7 @@ impl<K, V> Drop for NMTreeMap<K, V> {
                     continue;
                 }
 
-                let node_ref = node.deref_unchecked();
+                let node_ref = node.deref();
 
                 stack.push(node_ref.left.load(Ordering::Relaxed, guard));
                 stack.push(node_ref.right.load(Ordering::Relaxed, guard));
@@ -333,17 +263,16 @@ where
     }
 
     /// All `Shared<_>` fields are unmarked.
-    fn seek(&self, key: &K, output: &mut Output<K, V>, handle: &mut Thread) {
-        let result = &mut output.0;
+    fn seek(&self, key: &K, output: &mut SeekRecord<K, V>, handle: &mut Thread) {
         unsafe {
-            result.traverse(handle, |guard| {
+            handle.critical_section(|guard| {
                 let s = self.r.left.load(Ordering::Relaxed, guard);
-                let s_node = s.deref_unchecked();
+                let s_node = s.deref();
                 let mut leaf = s_node
                     .left
                     .load(Ordering::Relaxed, guard)
                     .with_tag(Marks::empty().bits());
-                let leaf_node = leaf.deref_unchecked();
+                let leaf_node = leaf.deref();
 
                 let mut ancestor = Shared::from_usize(&self.r as *const _ as usize);
                 let mut successor = s;
@@ -354,7 +283,7 @@ where
                 let mut curr_dir = Direction::L;
                 let mut prev_tag = Marks::from_bits_truncate(leaf.tag()).tag();
 
-                while let Some(curr_node) = curr.as_ref(guard) {
+                while let Some(curr_node) = curr.as_ref() {
                     if !prev_tag {
                         // untagged edge: advance ancestor and successor pointers
                         ancestor = parent;
@@ -378,30 +307,28 @@ where
                     }
                 }
 
-                SharedSeekRecord {
-                    ancestor,
-                    successor,
-                    successor_dir,
-                    parent,
-                    leaf,
-                    leaf_dir,
-                }
+                output.ancestor.protect(ancestor);
+                output.successor.protect(successor);
+                output.parent.protect(parent);
+                output.leaf.protect(leaf);
+                output.successor_dir = successor_dir;
+                output.leaf_dir = leaf_dir;
             });
         }
     }
 
     /// Similar to `seek`, but traverse the tree with only two pointers
-    fn seek_leaf(&self, key: &K, output: &mut Output<K, V>, handle: &mut Thread) {
-        let result = &mut output.0.leaf;
+    fn seek_leaf(&self, key: &K, output: &mut SeekRecord<K, V>, handle: &mut Thread) {
+        let result = &mut output.leaf;
         unsafe {
-            result.traverse(handle, |guard| {
+            handle.critical_section(|guard| {
                 let s = self.r.left.load(Ordering::Relaxed, guard);
-                let s_node = s.deref_unchecked();
+                let s_node = s.deref();
                 let mut leaf = s_node.left.load(Ordering::Acquire, guard).with_tag(0);
-                let leaf_node = leaf.deref_unchecked();
+                let leaf_node = leaf.deref();
                 let mut curr = leaf_node.left.load(Ordering::Acquire, guard).with_tag(0);
 
-                while let Some(curr_node) = curr.as_ref(guard) {
+                while let Some(curr_node) = curr.as_ref() {
                     leaf = curr;
                     if curr_node.key.cmp(key) == cmp::Ordering::Greater {
                         curr = curr_node.left.load(Ordering::Acquire, guard);
@@ -410,7 +337,7 @@ where
                     }
                     curr = curr.with_tag(0);
                 }
-                leaf
+                result.protect(leaf);
             });
         }
     }
@@ -453,7 +380,7 @@ where
             unsafe {
                 // Safety: As this thread is a winner of the physical CAS, it is the only one who
                 // retires this chain.
-                let guard = &CsGuard::unprotected();
+                let guard = &Unprotected::new();
 
                 // destroy the subtree of successor except target_sibling
                 let mut stack = vec![record.successor.shared()];
@@ -466,7 +393,7 @@ where
                         continue;
                     }
 
-                    let node_ref = node.deref_unchecked();
+                    let node_ref = node.deref();
 
                     stack.push(node_ref.left.load(Ordering::Relaxed, guard));
                     stack.push(node_ref.right.load(Ordering::Relaxed, guard));
@@ -478,14 +405,20 @@ where
         is_unlinked
     }
 
-    pub fn get(&self, key: &K, output: &mut Output<K, V>, handle: &mut Thread) -> bool {
+    pub fn get(&self, key: &K, output: &mut SeekRecord<K, V>, handle: &mut Thread) -> bool {
         self.seek_leaf(key, output, handle);
-        let leaf_node = unsafe { output.0.leaf.deref_unchecked() };
+        let leaf_node = unsafe { output.leaf.deref() };
 
         leaf_node.key.cmp(key) == cmp::Ordering::Equal
     }
 
-    pub fn insert(&self, key: K, value: V, output: &mut Output<K, V>, handle: &mut Thread) -> bool {
+    pub fn insert(
+        &self,
+        key: K,
+        value: V,
+        output: &mut SeekRecord<K, V>,
+        handle: &mut Thread,
+    ) -> bool {
         let new_leaf = Owned::new(Node::new_leaf(Key::Fin(key.clone()), Some(value))).into_shared();
 
         let mut new_internal = Owned::new(Node {
@@ -498,22 +431,20 @@ where
 
         loop {
             self.seek(&key, output, handle);
-            let record = &output.0;
 
-            let (new_left, new_right) = match unsafe { record.leaf.deref_unchecked() }.key.cmp(&key)
-            {
+            let (new_left, new_right) = match unsafe { output.leaf.deref() }.key.cmp(&key) {
                 cmp::Ordering::Equal => unsafe {
                     // Newly created nodes that failed to be inserted are free'd here.
                     drop(new_leaf.into_owned());
                     drop(new_internal.into_owned());
                     return false;
                 },
-                cmp::Ordering::Greater => (new_leaf, record.leaf.shared()),
-                cmp::Ordering::Less => (record.leaf.shared(), new_leaf),
+                cmp::Ordering::Greater => (new_leaf, output.leaf.shared()),
+                cmp::Ordering::Less => (output.leaf.shared(), new_leaf),
             };
 
-            let new_internal_node = unsafe { new_internal.deref_mut_unchecked() };
-            new_internal_node.key = unsafe { new_right.deref_unchecked() }.key.clone();
+            let new_internal_node = unsafe { new_internal.deref_mut() };
+            new_internal_node.key = unsafe { new_right.deref() }.key.clone();
             new_internal_node
                 .left
                 .store(new_left, Ordering::Relaxed, handle);
@@ -522,8 +453,8 @@ where
                 .store(new_right, Ordering::Relaxed, handle);
 
             // NOTE: record.leaf_addr is called childAddr in the paper.
-            match record.leaf_addr().compare_exchange(
-                record.leaf.shared(),
+            match output.leaf_addr().compare_exchange(
+                output.leaf.shared(),
                 new_internal,
                 Ordering::AcqRel,
                 Ordering::Acquire,
@@ -533,32 +464,31 @@ where
                 Err(e) => {
                     // Insertion failed. Help the conflicting remove operation if needed.
                     // NOTE: The paper version checks if any of the mark is set, which is redundant.
-                    if e.actual.with_tag(Marks::empty().bits()) == record.leaf.shared() {
-                        self.cleanup(record, handle);
+                    if e.actual.with_tag(Marks::empty().bits()) == output.leaf.shared() {
+                        self.cleanup(output, handle);
                     }
                 }
             }
         }
     }
 
-    pub fn remove<'g>(&self, key: &K, output: &mut Output<K, V>, handle: &mut Thread) -> bool {
+    pub fn remove<'g>(&self, key: &K, output: &mut SeekRecord<K, V>, handle: &mut Thread) -> bool {
         // `leaf` and `value` are the snapshot of the node to be deleted.
         // NOTE: The paper version uses one big loop for both phases.
         // injection phase
         loop {
             self.seek(key, output, handle);
-            let record = &output.0;
 
-            let leaf_node = unsafe { record.leaf.deref_unchecked() };
+            let leaf_node = unsafe { output.leaf.deref() };
 
             if leaf_node.key.cmp(key) != cmp::Ordering::Equal {
                 return false;
             }
 
             // Try injecting the deletion flag.
-            match record.leaf_addr().compare_exchange(
-                record.leaf.shared(),
-                record
+            match output.leaf_addr().compare_exchange(
+                output.leaf.shared(),
+                output
                     .leaf
                     .shared()
                     .with_tag(Marks::new(true, false).bits()),
@@ -568,7 +498,7 @@ where
             ) {
                 Ok(_) => {
                     // Finalize the node to be removed
-                    if self.cleanup(record, handle) {
+                    if self.cleanup(output, handle) {
                         return true;
                     }
                     // In-place cleanup failed. Enter the cleanup phase.
@@ -579,25 +509,25 @@ where
                     // case 1. record.leaf_addr(e.current) points to another node: restart.
                     // case 2. Another thread flagged/tagged the edge to leaf: help and restart
                     // NOTE: The paper version checks if any of the mark is set, which is redundant.
-                    if record.leaf.shared() == e.actual.with_tag(Marks::empty().bits()) {
-                        self.cleanup(record, handle);
+                    if output.leaf.shared() == e.actual.with_tag(Marks::empty().bits()) {
+                        self.cleanup(output, handle);
                     }
                 }
             }
         }
 
-        let leaf = output.0.leaf.shared().into_usize();
+        let leaf = output.leaf.shared().into_usize();
 
         // cleanup phase
         loop {
             self.seek(key, output, handle);
-            if output.0.leaf.as_raw() != leaf {
+            if output.leaf.as_raw() != leaf {
                 // The edge to leaf flagged for deletion was removed by a helping thread
                 return true;
             }
 
             // leaf is still present in the tree.
-            if self.cleanup(&output.0, handle) {
+            if self.cleanup(output, handle) {
                 return true;
             }
         }
@@ -609,7 +539,7 @@ where
     K: Ord + Clone,
     V: Clone,
 {
-    type Output = Output<K, V>;
+    type Output = SeekRecord<K, V>;
 
     fn new() -> Self {
         Self::new()

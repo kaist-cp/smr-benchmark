@@ -104,8 +104,6 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
     let map = &M::new(local);
     strategy.prefill(config, map, global);
 
-    let collector = &hp_sharp::Global::new();
-
     let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
     let (ops_sender, ops_receiver) = mpsc::channel();
     let (mem_sender, mem_receiver) = mpsc::channel();
@@ -118,8 +116,8 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
                 let mut samples = 0usize;
                 let mut acc = 0usize;
                 let mut peak = 0usize;
-                let mut garb_acc = 0usize;
-                let mut garb_peak = 0usize;
+                let garb_acc = 0usize;
+                let garb_peak = 0usize;
                 barrier.clone().wait();
 
                 let start = Instant::now();
@@ -132,10 +130,6 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
 
                         acc += allocated;
                         peak = max(peak, allocated);
-
-                        let garbages = collector.garbage_count();
-                        garb_acc += garbages;
-                        garb_peak = max(garb_peak, garbages);
 
                         next_sampling = now + config.sampling_period;
                     }

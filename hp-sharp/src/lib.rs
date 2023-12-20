@@ -1,6 +1,7 @@
 // To use  `#[cfg(sanitize = "address")]`
 #![feature(cfg_sanitize)]
 #![feature(thread_local)]
+#![feature(const_maybe_uninit_zeroed)]
 
 mod deferred;
 mod epoch;

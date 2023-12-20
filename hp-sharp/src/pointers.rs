@@ -383,7 +383,7 @@ impl<T> Shield<T> {
     pub fn protect(&mut self, ptr: Shared<'_, T>) {
         let raw = ptr.untagged().as_raw();
         self.hazptr
-            .protect_raw(raw as *const T as *mut T, Ordering::Relaxed);
+            .protect_raw(raw as *const T as *mut T, Ordering::Release);
         self.inner = raw;
     }
 
@@ -396,12 +396,12 @@ impl<T> Shield<T> {
     }
 
     #[inline]
-    pub unsafe fn deref_unchecked<'s>(&'s self) -> &'s T {
+    pub unsafe fn deref<'s>(&'s self) -> &'s T {
         &*decompose_data::<T>(self.inner).0
     }
 
     #[inline]
-    pub unsafe fn deref_mut_unchecked<'s>(&'s mut self) -> &'s mut T {
+    pub unsafe fn deref_mut<'s>(&'s mut self) -> &'s mut T {
         &mut *decompose_data::<T>(self.inner).0
     }
 

@@ -244,7 +244,7 @@ where
                     if next.tag() != 0 {
                         next = next.with_tag(0);
                         cursor.prev.protect(prev);
-                        cursor.curr.protect(next);
+                        cursor.curr.protect(curr);
                         guard.mask(|guard| {
                             prev.deref()
                                 .next

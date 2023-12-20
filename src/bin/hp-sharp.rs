@@ -1,5 +1,5 @@
 use crossbeam_utils::thread::scope;
-use hp_sharp::GlobalHPSharp;
+use hp_sharp::{GLOBAL, THREAD};
 use rand::prelude::*;
 use std::cmp::max;
 use std::io::{stdout, Write};
@@ -104,8 +104,6 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
     let map = &M::new();
     strategy.prefill(config, map);
 
-    let collector = &hp_sharp::Global::new();
-
     let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
     let (ops_sender, ops_receiver) = mpsc::channel();
     let (mem_sender, mem_receiver) = mpsc::channel();
@@ -133,7 +131,7 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
                         acc += allocated;
                         peak = max(peak, allocated);
 
-                        let garbages = collector.garbage_count();
+                        let garbages = GLOBAL.garbage_count();
                         garb_acc += garbages;
                         garb_peak = max(garb_peak, garbages);
 
@@ -157,30 +155,32 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
         for _ in 0..config.threads {
             let ops_sender = ops_sender.clone();
             s.spawn(move |_| {
-                let mut ops: u64 = 0;
-                let mut rng = &mut rand::thread_rng();
-                let handle = &mut collector.register();
-                let output = &mut M::empty_output(handle);
-                barrier.clone().wait();
-                let start = Instant::now();
+                THREAD.with(|th| {
+                    let handle = &mut **th.borrow_mut();
+                    let mut ops: u64 = 0;
+                    let mut rng = &mut rand::thread_rng();
+                    let output = &mut M::empty_output(handle);
+                    barrier.clone().wait();
+                    let start = Instant::now();
 
-                while start.elapsed() < config.duration {
-                    let key = config.key_dist.sample(rng);
-                    match Op::OPS[config.op_dist.sample(&mut rng)] {
-                        Op::Get => {
-                            map.get(&key, output, handle);
+                    while start.elapsed() < config.duration {
+                        let key = config.key_dist.sample(rng);
+                        match Op::OPS[config.op_dist.sample(&mut rng)] {
+                            Op::Get => {
+                                map.get(&key, output, handle);
+                            }
+                            Op::Insert => {
+                                let value = key.clone();
+                                map.insert(key, value, output, handle);
+                            }
+                            Op::Remove => {
+                                map.remove(&key, output, handle);
+                            }
                         }
-                        Op::Insert => {
-                            let value = key.clone();
-                            map.insert(key, value, output, handle);
-                        }
-                        Op::Remove => {
-                            map.remove(&key, output, handle);
-                        }
+                        ops += 1;
                     }
-                    ops += 1;
-                }
-                ops_sender.send(ops).unwrap();
+                    ops_sender.send(ops).unwrap();
+                })
             });
         }
     })

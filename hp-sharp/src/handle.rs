@@ -7,7 +7,7 @@ use crate::pointers::Shared;
 use crate::rollback::Rollbacker;
 
 pub trait Invalidate {
-    fn is_invalidated(&self, guard: &CsGuard) -> bool;
+    fn is_invalidated(&self, guard: &Unprotected) -> bool;
 }
 
 pub trait Handle {}
@@ -202,14 +202,14 @@ impl RollbackProof for RaGuard {
 }
 
 /// A dummy guard that do not provide an epoch protection.
+/// With this guard, one can perform any operations on atomic pointers.
+/// Of course, it is `unsafe`. However, it is useful when it is guaranteed that
+/// an exclusive ownership of a portion of data is acquired (e.g. `drop` of a
+/// concurrent data structure).
 pub struct Unprotected;
 
 impl Unprotected {
     /// Creates a dummy guard that do not provide an epoch protection.
-    /// With this guard, one can perform any operations on atomic pointers.
-    /// Of course, it is `unsafe`. However, it is useful when it is guaranteed that
-    /// an exclusive ownership of a portion of data is acquired (e.g. `drop` of a
-    /// concurrent data structure).
     ///
     /// # Safety
     ///
@@ -221,3 +221,9 @@ impl Unprotected {
 }
 
 impl Handle for Unprotected {}
+
+impl RollbackProof for Unprotected {
+    unsafe fn retire<'r, T: Invalidate>(&mut self, ptr: Shared<'r, T>) {
+        free::<T>(ptr.untagged().as_raw() as *const u8 as *mut u8);
+    }
+}
