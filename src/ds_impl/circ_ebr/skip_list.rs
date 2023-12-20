@@ -177,28 +177,34 @@ where
             level -= 1;
         }
 
+        let mut curr = Snapshot::new();
         while level >= 1 {
             level -= 1;
-            let mut curr = unsafe { pred.deref() }.next[level].load_ss(cs);
+            curr = unsafe { pred.deref() }.next[level].load_ss(cs);
 
             loop {
                 let curr_node = some_or!(curr.as_ref(), break);
-                match curr_node.key.cmp(key) {
-                    std::cmp::Ordering::Less => {
-                        pred = curr;
-                        curr = curr_node.next[level].load_ss(cs);
-                    }
-                    std::cmp::Ordering::Equal => {
-                        if curr_node.next[level].load(Ordering::Acquire).tag() == 0 {
-                            return Some(curr);
-                        }
-                        return None;
-                    }
-                    std::cmp::Ordering::Greater => break,
+                let succ = curr_node.next[level].load_ss(cs);
+
+                if succ.tag() != 0 {
+                    curr = succ;
+                    continue;
+                }
+
+                if curr_node.key < *key {
+                    pred = curr;
+                    curr = succ;
+                } else {
+                    break;
                 }
             }
         }
 
+        if let Some(curr_node) = curr.as_ref() {
+            if curr_node.key == *key {
+                return Some(curr);
+            }
+        }
         None
     }
 

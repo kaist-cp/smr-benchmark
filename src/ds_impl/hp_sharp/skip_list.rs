@@ -172,15 +172,14 @@ where
             curr = pred[level].load(Ordering::Acquire, guard);
 
             loop {
-                let mut succ = some_or!(unsafe { curr.as_ref() }, break).next[level]
-                    .load(Ordering::Acquire, guard);
-                while succ.tag() != 0 {
+                let curr_node = some_or!(unsafe { curr.as_ref() }, break);
+                let succ = curr_node.next[level].load(Ordering::Acquire, guard);
+
+                if succ.tag() != 0 {
                     curr = succ;
-                    succ = some_or!(unsafe { curr.as_ref() }, break).next[level]
-                        .load(Ordering::Acquire, guard);
+                    continue;
                 }
 
-                let curr_node = some_or!(unsafe { curr.as_ref() }, break);
                 if curr_node.key < *key {
                     pred = &curr_node.next;
                     curr = succ;
@@ -190,13 +189,12 @@ where
             }
         }
 
-        let Some(curr_node) = (unsafe { curr.as_ref() }) else {
-            return false;
+        if let Some(curr_node) = unsafe { curr.as_ref() } {
+            if curr_node.key == *key {
+                cursor.found.protect(curr);
+                return true;
+            }
         };
-        if curr_node.key == *key {
-            cursor.found.protect(curr);
-            return true;
-        }
         false
     }
 

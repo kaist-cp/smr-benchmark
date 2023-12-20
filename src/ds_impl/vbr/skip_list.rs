@@ -168,32 +168,35 @@ where
         }
 
         let mut pred = head;
+        let mut curr = Shared::null();
         while level >= 1 {
             level -= 1;
-            let mut curr = unsafe { pred.deref() }.next[level].load(Ordering::Acquire, guard)?;
+            curr = unsafe { pred.deref() }.next[level].load(Ordering::Acquire, guard)?;
 
             loop {
                 let curr_node = some_or!(curr.as_ref(), break);
-                match curr_node.key.get(guard)?.cmp(key) {
-                    std::cmp::Ordering::Less => {
-                        pred = curr;
-                        curr = curr_node.next[level].load(Ordering::Acquire, guard)?;
-                    }
-                    std::cmp::Ordering::Equal => {
-                        if curr_node.next[level]
-                            .load(Ordering::Acquire, guard)?
-                            .tag()?
-                            == 0
-                        {
-                            cursor.found = Some(curr)
-                        }
-                        return Ok(cursor);
-                    }
-                    std::cmp::Ordering::Greater => break,
+                let succ = curr_node.next[level].load(Ordering::Acquire, guard)?;
+
+                if succ.tag()? != 0 {
+                    curr = succ;
+                    continue;
+                }
+
+                if curr_node.key.get(guard)? < *key {
+                    pred = curr;
+                    curr = succ;
+                    continue;
+                } else {
+                    break;
                 }
             }
         }
 
+        if let Some(curr_node) = curr.as_ref() {
+            if curr_node.key.get(guard)? == *key {
+                cursor.found = Some(curr)
+            }
+        }
         Ok(cursor)
     }
 

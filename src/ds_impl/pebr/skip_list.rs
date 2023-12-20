@@ -168,34 +168,39 @@ where
         }
 
         let mut pred = &self.head;
+        let mut curr = Shared::null();
         while level >= 1 {
             level -= 1;
-            let mut curr = pred[level].load(Ordering::Acquire, guard);
+            curr = pred[level].load(Ordering::Acquire, guard);
 
             loop {
                 handle.succs_h[level].defend(curr, guard)?;
                 let curr_node = some_or!(unsafe { curr.as_ref() }, break);
+                let succ = curr_node.next[level].load(Ordering::Acquire, guard);
 
-                match curr_node.key.cmp(key) {
-                    std::cmp::Ordering::Less => {
-                        pred = &curr_node.next;
-                        curr = curr_node.next[level].load(Ordering::Acquire, guard);
-                        mem::swap(&mut handle.succs_h[level], &mut handle.preds_h[level]);
-                    }
-                    std::cmp::Ordering::Equal => {
-                        if curr_node.next[level].load(Ordering::Acquire, guard).tag() == 0 {
-                            cursor.found = Some(curr);
-                            handle.found_h.defend(curr, guard)?;
-                            return Ok(Some(cursor));
-                        } else {
-                            return Ok(None);
-                        }
-                    }
-                    std::cmp::Ordering::Greater => break,
+                if succ.tag() != 0 {
+                    curr = succ;
+                    continue;
+                }
+
+                if curr_node.key < *key {
+                    pred = &curr_node.next;
+                    curr = curr_node.next[level].load(Ordering::Acquire, guard);
+                    mem::swap(&mut handle.succs_h[level], &mut handle.preds_h[level]);
+                } else {
+                    break;
                 }
             }
         }
-        return Ok(None);
+
+        if let Some(curr_node) = unsafe { curr.as_ref() } {
+            if curr_node.key == *key {
+                cursor.found = Some(curr);
+                handle.found_h.defend(curr, guard)?;
+                return Ok(Some(cursor));
+            }
+        }
+        Ok(None)
     }
 
     fn find_optimistic<'g>(

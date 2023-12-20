@@ -173,23 +173,28 @@ where
 
             loop {
                 let curr_node = some_or!(cursor.succs[0].as_ref(), break);
-                match curr_node.key.cmp(key) {
-                    std::cmp::Ordering::Less => {
-                        Snapshot::swap(&mut cursor.preds[0], &mut cursor.succs[0]);
-                        cursor.succs[0].load(&unsafe { cursor.preds[0].deref() }.next[level], cs);
-                    }
-                    std::cmp::Ordering::Equal => {
-                        let clean = curr_node.next[level].load(Ordering::Acquire).tag() == 0;
-                        if clean {
-                            cursor.found_level = Some(0);
-                        }
-                        return clean;
-                    }
-                    std::cmp::Ordering::Greater => break,
+                cursor.next.load(&curr_node.next[level], cs);
+
+                if cursor.next.tag() != 0 {
+                    Snapshot::swap(&mut cursor.succs[0], &mut cursor.next);
+                    continue;
+                }
+
+                if curr_node.key < *key {
+                    Snapshot::swap(&mut cursor.preds[0], &mut cursor.succs[0]);
+                    Snapshot::swap(&mut cursor.succs[0], &mut cursor.next);
+                } else {
+                    break;
                 }
             }
         }
 
+        if let Some(curr_node) = cursor.succs[0].as_ref() {
+            if curr_node.key == *key {
+                cursor.found_level = Some(0);
+                return true;
+            }
+        }
         false
     }
 
