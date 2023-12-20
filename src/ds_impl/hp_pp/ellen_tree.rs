@@ -740,7 +740,7 @@ where
         handle: &'hp mut Handle<'domain>,
     ) -> bool {
         // Precondition: op points to a DInfo record (i.e., it is not ⊥)
-        let op_ref = unsafe { untagged(op).as_ref().unwrap().clone() };
+        let op_ref = unsafe { untagged(op).as_ref().unwrap() };
         let Update { gp, p, pupdate, .. } = op_ref;
 
         let gp_ref = unsafe { gp.as_ref() }.unwrap();
@@ -807,7 +807,7 @@ where
     // 2. op must be protected by aux_update_h.
     fn help_marked<'domain, 'hp>(&self, op: *mut Update<K, V>, handle: &'hp mut Handle<'domain>) {
         // Precondition: op points to a DInfo record (i.e., it is not ⊥)
-        let op_ref = unsafe { untagged(op).as_ref().unwrap().clone() };
+        let op_ref = unsafe { untagged(op).as_ref().unwrap() };
         let Update { gp, l_other, .. } = op_ref;
         let gp_node = unsafe { gp.as_ref().unwrap() };
 
@@ -831,7 +831,7 @@ where
     // 2. op must be protected by aux_update_h.
     fn help_insert<'domain, 'hp>(&self, op: *mut Update<K, V>, handle: &'hp mut Handle<'domain>) {
         // Precondition: op points to an IInfo record (i.e., it is not ⊥)
-        let op_ref = unsafe { untagged(op).as_ref().unwrap().clone() };
+        let op_ref = unsafe { untagged(op).as_ref().unwrap() };
         let Update {
             p, new_internal, ..
         } = op_ref;
@@ -874,7 +874,7 @@ where
     V: Clone,
 {
     fn do_unlink(&self) -> Result<Vec<*mut Node<K, V>>, ()> {
-        let op_ref = unsafe { untagged(self.op).as_ref().unwrap().clone() };
+        let op_ref = unsafe { untagged(self.op).as_ref().unwrap() };
         let Update {
             gp,
             p,

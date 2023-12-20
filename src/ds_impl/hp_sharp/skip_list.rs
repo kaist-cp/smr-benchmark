@@ -190,7 +190,9 @@ where
             }
         }
 
-        let Some(curr_node) = (unsafe { curr.as_ref() }) else { return false };
+        let Some(curr_node) = (unsafe { curr.as_ref() }) else {
+            return false;
+        };
         if curr_node.key == *key {
             cursor.found.protect(curr);
             return true;
