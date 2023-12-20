@@ -545,6 +545,7 @@ where
             flag,
         };
 
+        let link = untagged(link);
         unsafe { try_unlink(unlink, slice::from_ref(&link)) }
     }
 

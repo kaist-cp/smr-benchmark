@@ -265,7 +265,8 @@ where
                     if (tag(succ) & 1) != 0 {
                         let frontier = &mut [ptr::null_mut(); MAX_HEIGHT][0..curr_ref.height];
                         for level in 0..curr_ref.height {
-                            frontier[level] = curr_ref.next[level].load(Ordering::Acquire);
+                            frontier[level] =
+                                untagged(curr_ref.next[level].load(Ordering::Acquire));
                         }
                         unsafe {
                             handle.thread.try_unlink(
