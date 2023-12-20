@@ -1,7 +1,6 @@
 // To use  `#[cfg(sanitize = "address")]`
 #![feature(cfg_sanitize)]
 #![feature(thread_local)]
-#![feature(const_maybe_uninit_zeroed)]
 
 mod deferred;
 mod epoch;
@@ -31,16 +30,15 @@ mod test {
     use atomic::Ordering;
 
     use super::THREAD;
-    use crate::handle::{CsGuard, Invalidate, RollbackProof, Thread};
+    use crate::handle::{Invalidate, RollbackProof, Thread, Unprotected};
     use crate::pointers::{Atomic, Owned, Shield};
-    use crate::Unprotected;
 
     struct Node {
         next: Atomic<Node>,
     }
 
     impl Invalidate for Node {
-        fn is_invalidated(&self, _: &CsGuard) -> bool {
+        fn is_invalidated(&self, _: &Unprotected) -> bool {
             // We do not use traverse_loop here.
             false
         }

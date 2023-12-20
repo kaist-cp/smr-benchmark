@@ -22,7 +22,7 @@ struct Node<K, V> {
 
 impl<K, V> Invalidate for Node<K, V> {
     #[inline]
-    fn is_invalidated(&self, guard: &CsGuard) -> bool {
+    fn is_invalidated(&self, guard: &Unprotected) -> bool {
         (self.next.load(Ordering::Acquire, guard).tag() & 1) != 0
     }
 }
