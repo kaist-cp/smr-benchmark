@@ -541,8 +541,6 @@ impl Local {
             debug_assert_eq!(self.available_indices, (0..len).collect::<Vec<_>>());
         }
 
-        // Sync with `LocalList::acquire`.
-        fence(Ordering::SeqCst);
         self.using.store(false, Ordering::Release);
     }
 }
@@ -610,14 +608,12 @@ impl LocalList {
         let tid = pthread_self();
         let mut prev_link = &self.head;
         let local = loop {
-            // Sync with `Thread::drop`.
-            fence(Ordering::SeqCst);
             match unsafe { prev_link.load(Ordering::Acquire).as_mut() } {
                 Some(curr) => {
                     if !curr.using.load(Ordering::Acquire)
                         && curr
                             .using
-                            .compare_exchange(false, true, Ordering::Release, Ordering::Relaxed)
+                            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
                             .is_ok()
                     {
                         break curr;
@@ -630,7 +626,7 @@ impl LocalList {
                         .compare_exchange(
                             null_mut(),
                             new_local,
-                            Ordering::Release,
+                            Ordering::AcqRel,
                             Ordering::Relaxed,
                         )
                         .is_ok()
