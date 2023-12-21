@@ -80,7 +80,7 @@ impl Global {
     /// manager.
     #[inline]
     #[must_use]
-    fn acquire<'s>(&'s self) -> &'s mut Local {
+    fn acquire(&self) -> &mut Local {
         self.locals.acquire(self)
     }
 
@@ -501,10 +501,7 @@ impl Local {
         // Double the size of the array and fill the empty slots with `null_mut`s.
         let origin_iter = array.iter().map(|slot| slot.load(Ordering::Relaxed));
         let new_iter = std::iter::repeat(null_mut()).take(prev_len);
-        let extended = origin_iter
-            .chain(new_iter)
-            .map(|ptr| AtomicPtr::new(ptr))
-            .collect();
+        let extended = origin_iter.chain(new_iter).map(AtomicPtr::new).collect();
 
         self.hazptrs
             .store(Box::into_raw(Box::new(extended)), Ordering::Release);
@@ -604,6 +601,7 @@ impl LocalList {
     /// Otherwise, it tries to append a new slot at the end of the list,
     /// and if it succeeds, returns the allocated slot.
     #[inline]
+    #[allow(clippy::mut_from_ref)]
     fn acquire<'c>(&'c self, global: &Global) -> &'c mut Local {
         let tid = pthread_self();
         let mut prev_link = &self.head;
@@ -643,7 +641,7 @@ impl LocalList {
     }
 
     /// Returns an iterator over all using `Local`s.
-    fn iter_using<'g>(&'g self) -> impl Iterator<Item = &'g Local> {
+    fn iter_using(&self) -> impl Iterator<Item = &Local> {
         LocalIter {
             curr: self.head.load(Ordering::Acquire),
             predicate: |local| local.using.load(Ordering::Acquire),

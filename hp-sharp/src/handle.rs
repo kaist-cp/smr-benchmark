@@ -19,7 +19,7 @@ pub trait RollbackProof: Handle {
     /// # Safety
     ///
     /// The given pointer must be a valid memory location which can be dereferenced.
-    unsafe fn retire<'r, T: Invalidate>(&mut self, ptr: Shared<'r, T>);
+    unsafe fn retire<T: Invalidate>(&mut self, ptr: Shared<T>);
 }
 
 /// A thread-local handle managing local epoch and defering.
@@ -118,7 +118,7 @@ impl Handle for Thread {}
 
 impl RollbackProof for Thread {
     #[inline]
-    unsafe fn retire<'r, T: Invalidate>(&mut self, ptr: Shared<'r, T>) {
+    unsafe fn retire<T: Invalidate>(&mut self, ptr: Shared<T>) {
         let collected = self.defer(Deferred::new(
             ptr.untagged().as_raw() as *const u8 as *mut u8,
             free::<T>,
@@ -173,11 +173,7 @@ impl CsGuard {
         R: Copy,
     {
         fence(Ordering::SeqCst);
-        let result = self.rb.atomic(|_| {
-            let mut guard = RaGuard { local: self.local };
-            let result = body(&mut guard);
-            result
-        });
+        let result = self.rb.atomic(|_| body(&mut RaGuard { local: self.local }));
         compiler_fence(Ordering::SeqCst);
         result
     }
@@ -196,7 +192,7 @@ pub struct RaGuard {
 impl Handle for RaGuard {}
 
 impl RollbackProof for RaGuard {
-    unsafe fn retire<'r, T: Invalidate>(&mut self, ptr: Shared<'r, T>) {
+    unsafe fn retire<T: Invalidate>(&mut self, ptr: Shared<T>) {
         ManuallyDrop::new(Thread { local: self.local }).retire(ptr);
     }
 }
@@ -223,7 +219,7 @@ impl Unprotected {
 impl Handle for Unprotected {}
 
 impl RollbackProof for Unprotected {
-    unsafe fn retire<'r, T: Invalidate>(&mut self, ptr: Shared<'r, T>) {
+    unsafe fn retire<T: Invalidate>(&mut self, ptr: Shared<T>) {
         free::<T>(ptr.untagged().as_raw() as *const u8 as *mut u8);
     }
 }

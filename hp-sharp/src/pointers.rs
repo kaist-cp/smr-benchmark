@@ -156,10 +156,7 @@ impl<'r, T> Default for Shared<'r, T> {
 impl<'r, T> Clone for Shared<'r, T> {
     #[inline]
     fn clone(&self) -> Self {
-        Shared {
-            inner: self.inner,
-            _marker: PhantomData,
-        }
+        *self
     }
 }
 
@@ -204,6 +201,10 @@ impl<'r, T> Shared<'r, T> {
     ///
     /// It is possible to directly dereference a [`Shared`] if and only if the current context is
     /// in a critical section.
+    ///
+    /// # Safety
+    ///
+    /// The `self` must be a valid memory location.
     #[inline]
     pub unsafe fn as_ref(&self) -> Option<&'r T> {
         unsafe { decompose_data::<T>(self.inner).0.as_ref() }
@@ -215,6 +216,10 @@ impl<'r, T> Shared<'r, T> {
     ///
     /// It is possible to directly dereference a [`Shared`] if and only if the current context is
     /// in a critical section.
+    ///
+    /// # Safety
+    ///
+    /// The `self` must be a valid memory location.
     #[inline]
     pub unsafe fn as_mut(&mut self) -> Option<&'r mut T> {
         unsafe { decompose_data::<T>(self.inner).0.as_mut() }
@@ -409,17 +414,27 @@ impl<T> Shield<T> {
     ///
     /// Returns `None` if the pointer is null, or else a reference to the object wrapped in `Some`.
     #[inline]
-    pub fn as_ref<'s>(&'s self) -> Option<&'s T> {
+    pub fn as_ref(&self) -> Option<&T> {
         unsafe { decompose_data::<T>(self.inner).0.as_ref() }
     }
 
+    /// Converts the pointer to a reference.
+    ///
+    /// # Safety
+    ///
+    /// The given pointer must be a valid memory location.
     #[inline]
-    pub unsafe fn deref<'s>(&'s self) -> &'s T {
+    pub unsafe fn deref(&self) -> &T {
         &*decompose_data::<T>(self.inner).0
     }
 
+    /// Converts the pointer to a mutable reference.
+    ///
+    /// # Safety
+    ///
+    /// The given pointer must be a valid memory location.
     #[inline]
-    pub unsafe fn deref_mut<'s>(&'s mut self) -> &'s mut T {
+    pub unsafe fn deref_mut(&mut self) -> &mut T {
         &mut *decompose_data::<T>(self.inner).0
     }
 
@@ -427,7 +442,7 @@ impl<T> Shield<T> {
     ///
     /// Returns `None` if the pointer is null, or else a reference to the object wrapped in `Some`.
     #[inline]
-    pub fn as_mut<'s>(&'s self) -> Option<&'s mut T> {
+    pub fn as_mut(&self) -> Option<&mut T> {
         unsafe { decompose_data::<T>(self.inner).0.as_mut() }
     }
 
@@ -465,7 +480,7 @@ impl<T> Shield<T> {
 
     /// Creates a `Shared` pointer whose lifetime is equal to `self`.
     #[inline]
-    pub fn shared<'r>(&'r self) -> Shared<'r, T> {
+    pub fn shared(&self) -> Shared<T> {
         Shared::new(self.inner)
     }
 }

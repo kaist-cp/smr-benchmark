@@ -98,7 +98,7 @@ impl Rollbacker {
         {
             self.restart();
         }
-        return result;
+        result
     }
 
     /// Returns to the checkpoint manually.

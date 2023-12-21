@@ -54,7 +54,7 @@ impl<T> Pile<T> {
         }));
         let mut last_node = first_node;
 
-        while let Some(value) = iter.next() {
+        for value in iter {
             let node = Box::into_raw(Box::new(Node {
                 data: value,
                 next: AtomicPtr::new(null_mut()),
