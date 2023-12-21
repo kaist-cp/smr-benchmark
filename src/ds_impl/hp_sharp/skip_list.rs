@@ -102,12 +102,15 @@ impl<K, V> Cursor<K, V> {
     }
 
     fn initialize(&mut self, head: &Tower<K, V>) {
-        let head = unsafe { Shared::from_usize(head as *const _ as usize) };
-        for pred in &mut self.preds {
-            pred.protect(head);
-        }
-        for succ in &mut self.succs {
-            succ.protect(Shared::null());
+        unsafe {
+            for pred in &mut self.preds {
+                // Safety: `head` is always a valid location.
+                pred.store_wo_prot(Shared::from_usize(head as *const _ as usize));
+            }
+            for succ in &mut self.succs {
+                // Safety: A null pointer is never dereferenced.
+                succ.store_wo_prot(Shared::null())
+            }
         }
     }
 }

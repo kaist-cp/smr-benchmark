@@ -185,8 +185,11 @@ impl<'r, T> Shared<'r, T> {
 
     /// Returns a new null shared pointer.
     #[inline]
-    pub fn null() -> Self {
-        Self::new(0)
+    pub const fn null() -> Self {
+        Self {
+            inner: 0,
+            _marker: PhantomData,
+        }
     }
 
     /// Returns `true` if the pointer is null.
@@ -384,7 +387,22 @@ impl<T> Shield<T> {
         let raw = ptr.untagged().as_raw();
         self.hazptr
             .protect_raw(raw as *const T as *mut T, Ordering::Release);
-        self.inner = raw;
+        self.inner = ptr.inner;
+    }
+
+    /// Stores the given pointer only in the inner allocation **without any protections**.
+    /// It is usually faster than `protect` because it skips an indirection to the hazard slot.
+    /// (Of course however, it is `unsafe`.)
+    ///
+    /// # Safety
+    ///
+    /// The given pointer must be either
+    ///
+    /// 1. a null pointer, or
+    /// 2. a dereferencable location at least while this `Shield` is alive.
+    #[inline]
+    pub unsafe fn store_wo_prot(&mut self, ptr: Shared<'_, T>) {
+        self.inner = ptr.inner;
     }
 
     /// Converts the pointer to a reference.
