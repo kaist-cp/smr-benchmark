@@ -1,8 +1,6 @@
 use std::mem::ManuallyDrop;
 use std::sync::atomic::{compiler_fence, fence, Ordering};
 
-use rustc_hash::FxHashSet;
-
 use crate::deferred::Deferred;
 use crate::internal::{free, Local};
 use crate::pointers::Shared;
@@ -91,7 +89,7 @@ impl Thread {
         });
     }
 
-    pub(crate) unsafe fn do_reclamation(&mut self, deferred: Vec<Deferred>) -> Vec<Deferred> {
+    pub(crate) unsafe fn do_reclamation(&mut self, mut deferred: Vec<Deferred>) -> Vec<Deferred> {
         let deferred_len = deferred.len();
         if deferred_len < 256 {
             return deferred;
@@ -99,15 +97,20 @@ impl Thread {
 
         fence(Ordering::SeqCst);
 
-        let guarded_ptrs = self
-            .local_mut()
-            .iter_guarded_ptrs()
-            .collect::<FxHashSet<_>>();
+        let mut guarded = vec![false; deferred_len];
+        deferred.sort_unstable_by_key(|d| d.data());
+
+        for g in self.local_mut().iter_guarded_ptrs() {
+            if let Ok(idx) = deferred.binary_search_by_key(&g, |d| d.data()) {
+                guarded[idx] = true;
+            }
+        }
 
         let not_freed: Vec<Deferred> = deferred
             .into_iter()
-            .filter_map(|element| {
-                if guarded_ptrs.contains(&element.data()) {
+            .enumerate()
+            .filter_map(|(i, element)| {
+                if guarded[i] {
                     Some(element)
                 } else {
                     unsafe { element.execute() };
