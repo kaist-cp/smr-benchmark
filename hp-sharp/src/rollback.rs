@@ -112,13 +112,8 @@ impl Rollbacker {
 impl Drop for Rollbacker {
     #[inline]
     fn drop(&mut self) {
-        if cfg!(any(target_arch = "x86", target_arch = "x86_64")) {
-            STATUS
-                .compare_exchange(Status::InCs.bits(), 0, Ordering::SeqCst, Ordering::SeqCst)
-                .expect("`Rollbacker` is dropped outside of a critical section");
-        } else {
-            STATUS.store(0, Ordering::Relaxed);
-        }
+        debug_assert!(Status::from_bits_truncate(STATUS.load(Ordering::Relaxed)) == Status::InCs);
+        STATUS.store(0, Ordering::Relaxed);
     }
 }
 

@@ -1,7 +1,6 @@
 use crossbeam_utils::CachePadded;
 use nix::errno::Errno;
 use nix::sys::pthread::{pthread_self, Pthread};
-use rustc_hash::FxHashSet;
 use static_assertions::const_assert;
 use std::cell::{Cell, UnsafeCell};
 use std::marker::PhantomData;
@@ -218,11 +217,14 @@ impl Global {
         new_epoch
     }
 
-    fn collect_guarded_ptrs(&self, reader: &mut Local) -> FxHashSet<*mut u8> {
+    #[inline]
+    fn iter_guarded_ptrs<'s>(
+        &'s self,
+        reader: &'s mut Local,
+    ) -> impl Iterator<Item = *mut u8> + 's {
         self.locals
             .iter_using()
             .flat_map(|local| HazardArrayIter::new(local, reader))
-            .collect()
     }
 }
 
@@ -473,8 +475,8 @@ impl Local {
     }
 
     #[inline]
-    pub(crate) fn collect_guarded_ptrs(&mut self) -> FxHashSet<*mut u8> {
-        unsafe { &*self.global }.collect_guarded_ptrs(self)
+    pub(crate) fn iter_guarded_ptrs<'s>(&'s mut self) -> impl Iterator<Item = *mut u8> + 's {
+        unsafe { &*self.global }.iter_guarded_ptrs(self)
     }
 
     #[inline]

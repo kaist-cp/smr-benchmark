@@ -1,6 +1,8 @@
 use std::mem::ManuallyDrop;
 use std::sync::atomic::{compiler_fence, fence, Ordering};
 
+use rustc_hash::FxHashSet;
+
 use crate::deferred::Deferred;
 use crate::internal::{free, Local};
 use crate::pointers::Shared;
@@ -91,13 +93,17 @@ impl Thread {
 
     pub(crate) unsafe fn do_reclamation(&mut self, deferred: Vec<Deferred>) -> Vec<Deferred> {
         let deferred_len = deferred.len();
-        if deferred.is_empty() {
-            return vec![];
+        if deferred_len < 256 {
+            return deferred;
         }
 
         fence(Ordering::SeqCst);
 
-        let guarded_ptrs = self.local_mut().collect_guarded_ptrs();
+        let guarded_ptrs = self
+            .local_mut()
+            .iter_guarded_ptrs()
+            .collect::<FxHashSet<_>>();
+
         let not_freed: Vec<Deferred> = deferred
             .into_iter()
             .filter_map(|element| {
