@@ -1,5 +1,5 @@
 use crate::MemSampler;
-use clap::{value_parser, Arg, Command, ValueEnum};
+use clap::{value_parser, Arg, ArgAction, Command, ValueEnum};
 use csv::Writer;
 use rand::distributions::{Uniform, WeightedIndex};
 use std::fmt;
@@ -261,6 +261,12 @@ pub fn setup(mm: String) -> (Config, BenchWriter) {
                 .short('o')
                 .help("Output CSV filename. Appends the data if the file already exists."),
         )
+        .arg(
+            Arg::new("dry run")
+                .long("dry-run")
+                .action(ArgAction::SetTrue)
+                .help("Check whether the arguments are parsable, without running a benchmark"),
+        )
         .get_matches();
 
     let ds = m.get_one::<DS>("data structure").cloned().unwrap();
@@ -369,5 +375,10 @@ pub fn setup(mm: String) -> (Config, BenchWriter) {
 
         mem_sampler,
     };
+
+    if m.get_flag("dry run") {
+        std::process::exit(0);
+    }
+
     (config, BenchWriter { output })
 }
