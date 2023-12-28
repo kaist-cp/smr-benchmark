@@ -16,7 +16,7 @@ pub const ENTRIES_PER_BAG: usize = 128;
 pub const INIT_BAGS_PER_LOCAL: usize = 32;
 pub const NOT_RETIRED: u64 = u64::MAX;
 
-pub struct Ver<T> {
+pub struct Inner<T> {
     birth: AtomicU64,
     retire: AtomicU64,
     data: T,
@@ -24,7 +24,7 @@ pub struct Ver<T> {
 
 pub struct Global<T> {
     epoch: CachePadded<AtomicU64>,
-    avail: BagStack<Ver<T>>,
+    avail: BagStack<Inner<T>>,
 }
 
 unsafe impl<T> Sync for Global<T> {}
@@ -44,11 +44,6 @@ impl<T> Global<T> {
     }
 
     pub fn epoch(&self) -> u64 {
-        // On weakly-ordered systems (e.g., ARM, PowerPc, etc.), reads must be ordered using
-        // special CPU load or memory fence instructions.
-        if cfg!(not(any(target_arch = "x86", target_arch = "x86_64"))) {
-            core::sync::atomic::fence(Ordering::SeqCst);
-        }
         self.epoch.load(Ordering::SeqCst)
     }
 
@@ -64,7 +59,7 @@ impl<T> Global<T> {
         }
     }
 
-    pub fn acquire(&self) -> *mut Bag<Ver<T>> {
+    pub fn acquire(&self) -> *mut Bag<Inner<T>> {
         loop {
             if let Some(bag) = self.avail.pop() {
                 return bag;
@@ -75,7 +70,7 @@ impl<T> Global<T> {
         }
     }
 
-    pub fn retire(&self, bag: *mut Bag<Ver<T>>) {
+    pub fn retire(&self, bag: *mut Bag<Inner<T>>) {
         self.avail.push(bag);
     }
 }
@@ -96,21 +91,21 @@ impl<T> BagStack<T> {
 
     pub fn pop(&self) -> Option<*mut Bag<T>> {
         loop {
-            let (ts, head) = decompose_u128::<Bag<T>>(self.head.load(Ordering::Acquire));
+            let (ts, head) = decompose_u128::<Bag<T>>(self.head.load(Ordering::SeqCst));
 
             if let Some(head_ref) = unsafe { head.as_ref() } {
-                let (_, next) = decompose_u128::<Bag<T>>(head_ref.next.load(Ordering::Acquire));
+                let (_, next) = decompose_u128::<Bag<T>>(head_ref.next.load(Ordering::SeqCst));
                 if self
                     .head
                     .compare_exchange(
                         compose_u128(ts, head),
                         compose_u128(ts + 1, next),
-                        Ordering::Release,
-                        Ordering::Relaxed,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
                     )
                     .is_ok()
                 {
-                    head_ref.next.store(0, Ordering::Release);
+                    head_ref.next.store(0, Ordering::SeqCst);
                     return Some(head);
                 }
             } else {
@@ -122,17 +117,17 @@ impl<T> BagStack<T> {
     pub fn push(&self, bag: *mut Bag<T>) {
         debug_assert!(!bag.is_null());
         loop {
-            let (ts, head) = decompose_u128::<Bag<T>>(self.head.load(Ordering::Acquire));
+            let (ts, head) = decompose_u128::<Bag<T>>(self.head.load(Ordering::SeqCst));
             unsafe { &*bag }
                 .next
-                .store(compose_u128(ts, head), Ordering::Release);
+                .store(compose_u128(ts, head), Ordering::SeqCst);
             if self
                 .head
                 .compare_exchange(
                     compose_u128(ts, head),
                     compose_u128(ts + 1, bag),
-                    Ordering::Release,
-                    Ordering::Relaxed,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
                 )
                 .is_ok()
             {
@@ -144,10 +139,10 @@ impl<T> BagStack<T> {
 
 impl<T> Drop for BagStack<T> {
     fn drop(&mut self) {
-        let mut head = decompose_u128::<Bag<T>>(self.head.load(Ordering::Relaxed)).1;
+        let mut head = decompose_u128::<Bag<T>>(self.head.load(Ordering::SeqCst)).1;
         while !head.is_null() {
             head = decompose_u128::<Bag<T>>(
-                unsafe { Box::from_raw(head) }.next.load(Ordering::Relaxed),
+                unsafe { Box::from_raw(head) }.next.load(Ordering::SeqCst),
             )
             .1;
         }
@@ -190,8 +185,8 @@ impl<T> Bag<T> {
 
 pub struct Local<T> {
     global: *const Global<T>,
-    avail: RefCell<VecDeque<*mut Bag<Ver<T>>>>,
-    retired: RefCell<VecDeque<*mut Bag<Ver<T>>>>,
+    avail: RefCell<VecDeque<*mut Bag<Inner<T>>>>,
+    retired: RefCell<VecDeque<*mut Bag<Inner<T>>>>,
 }
 
 impl<T> Local<T> {
@@ -211,7 +206,7 @@ impl<T> Local<T> {
         }
     }
 
-    fn pop_avail(&self) -> *mut Ver<T> {
+    fn pop_avail(&self) -> *mut Inner<T> {
         loop {
             // Try acquiring an available slot from a thread-local bag.
             loop {
@@ -235,13 +230,13 @@ impl<T> Local<T> {
         }
     }
 
-    fn return_avail(&self, ver: *mut Ver<T>) {
+    fn return_avail(&self, inner: *mut Inner<T>) {
         let bag = *self.avail.borrow().front().unwrap();
         let bag_ref = unsafe { &mut *bag };
-        bag_ref.push(ver);
+        bag_ref.push(inner);
     }
 
-    fn push_retired(&self, ver: *mut Ver<T>) {
+    fn push_retired(&self, inner: *mut Inner<T>) {
         // Try find an available slot from a thread-local bag.
         loop {
             let bag = match self.retired.borrow().front() {
@@ -249,7 +244,7 @@ impl<T> Local<T> {
                 None => break,
             };
             let bag_ref = unsafe { &mut *bag };
-            if bag_ref.push(ver) {
+            if bag_ref.push(inner) {
                 return;
             } else {
                 self.retired.borrow_mut().pop_front();
@@ -259,7 +254,7 @@ impl<T> Local<T> {
 
         // Create a fresh bag to store a node.
         let mut bag = Box::new(Bag::new());
-        bag.push(ver);
+        bag.push(inner);
         self.retired.borrow_mut().push_back(Box::into_raw(bag));
     }
 
@@ -293,7 +288,7 @@ impl<T> Guard<T> {
         let ptr = self.local().pop_avail();
         debug_assert!(!ptr.is_null());
         let slot_ref = unsafe { &*ptr };
-        if self.epoch <= slot_ref.retire.load(Ordering::Acquire) {
+        if self.epoch <= slot_ref.retire.load(Ordering::SeqCst) {
             self.local().return_avail(ptr);
             let _ = self.global().advance(self.epoch);
             return Err(());
@@ -301,8 +296,8 @@ impl<T> Guard<T> {
 
         debug_assert!(self.epoch > slot_ref.birth.load(Ordering::SeqCst));
 
-        slot_ref.birth.store(self.epoch, Ordering::Release);
-        slot_ref.retire.store(NOT_RETIRED, Ordering::Release);
+        slot_ref.birth.store(self.epoch, Ordering::SeqCst);
+        slot_ref.retire.store(NOT_RETIRED, Ordering::SeqCst);
         Ok(Shared {
             ptr,
             birth: self.epoch,
@@ -310,19 +305,18 @@ impl<T> Guard<T> {
     }
 
     pub unsafe fn retire(&self, ptr: Shared<T>) -> Result<(), ()> {
-        let ver = ptr
-            .as_versioned()
-            .expect("Attempted to retire a null pointer.");
+        let inner = ptr.as_inner().expect("Attempted to retire a null pointer.");
 
-        if ver.birth.load(Ordering::Acquire) > ptr.birth
-            || ver.retire.load(Ordering::Acquire) != NOT_RETIRED
+        if inner.birth.load(Ordering::SeqCst) > ptr.birth
+            || inner.retire.load(Ordering::SeqCst) != NOT_RETIRED
         {
             return Ok(());
         }
 
         let curr_epoch = self.global().epoch();
-        ver.retire.store(curr_epoch, Ordering::Release);
-        self.local().push_retired((ver as *const Ver<T>).cast_mut());
+        inner.retire.store(curr_epoch, Ordering::SeqCst);
+        self.local()
+            .push_retired((inner as *const Inner<T>).cast_mut());
         if self.epoch < curr_epoch {
             return Err(());
         }
@@ -339,7 +333,7 @@ impl<T> Guard<T> {
 }
 
 pub struct Shared<T> {
-    ptr: *mut Ver<T>,
+    ptr: *mut Inner<T>,
     birth: u64,
 }
 
@@ -349,10 +343,10 @@ impl<T> Shared<T> {
     }
 
     pub fn as_ref(&self) -> Option<&T> {
-        self.as_versioned().map(|ver| &ver.data)
+        self.as_inner().map(|inner| &inner.data)
     }
 
-    fn as_versioned(&self) -> Option<&Ver<T>> {
+    fn as_inner(&self) -> Option<&Inner<T>> {
         unsafe { ptr_with_tag(self.ptr, 0).as_ref() }
     }
 
@@ -370,8 +364,8 @@ impl<T> Shared<T> {
     pub fn tag(&self) -> Result<usize, ()> {
         let result = decompose_ptr(self.ptr).1;
         compiler_fence(Ordering::SeqCst);
-        if let Some(ver) = unsafe { ptr_with_tag(self.ptr, 0).as_ref() } {
-            if self.birth != ver.birth.load(Ordering::Acquire) {
+        if let Some(inner) = unsafe { ptr_with_tag(self.ptr, 0).as_ref() } {
+            if self.birth != inner.birth.load(Ordering::SeqCst) {
                 return Err(());
             }
         }
@@ -385,7 +379,7 @@ impl<T> Shared<T> {
         }
     }
 
-    pub fn as_raw(&self) -> *mut Ver<T> {
+    pub fn as_raw(&self) -> *mut Inner<T> {
         self.ptr
     }
 }
@@ -404,15 +398,15 @@ impl<T> PartialEq for Shared<T> {
     }
 }
 
-pub struct VerAtomic<T> {
+pub struct MutAtomic<T> {
     link: AtomicU128,
     _marker: PhantomData<T>,
 }
 
-unsafe impl<T> Sync for VerAtomic<T> {}
-unsafe impl<T> Send for VerAtomic<T> {}
+unsafe impl<T> Sync for MutAtomic<T> {}
+unsafe impl<T> Send for MutAtomic<T> {}
 
-impl<T> VerAtomic<T> {
+impl<T> MutAtomic<T> {
     pub fn null() -> Self {
         Self {
             link: AtomicU128::new(0),
@@ -428,9 +422,9 @@ impl<T> VerAtomic<T> {
     }
 
     pub unsafe fn load_unchecked(&self, order: Ordering) -> Shared<T> {
-        let (_, ptr) = decompose_u128::<Ver<T>>(self.link.load(order));
+        let (_, ptr) = decompose_u128::<Inner<T>>(self.link.load(order));
         let birth = if let Some(ver) = unsafe { ptr_with_tag(ptr, 0).as_ref() } {
-            ver.birth.load(Ordering::Acquire)
+            ver.birth.load(Ordering::SeqCst)
         } else {
             0
         };
@@ -445,7 +439,7 @@ impl<T> VerAtomic<T> {
         success: Ordering,
         failure: Ordering,
         _: &Guard<T>,
-    ) -> Result<(u64, *mut Ver<T>), (u64, *mut Ver<T>)> {
+    ) -> Result<(u64, *mut Inner<T>), (u64, *mut Inner<T>)> {
         let curr = compose_u128(owner.birth.max(current.birth), current.as_raw());
         let next = compose_u128(owner.birth.max(new.birth), new.as_raw());
         self.link
@@ -455,7 +449,7 @@ impl<T> VerAtomic<T> {
     }
 
     pub fn nullify(&self, owner: Shared<T>, tag: usize, _: &Guard<T>) -> Shared<T> {
-        let prev = self.link.load(Ordering::Acquire);
+        let prev = self.link.load(Ordering::SeqCst);
         let result = Shared {
             ptr: ptr_with_tag(null_mut(), tag),
             birth: 0,
@@ -465,7 +459,7 @@ impl<T> VerAtomic<T> {
                 prev,
                 compose_u128(owner.birth, result.ptr),
                 Ordering::AcqRel,
-                Ordering::Relaxed,
+                Ordering::SeqCst,
             )
             .unwrap();
         result
@@ -473,7 +467,7 @@ impl<T> VerAtomic<T> {
 }
 
 pub struct Entry<T> {
-    link: *mut Ver<T>,
+    link: *mut Inner<T>,
 }
 
 unsafe impl<T> Sync for Entry<T> {}
@@ -489,7 +483,7 @@ impl<T> Entry<T> {
     pub fn load(&self, guard: &Guard<T>) -> Result<Shared<T>, ()> {
         let ptr = self.link;
         if let Some(ver) = unsafe { ptr_with_tag(ptr, 0).as_ref() } {
-            let birth = ver.birth.load(Ordering::Acquire);
+            let birth = ver.birth.load(Ordering::SeqCst);
             compiler_fence(Ordering::SeqCst);
             guard.validate_epoch()?;
             Ok(Shared { ptr, birth })

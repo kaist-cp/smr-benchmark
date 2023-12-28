@@ -1,5 +1,5 @@
 use num::Bounded;
-use vbr_rs::{ptr_with_tag, Entry, Global, Guard, ImmAtomic, Local, Shared, VerAtomic};
+use vbr_rs::{ptr_with_tag, Entry, Global, Guard, ImmAtomic, Local, MutAtomic, Shared};
 
 use super::concurrent_map::ConcurrentMap;
 use std::cmp;
@@ -40,8 +40,8 @@ where
     // TODO(@jeehoonkang): how about having another type that is either (1) value, or (2) left and
     // right.
     value: ImmAtomic<V>,
-    left: VerAtomic<Node<K, V>>,
-    right: VerAtomic<Node<K, V>>,
+    left: MutAtomic<Node<K, V>>,
+    right: MutAtomic<Node<K, V>>,
 }
 
 impl<K, V> Node<K, V>
@@ -139,21 +139,21 @@ where
     K: 'static + Copy + Bounded,
     V: 'static + Copy,
 {
-    fn successor_addr(&self) -> &VerAtomic<Node<K, V>> {
+    fn successor_addr(&self) -> &MutAtomic<Node<K, V>> {
         match self.successor_dir {
             Direction::L => &unsafe { self.ancestor.deref() }.left,
             Direction::R => &unsafe { self.ancestor.deref() }.right,
         }
     }
 
-    fn leaf_addr(&self) -> &VerAtomic<Node<K, V>> {
+    fn leaf_addr(&self) -> &MutAtomic<Node<K, V>> {
         match self.leaf_dir {
             Direction::L => &unsafe { self.parent.deref() }.left,
             Direction::R => &unsafe { self.parent.deref() }.right,
         }
     }
 
-    fn leaf_sibling_addr(&self) -> &VerAtomic<Node<K, V>> {
+    fn leaf_sibling_addr(&self) -> &MutAtomic<Node<K, V>> {
         match self.leaf_dir {
             Direction::L => &unsafe { self.parent.deref() }.right,
             Direction::R => &unsafe { self.parent.deref() }.left,

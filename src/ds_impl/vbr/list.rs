@@ -1,5 +1,5 @@
 use super::concurrent_map::ConcurrentMap;
-use vbr_rs::{Entry, Global, Guard, ImmAtomic, Local, Shared, VerAtomic};
+use vbr_rs::{Entry, Global, Guard, ImmAtomic, Local, MutAtomic, Shared};
 
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::sync::atomic::Ordering;
@@ -10,7 +10,7 @@ where
     V: 'static + Copy,
 {
     /// Mark: tag(), Tag: not needed
-    next: VerAtomic<Node<K, V>>,
+    next: MutAtomic<Node<K, V>>,
     key: ImmAtomic<K>,
     value: ImmAtomic<V>,
 }

@@ -3,13 +3,13 @@ use std::{
     sync::atomic::{fence, AtomicUsize, Ordering},
 };
 
-use vbr_rs::{Entry, Global, Guard, ImmAtomic, Local, Shared, VerAtomic};
+use vbr_rs::{Entry, Global, Guard, ImmAtomic, Local, MutAtomic, Shared};
 
 use super::concurrent_map::ConcurrentMap;
 
 const MAX_HEIGHT: usize = 32;
 
-type Tower<K, V> = [VerAtomic<Node<K, V>>; MAX_HEIGHT];
+type Tower<K, V> = [MutAtomic<Node<K, V>>; MAX_HEIGHT];
 
 pub struct Node<K, V>
 where
@@ -269,7 +269,7 @@ where
     fn help_unlink(
         &self,
         pred: Shared<Node<K, V>>,
-        pred_link: &VerAtomic<Node<K, V>>,
+        pred_link: &MutAtomic<Node<K, V>>,
         curr: Shared<Node<K, V>>,
         succ: Shared<Node<K, V>>,
         guard: &Guard<Node<K, V>>,
