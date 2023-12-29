@@ -15,6 +15,7 @@ use smr_benchmark::ds_impl::hp_sharp::{
 };
 
 fn main() {
+    unsafe { hp_sharp::set_rollback(false) };
     let (config, output) = setup(
         Path::new(file!())
             .file_stem()

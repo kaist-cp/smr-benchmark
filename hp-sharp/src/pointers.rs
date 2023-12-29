@@ -1,6 +1,6 @@
 use std::{
     marker::PhantomData,
-    mem::{align_of, forget},
+    mem::{align_of, forget, swap},
     ops::{Deref, DerefMut},
     sync::atomic::AtomicUsize,
 };
@@ -482,6 +482,12 @@ impl<T> Shield<T> {
     #[inline]
     pub fn shared(&self) -> Shared<T> {
         Shared::new(self.inner)
+    }
+
+    #[inline]
+    pub fn swap(a: &mut Self, b: &mut Self) {
+        HazardPointer::swap(&mut a.hazptr, &mut b.hazptr);
+        swap(&mut a.inner, &mut b.inner);
     }
 }
 

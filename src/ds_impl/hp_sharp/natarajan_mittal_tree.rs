@@ -1,8 +1,6 @@
 use std::{cmp, sync::atomic::Ordering};
 
-use hp_sharp::{
-    Atomic, Invalidate, Owned, Pointer, RollbackProof, Shared, Shield, Thread, Unprotected,
-};
+use hp_sharp::{Atomic, Owned, Pointer, RollbackProof, Shared, Shield, Thread, Unprotected};
 
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 
@@ -92,15 +90,6 @@ struct Node<K, V> {
     value: Option<V>,
     left: Atomic<Node<K, V>>,
     right: Atomic<Node<K, V>>,
-}
-
-// TODO(@jeonghyeon): automate
-impl<K, V> Invalidate for Node<K, V> {
-    #[inline]
-    fn is_invalidated(&self, _: &Unprotected) -> bool {
-        false
-        // We do not use `traverse_loop` for this data structure.
-    }
 }
 
 impl<K, V> Node<K, V>

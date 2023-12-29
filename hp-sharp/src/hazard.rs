@@ -1,4 +1,4 @@
-use std::{ptr::null_mut, sync::atomic::AtomicPtr};
+use std::{mem::swap, ptr::null_mut, sync::atomic::AtomicPtr};
 
 use atomic::{fence, Ordering};
 
@@ -71,6 +71,11 @@ impl HazardPointer {
             pointer = new;
         }
         pointer
+    }
+
+    #[inline]
+    pub fn swap(x: &mut HazardPointer, y: &mut HazardPointer) {
+        swap(&mut x.idx, &mut y.idx);
     }
 }
 

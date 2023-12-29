@@ -53,6 +53,7 @@ pub enum MM {
     HP_PP,
     CDRC_EBR,
     HP_SHARP,
+    HP_SHARP_0,
     NBR,
     NBR_LARGE,
     VBR,
@@ -271,7 +272,8 @@ fn bench<N: Unsigned>(config: &Config, output: Option<&mut Writer<File>>) {
         MM::HP => bench_map_hp(config, PrefillStrategy::Decreasing),
         MM::HP_PP => bench_map_hp_pp(config, PrefillStrategy::Decreasing),
         MM::CDRC_EBR => bench_map_cdrc::<cdrc_rs::CsEBR, N>(config, PrefillStrategy::Decreasing),
-        MM::HP_SHARP => bench_map_hp_sharp(config, PrefillStrategy::Decreasing),
+        MM::HP_SHARP => bench_map_hp_sharp::<true>(config, PrefillStrategy::Decreasing),
+        MM::HP_SHARP_0 => bench_map_hp_sharp::<false>(config, PrefillStrategy::Decreasing),
         MM::NBR => bench_map_nbr(config, PrefillStrategy::Decreasing, &NBR_CAP, 2),
         MM::NBR_LARGE => bench_map_nbr(config, PrefillStrategy::Decreasing, &NBR_LARGE_CAP, 2),
         MM::VBR => bench_map_vbr(config, PrefillStrategy::Decreasing),
@@ -436,7 +438,6 @@ impl PrefillStrategy {
         stdout().flush().unwrap();
     }
 
-    #[allow(unused)] // TODO: Remove after implementing TraverseLoop
     fn prefill_hp_sharp<M: hp_sharp_bench::ConcurrentMap<usize, usize> + Send + Sync>(
         self,
         config: &Config,
@@ -1223,123 +1224,129 @@ fn bench_map_cdrc<C: cdrc_rs::Cs, N: Unsigned>(
     (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
 }
 
-#[allow(unused)] // TODO: Remove after implementing TraverseLoop
-fn bench_map_hp_sharp(
+fn bench_map_hp_sharp<const ROLLBACK: bool>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
-    unimplemented!()
-    // use hp_sharp_bench::concurrent_map::OutputHolder;
-    // use hp_sharp_bench::ConcurrentMap;
-    // let map = &hp_sharp_bench::traverse_loop::HHSList::new();
-    // strategy.prefill_hp_sharp(config, map);
+    use hp_sharp_bench::concurrent_map::OutputHolder;
+    use hp_sharp_bench::ConcurrentMap;
 
-    // let barrier = &Arc::new(Barrier::new(
-    //     config.writers + config.readers + config.aux_thread,
-    // ));
-    // let (ops_sender, ops_receiver) = mpsc::channel();
-    // let (mem_sender, mem_receiver) = mpsc::channel();
+    unsafe { hp_sharp::set_rollback(ROLLBACK) };
+    let map = &hp_sharp_bench::list_alter::HHSList::new();
+    strategy.prefill_hp_sharp(config, map);
 
-    // scope(|s| {
-    //     // sampling & interference thread
-    //     if config.aux_thread > 0 {
-    //         let mem_sender = mem_sender.clone();
-    //         s.spawn(move |_| {
-    //             let mut samples = 0usize;
-    //             let mut acc = 0usize;
-    //             let mut peak = 0usize;
-    //             let mut garb_acc = 0usize;
-    //             let mut garb_peak = 0usize;
-    //             barrier.clone().wait();
+    let barrier = &Arc::new(Barrier::new(
+        config.writers + config.readers + config.aux_thread,
+    ));
+    let (ops_sender, ops_receiver) = mpsc::channel();
+    let (mem_sender, mem_receiver) = mpsc::channel();
 
-    //             let start = Instant::now();
-    //             let mut next_sampling = start + config.sampling_period;
-    //             while start.elapsed() < config.duration {
-    //                 let now = Instant::now();
-    //                 if now > next_sampling {
-    //                     let allocated = config.mem_sampler.sample();
-    //                     samples += 1;
+    scope(|s| {
+        // sampling & interference thread
+        if config.aux_thread > 0 {
+            let mem_sender = mem_sender.clone();
+            s.spawn(move |_| {
+                let mut samples = 0usize;
+                let mut acc = 0usize;
+                let mut peak = 0usize;
+                let mut garb_acc = 0usize;
+                let mut garb_peak = 0usize;
+                barrier.clone().wait();
 
-    //                     acc += allocated;
-    //                     peak = max(peak, allocated);
+                let start = Instant::now();
+                let mut next_sampling = start + config.sampling_period;
+                while start.elapsed() < config.duration {
+                    let now = Instant::now();
+                    if now > next_sampling {
+                        let allocated = config.mem_sampler.sample();
+                        samples += 1;
 
-    //                     let garbages = GLOBAL.garbage_count();
-    //                     garb_acc += garbages;
-    //                     garb_peak = max(garb_peak, garbages);
+                        acc += allocated;
+                        peak = max(peak, allocated);
 
-    //                     next_sampling = now + config.sampling_period;
-    //                 }
-    //                 std::thread::sleep(config.aux_thread_period);
-    //             }
+                        let garbages = hp_sharp::GLOBAL.garbage_count();
+                        garb_acc += garbages;
+                        garb_peak = max(garb_peak, garbages);
 
-    //             if config.sampling {
-    //                 mem_sender
-    //                     .send((peak, acc / samples, garb_peak, garb_acc / samples))
-    //                     .unwrap();
-    //             } else {
-    //                 mem_sender.send((0, 0, 0, 0)).unwrap();
-    //             }
-    //         });
-    //     } else {
-    //         mem_sender.send((0, 0, 0, 0)).unwrap();
-    //     }
+                        next_sampling = now + config.sampling_period;
+                    }
+                    std::thread::sleep(config.aux_thread_period);
+                }
 
-    //     // Spawn writer threads.
-    //     for _ in 0..config.writers {
-    //         s.spawn(move |_| {
-    //             hp_sharp::THREAD.with(|handle| {
-    //                 let handle = &mut **handle.borrow_mut();
-    //                 let output = &mut hp_sharp_bench::HHSList::<usize, usize>::empty_output(handle);
-    //                 barrier.clone().wait();
-    //                 let start = Instant::now();
+                if config.sampling {
+                    mem_sender
+                        .send((peak, acc / samples, garb_peak, garb_acc / samples))
+                        .unwrap();
+                } else {
+                    mem_sender.send((0, 0, 0, 0)).unwrap();
+                }
+            });
+        } else {
+            mem_sender.send((0, 0, 0, 0)).unwrap();
+        }
 
-    //                 let mut acquired: Option<usize> = None;
-    //                 while start.elapsed() < config.duration {
-    //                     if let Some(value) = acquired.take() {
-    //                         assert!(map.insert(value, value, output, handle))
-    //                     } else {
-    //                         assert!(map.pop(output, handle));
-    //                         acquired = Some(output.output().clone());
-    //                     }
-    //                 }
-    //             });
-    //         });
-    //     }
+        // Spawn writer threads.
+        for _ in 0..config.writers {
+            s.spawn(move |_| {
+                hp_sharp::THREAD.with(|handle| {
+                    let handle = &mut **handle.borrow_mut();
+                    let output =
+                        &mut hp_sharp_bench::list_alter::HHSList::<usize, usize>::empty_output(
+                            handle,
+                        );
+                    barrier.clone().wait();
+                    let start = Instant::now();
 
-    //     // Spawn reader threads.
-    //     for _ in 0..config.readers {
-    //         let ops_sender = ops_sender.clone();
-    //         s.spawn(move |_| {
-    //             hp_sharp::THREAD.with(|handle| {
-    //                 let handle = &mut **handle.borrow_mut();
-    //                 let output = &mut hp_sharp_bench::HHSList::<usize, usize>::empty_output(handle);
-    //                 let mut ops: u64 = 0;
-    //                 let rng = &mut rand::thread_rng();
-    //                 barrier.clone().wait();
-    //                 let start = Instant::now();
+                    let mut acquired: Option<usize> = None;
+                    while start.elapsed() < config.duration {
+                        if let Some(value) = acquired.take() {
+                            assert!(map.insert(value, value, output, handle))
+                        } else {
+                            assert!(map.pop(output, handle));
+                            acquired = Some(output.output().clone());
+                        }
+                    }
+                });
+            });
+        }
 
-    //                 while start.elapsed() < config.duration {
-    //                     let key = config.key_dist.sample(rng);
-    //                     let _ = map.get(&key, output, handle);
-    //                     ops += 1;
-    //                 }
+        // Spawn reader threads.
+        for _ in 0..config.readers {
+            let ops_sender = ops_sender.clone();
+            s.spawn(move |_| {
+                hp_sharp::THREAD.with(|handle| {
+                    let handle = &mut **handle.borrow_mut();
+                    let output =
+                        &mut hp_sharp_bench::list_alter::HHSList::<usize, usize>::empty_output(
+                            handle,
+                        );
+                    let mut ops: u64 = 0;
+                    let rng = &mut rand::thread_rng();
+                    barrier.clone().wait();
+                    let start = Instant::now();
 
-    //                 ops_sender.send(ops).unwrap();
-    //             });
-    //         });
-    //     }
-    // })
-    // .unwrap();
-    // println!("end");
+                    while start.elapsed() < config.duration {
+                        let key = config.key_dist.sample(rng);
+                        let _ = map.get(&key, output, handle);
+                        ops += 1;
+                    }
 
-    // let mut ops = 0;
-    // for _ in 0..config.readers {
-    //     let local_ops = ops_receiver.recv().unwrap();
-    //     ops += local_ops;
-    // }
-    // let ops_per_sec = ops / config.interval;
-    // let (peak_mem, avg_mem, garb_peak, garb_avg) = mem_receiver.recv().unwrap();
-    // (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
+                    ops_sender.send(ops).unwrap();
+                });
+            });
+        }
+    })
+    .unwrap();
+    println!("end");
+
+    let mut ops = 0;
+    for _ in 0..config.readers {
+        let local_ops = ops_receiver.recv().unwrap();
+        ops += local_ops;
+    }
+    let ops_per_sec = ops / config.interval;
+    let (peak_mem, avg_mem, garb_peak, garb_avg) = mem_receiver.recv().unwrap();
+    (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
 }
 
 fn bench_map_nbr(

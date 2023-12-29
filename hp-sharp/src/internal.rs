@@ -15,6 +15,17 @@ use crate::hazard::HazardPointer;
 use crate::pile::Pile;
 use crate::rollback;
 
+pub(crate) static mut USE_ROLLBACK: bool = true;
+
+/// Turn on or off the functionality to rollback. By default, HP# will use rollbacks.
+///
+/// # Safety
+///
+/// Set this configuration before actually running an application with HP#.
+pub unsafe fn set_rollback(enable: bool) {
+    unsafe { USE_ROLLBACK = enable };
+}
+
 /// The width of the number of bags.
 const BAGS_WIDTH: u32 = 3;
 
@@ -176,6 +187,7 @@ impl Global {
     /// `advance()` is annotated `#[cold]` because it is rarely called.
     #[cold]
     fn advance(&self, advancer: &mut Local) -> Epoch {
+        debug_assert!(unsafe { USE_ROLLBACK });
         let advancer_owner = advancer.owner.load(Ordering::Relaxed);
         let global_epoch = self.epoch.load(Ordering::Relaxed);
         fence(Ordering::SeqCst);
@@ -347,7 +359,7 @@ impl Local {
     #[inline(never)]
     pub(crate) unsafe fn pin<F, R>(&mut self, mut body: F) -> R
     where
-        F: FnMut(&mut CsGuard) -> R,
+        F: FnMut(&CsGuard) -> R,
         R: Copy,
     {
         // Makes a checkpoint and create a `Rollbacker`.
@@ -364,7 +376,7 @@ impl Local {
         compiler_fence(Ordering::SeqCst);
 
         // Execute the body of this section.
-        let result = body(&mut CsGuard::new(self, rb));
+        let result = body(&CsGuard::new(self, rb));
         compiler_fence(Ordering::SeqCst);
 
         // We are now out of the critical(crashable) section.
@@ -380,7 +392,7 @@ impl Local {
     #[inline(never)]
     pub(crate) unsafe fn pin<F, R>(&mut self, mut body: F) -> R
     where
-        F: FnMut(&mut CsGuard) -> R,
+        F: FnMut(&CsGuard) -> R,
         R: Copy,
     {
         // A dummy loop to bypass a false stack overflow from AdressSanitizer.
@@ -411,7 +423,7 @@ impl Local {
             compiler_fence(Ordering::SeqCst);
 
             // Execute the body of this section.
-            let result = body(&mut CsGuard::new(self, rb));
+            let result = body(&CsGuard::new(self, rb));
             compiler_fence(Ordering::SeqCst);
 
             // We are now out of the critical(crashable) section.
@@ -444,20 +456,21 @@ impl Local {
             let push_count = self.push_count.get() + 1;
             self.push_count.set(push_count);
 
-            let collected = if push_count >= Self::COUNTS_BETWEEN_FORCE_ADVANCE {
-                self.push_count.set(0);
-                let epoch = unsafe { &*self.global }.advance(self);
-                Some(self.global().collect(epoch))
-            } else {
-                let epoch = match self.global().try_advance() {
-                    Ok(epoch) => {
-                        self.push_count.set(0);
-                        epoch
-                    }
-                    Err(epoch) => epoch,
+            let collected =
+                if unsafe { USE_ROLLBACK } && push_count >= Self::COUNTS_BETWEEN_FORCE_ADVANCE {
+                    self.push_count.set(0);
+                    let epoch = unsafe { &*self.global }.advance(self);
+                    Some(self.global().collect(epoch))
+                } else {
+                    let epoch = match self.global().try_advance() {
+                        Ok(epoch) => {
+                            self.push_count.set(0);
+                            epoch
+                        }
+                        Err(epoch) => epoch,
+                    };
+                    Some(self.global().collect(epoch))
                 };
-                Some(self.global().collect(epoch))
-            };
 
             return collected
                 .map(|bags| bags.into_iter().flat_map(|bag| bag.into_iter()).collect());

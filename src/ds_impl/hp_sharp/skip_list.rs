@@ -4,7 +4,7 @@ use std::{
 };
 
 use hp_sharp::{
-    Atomic, CsGuard, Invalidate, Owned, Pointer, RollbackProof, Shared, Shield, Thread, Unprotected,
+    Atomic, CsGuard, Owned, Pointer, RollbackProof, Shared, Shield, Thread, Unprotected,
 };
 
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
@@ -75,14 +75,6 @@ impl<K, V> Node<K, V> {
             }
         }
         true
-    }
-}
-
-impl<K, V> Invalidate for Node<K, V> {
-    #[inline]
-    fn is_invalidated(&self, _: &Unprotected) -> bool {
-        false
-        // We do not use `traverse_loop` for this data structure.
     }
 }
 

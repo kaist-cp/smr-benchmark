@@ -1,10 +1,10 @@
 use super::concurrent_map::ConcurrentMap;
-use super::list::Output;
+use super::list::Cursor;
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use super::HHSList;
+use super::list::HHSList;
 
 pub struct HashMap<K, V> {
     buckets: Vec<HHSList<K, V>>,
@@ -38,9 +38,9 @@ where
     }
 
     #[inline]
-    pub fn get(&self, k: &K, output: &mut Output<K, V>, thread: &mut hp_sharp::Thread) -> bool {
+    pub fn get(&self, k: &K, cursor: &mut Cursor<K, V>, thread: &mut hp_sharp::Thread) -> bool {
         let i = Self::hash(k);
-        self.get_bucket(i).get(k, output, thread)
+        self.get_bucket(i).get(k, cursor, thread)
     }
 
     #[inline]
@@ -48,17 +48,17 @@ where
         &self,
         k: K,
         v: V,
-        output: &mut Output<K, V>,
+        cursor: &mut Cursor<K, V>,
         thread: &mut hp_sharp::Thread,
     ) -> bool {
         let i = Self::hash(&k);
-        self.get_bucket(i).insert(k, v, output, thread)
+        self.get_bucket(i).insert(k, v, cursor, thread)
     }
 
     #[inline]
-    pub fn remove(&self, k: &K, output: &mut Output<K, V>, thread: &mut hp_sharp::Thread) -> bool {
+    pub fn remove(&self, k: &K, cursor: &mut Cursor<K, V>, thread: &mut hp_sharp::Thread) -> bool {
         let i = Self::hash(&k);
-        self.get_bucket(i).remove(k, output, thread)
+        self.get_bucket(i).remove(k, cursor, thread)
     }
 }
 
@@ -67,7 +67,7 @@ where
     K: Ord + Default + Hash,
     V: Default,
 {
-    type Output = Output<K, V>;
+    type Output = Cursor<K, V>;
 
     #[inline]
     fn new() -> Self {
@@ -75,22 +75,22 @@ where
     }
 
     #[inline(always)]
-    fn get(&self, key: &K, output: &mut Output<K, V>, thread: &mut hp_sharp::Thread) -> bool {
-        self.get(key, output, thread)
+    fn get(&self, key: &K, cursor: &mut Cursor<K, V>, thread: &mut hp_sharp::Thread) -> bool {
+        self.get(key, cursor, thread)
     }
     #[inline(always)]
     fn insert(
         &self,
         key: K,
         value: V,
-        output: &mut Output<K, V>,
+        cursor: &mut Cursor<K, V>,
         thread: &mut hp_sharp::Thread,
     ) -> bool {
-        self.insert(key, value, output, thread)
+        self.insert(key, value, cursor, thread)
     }
     #[inline(always)]
-    fn remove(&self, key: &K, output: &mut Output<K, V>, thread: &mut hp_sharp::Thread) -> bool {
-        self.remove(key, output, thread)
+    fn remove(&self, key: &K, cursor: &mut Cursor<K, V>, thread: &mut hp_sharp::Thread) -> bool {
+        self.remove(key, cursor, thread)
     }
 }
 
