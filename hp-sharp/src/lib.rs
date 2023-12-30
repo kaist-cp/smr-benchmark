@@ -30,18 +30,11 @@ mod test {
     use atomic::Ordering;
 
     use super::THREAD;
-    use crate::handle::{Invalidate, RollbackProof, Thread, Unprotected};
+    use crate::handle::{RollbackProof, Thread, Unprotected};
     use crate::pointers::{Atomic, Owned, Shield};
 
     struct Node {
         next: Atomic<Node>,
-    }
-
-    impl Invalidate for Node {
-        fn is_invalidated(&self, _: &Unprotected) -> bool {
-            // We do not use traverse_loop here.
-            false
-        }
     }
 
     struct Cursor {

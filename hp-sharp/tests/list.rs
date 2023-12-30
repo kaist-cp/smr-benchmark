@@ -1,6 +1,4 @@
-use hp_sharp::{
-    Atomic, CsGuard, Invalidate, Owned, RollbackProof, Shared, Shield, Thread, Unprotected,
-};
+use hp_sharp::{Atomic, CsGuard, Owned, RollbackProof, Shared, Shield, Thread, Unprotected};
 
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::sync::atomic::Ordering;
@@ -18,13 +16,6 @@ struct Node<K, V> {
     next: Atomic<Node<K, V>>,
     key: K,
     value: V,
-}
-
-impl<K, V> Invalidate for Node<K, V> {
-    #[inline]
-    fn is_invalidated(&self, guard: &Unprotected) -> bool {
-        (self.next.load(Ordering::Acquire, guard).tag() & 1) != 0
-    }
 }
 
 struct List<K, V> {
