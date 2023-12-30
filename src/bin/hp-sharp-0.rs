@@ -1,5 +1,5 @@
 use crossbeam_utils::thread::scope;
-use hp_sharp::{GLOBAL, THREAD};
+use hp_sharp::{global, THREAD};
 use rand::prelude::*;
 use std::cmp::max;
 use std::io::{stdout, Write};
@@ -132,7 +132,7 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
                         acc += allocated;
                         peak = max(peak, allocated);
 
-                        let garbages = GLOBAL.garbage_count();
+                        let garbages = global().garbage_count();
                         garb_acc += garbages;
                         garb_peak = max(garb_peak, garbages);
 

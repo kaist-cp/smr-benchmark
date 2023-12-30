@@ -1264,7 +1264,7 @@ fn bench_map_hp_sharp<const ROLLBACK: bool>(
                         acc += allocated;
                         peak = max(peak, allocated);
 
-                        let garbages = hp_sharp::GLOBAL.garbage_count();
+                        let garbages = hp_sharp::global().garbage_count();
                         garb_acc += garbages;
                         garb_peak = max(garb_peak, garbages);
 

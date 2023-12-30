@@ -12,7 +12,7 @@ use crate::deferred::{Bag, Deferred};
 use crate::epoch::{AtomicEpoch, Epoch};
 use crate::handle::{CsGuard, Thread};
 use crate::hazard::HazardPointer;
-use crate::pile::Pile;
+use crate::queue::DoubleLink;
 use crate::rollback;
 
 pub(crate) static mut USE_ROLLBACK: bool = true;
@@ -25,9 +25,6 @@ pub(crate) static mut USE_ROLLBACK: bool = true;
 pub unsafe fn set_rollback(enable: bool) {
     unsafe { USE_ROLLBACK = enable };
 }
-
-/// The width of the number of bags.
-const BAGS_WIDTH: u32 = 3;
 
 /// A pair of an epoch and a bag.
 struct SealedBag {
@@ -57,7 +54,7 @@ pub struct Global {
     locals: LocalList,
 
     /// The global pool of bags of deferred functions.
-    epoch_bags: [CachePadded<Pile<SealedBag>>; 1 << BAGS_WIDTH],
+    epoch_bags: DoubleLink<SealedBag>,
 
     /// The global epoch.
     epoch: CachePadded<AtomicEpoch>,
@@ -68,19 +65,10 @@ pub struct Global {
 impl Global {
     /// Creates a new global data for garbage collection.
     #[inline]
-    pub(crate) const fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             locals: LocalList::new(),
-            epoch_bags: [
-                CachePadded::new(Pile::new()),
-                CachePadded::new(Pile::new()),
-                CachePadded::new(Pile::new()),
-                CachePadded::new(Pile::new()),
-                CachePadded::new(Pile::new()),
-                CachePadded::new(Pile::new()),
-                CachePadded::new(Pile::new()),
-                CachePadded::new(Pile::new()),
-            ],
+            epoch_bags: DoubleLink::new(),
             epoch: CachePadded::new(AtomicEpoch::new(Epoch::starting())),
             garbage_count: AtomicUsize::new(0),
         }
@@ -107,22 +95,20 @@ impl Global {
         fence(Ordering::SeqCst);
 
         let epoch = self.epoch.load(Ordering::Relaxed);
-        let slot = &self.epoch_bags[epoch.value() as usize % (1 << BAGS_WIDTH)];
-        slot.push(SealedBag { epoch, inner: bag });
+        self.epoch_bags.push(SealedBag { epoch, inner: bag });
     }
 
     #[must_use]
     pub(crate) fn collect(&self, global_epoch: Epoch) -> Vec<Bag> {
-        let index = (global_epoch.value() - 2) as usize % (1 << BAGS_WIDTH);
-        let bags = unsafe { self.epoch_bags.get_unchecked(index) };
-
-        let deferred = bags.pop_all();
-        let (collected, deferred): (Vec<_>, Vec<_>) = deferred
-            .into_iter()
-            .partition(|bag| bag.is_expired(global_epoch));
-
-        bags.append(deferred.into_iter());
-        collected.into_iter().map(|bag| bag.into_inner()).collect()
+        let mut collected = Vec::new();
+        for _ in 0..8 {
+            if let Some(bag) = self.epoch_bags.pop_if(|bag| bag.is_expired(global_epoch)) {
+                collected.push(bag.into_inner());
+            } else {
+                break;
+            }
+        }
+        collected
     }
 
     /// Registers a current thread as a participant associated with this [`GlobalRRCU`] epoch
@@ -553,7 +539,9 @@ impl Local {
             debug_assert_eq!(self.available_indices, (0..len).collect::<Vec<_>>());
         }
 
-        self.using.store(false, Ordering::Release);
+        // Sync with `LocalList::acquire`.
+        fence(Ordering::Release);
+        self.using.store(false, Ordering::Relaxed);
     }
 }
 
@@ -620,10 +608,13 @@ impl LocalList {
     fn acquire<'c>(&'c self, global: &Global) -> &'c mut Local {
         let tid = pthread_self();
         let mut prev_link = &self.head;
+
+        // Sync with `Local::release`.
+        fence(Ordering::Acquire);
         let local = loop {
             match unsafe { prev_link.load(Ordering::Acquire).as_mut() } {
                 Some(curr) => {
-                    if !curr.using.load(Ordering::Acquire)
+                    if !curr.using.load(Ordering::Relaxed)
                         && curr
                             .using
                             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)

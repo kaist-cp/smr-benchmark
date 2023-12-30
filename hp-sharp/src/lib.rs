@@ -7,20 +7,25 @@ mod epoch;
 mod handle;
 mod hazard;
 mod internal;
-mod pile;
 mod pointers;
+mod queue;
 mod rollback;
 
 pub use handle::*;
 pub use internal::*;
 pub use pointers::*;
 
-use std::cell::RefCell;
+use std::{cell::RefCell, sync::OnceLock};
 
-pub static GLOBAL: Global = Global::new();
+static GLOBAL: OnceLock<Global> = OnceLock::new();
+
+#[inline]
+pub fn global() -> &'static Global {
+    GLOBAL.get_or_init(Global::new)
+}
 
 thread_local! {
-    pub static THREAD: RefCell<Box<Thread>> = RefCell::new(Box::new(GLOBAL.register()));
+    pub static THREAD: RefCell<Box<Thread>> = RefCell::new(Box::new(global().register()));
 }
 
 #[cfg(test)]
