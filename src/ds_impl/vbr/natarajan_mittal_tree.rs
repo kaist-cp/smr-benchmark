@@ -1,4 +1,5 @@
 use num::Bounded;
+use vbr_rs::CompareExchangeError::*;
 use vbr_rs::{ptr_with_tag, Entry, Global, Guard, ImmAtomic, Local, MutAtomic, Shared};
 
 use super::concurrent_map::ConcurrentMap;
@@ -37,8 +38,6 @@ where
     V: 'static + Copy,
 {
     key: ImmAtomic<K>,
-    // TODO(@jeehoonkang): how about having another type that is either (1) value, or (2) left and
-    // right.
     value: ImmAtomic<V>,
     left: MutAtomic<Node<K, V>>,
     right: MutAtomic<Node<K, V>>,
@@ -49,60 +48,35 @@ where
     K: 'static + Copy + Bounded,
     V: 'static + Copy,
 {
-    fn new_leaf(key: K, value: V, guard: &mut Guard<Node<K, V>>) -> Shared<Node<K, V>> {
-        loop {
-            guard.refresh();
-            let node = ok_or!(guard.allocate(), continue);
-            let node_ref = unsafe { node.deref() };
+    fn new_leaf<'g>(
+        key: K,
+        value: V,
+        guard: &'g Guard<Node<K, V>>,
+    ) -> Result<Shared<'g, Node<K, V>>, ()> {
+        guard.allocate(|node| unsafe {
+            let node_ref = node.deref();
             node_ref.key.set(key);
             node_ref.value.set(value);
-            node_ref.left.nullify(node, 0, guard);
-            node_ref.right.nullify(node, 0, guard);
-            return node;
-        }
+            node_ref.left.store(node, Shared::null());
+            node_ref.right.store(node, Shared::null());
+        })
     }
 
     /// Make a new internal node, consuming the given left and right nodes,
     /// using the right node's key.
-    fn new_internal(
-        left: Shared<Node<K, V>>,
-        right: Shared<Node<K, V>>,
-        guard: &mut Guard<Node<K, V>>,
-    ) -> Shared<Node<K, V>> {
-        loop {
-            guard.refresh();
-            let key = ok_or!(unsafe { right.deref() }.key.get(guard), continue);
-            let node = ok_or!(guard.allocate(), continue);
-            let node_ref = unsafe { node.deref() };
+    fn new_internal<'g>(
+        left: Shared<'g, Node<K, V>>,
+        right: Shared<'g, Node<K, V>>,
+        guard: &'g Guard<Node<K, V>>,
+    ) -> Result<Shared<'g, Node<K, V>>, ()> {
+        let key = unsafe { right.deref() }.key.get(guard)?;
+        guard.allocate(|node| unsafe {
+            let node_ref = node.deref();
             node_ref.key.set(key);
-            node_ref.value.set(unsafe { zeroed() });
-            node_ref.left.nullify(node, 0, guard);
-            node_ref.right.nullify(node, 0, guard);
-
-            node_ref
-                .left
-                .compare_exchange(
-                    node,
-                    Shared::null(),
-                    left,
-                    Ordering::Release,
-                    Ordering::Relaxed,
-                    guard,
-                )
-                .unwrap();
-            node_ref
-                .right
-                .compare_exchange(
-                    node,
-                    Shared::null(),
-                    right,
-                    Ordering::Release,
-                    Ordering::Relaxed,
-                    guard,
-                )
-                .unwrap();
-            return node;
-        }
+            node_ref.value.set(zeroed());
+            node_ref.left.store(node, left);
+            node_ref.right.store(node, right);
+        })
     }
 }
 
@@ -114,27 +88,26 @@ enum Direction {
 /// All Shared<_> are unmarked.
 ///
 /// All of the edges of path from `successor` to `parent` are in the process of removal.
-struct SeekRecord<K, V>
+struct SeekRecord<'g, K, V>
 where
     K: 'static + Copy + Bounded,
     V: 'static + Copy,
 {
     /// Parent of `successor`
-    ancestor: Shared<Node<K, V>>,
+    ancestor: Shared<'g, Node<K, V>>,
     /// The first internal node with a marked outgoing edge
-    successor: Shared<Node<K, V>>,
+    successor: Shared<'g, Node<K, V>>,
     /// The direction of successor from ancestor.
     successor_dir: Direction,
     /// Parent of `leaf`
-    parent: Shared<Node<K, V>>,
+    parent: Shared<'g, Node<K, V>>,
     /// The end of the access path.
-    leaf: Shared<Node<K, V>>,
+    leaf: Shared<'g, Node<K, V>>,
     /// The direction of leaf from parent.
     leaf_dir: Direction,
 }
 
-// TODO(@jeehoonkang): code duplication...
-impl<K, V> SeekRecord<K, V>
+impl<'g, K, V> SeekRecord<'g, K, V>
 where
     K: 'static + Copy + Bounded,
     V: 'static + Copy,
@@ -183,16 +156,20 @@ where
         //       / \
         //   inf0   inf1
         let guard = &mut local.guard();
-        let inf0 = Node::new_leaf(Bounded::max_value(), unsafe { zeroed() }, guard);
-        let inf1 = Node::new_leaf(Bounded::max_value(), unsafe { zeroed() }, guard);
-        let inf2 = Node::new_leaf(Bounded::max_value(), unsafe { zeroed() }, guard);
-        let s = Node::new_internal(inf0, inf1, guard);
-        let r = Node::new_internal(s, inf2, guard);
+        let inf0 = Node::new_leaf(Bounded::max_value(), unsafe { zeroed() }, guard).unwrap();
+        let inf1 = Node::new_leaf(Bounded::max_value(), unsafe { zeroed() }, guard).unwrap();
+        let inf2 = Node::new_leaf(Bounded::max_value(), unsafe { zeroed() }, guard).unwrap();
+        let s = Node::new_internal(inf0, inf1, guard).unwrap();
+        let r = Node::new_internal(s, inf2, guard).unwrap();
         NMTreeMap { r: Entry::new(r) }
     }
 
     // All `Shared<_>` fields are unmarked.
-    fn seek(&self, key: &K, guard: &Guard<Node<K, V>>) -> Result<SeekRecord<K, V>, ()> {
+    fn seek<'g>(
+        &'g self,
+        key: &K,
+        guard: &'g Guard<Node<K, V>>,
+    ) -> Result<SeekRecord<'g, K, V>, ()> {
         let r = self.r.load(guard)?;
         let s = unsafe { r.deref() }.left.load(Ordering::Relaxed, guard)?;
         let s_node = unsafe { s.deref() };
@@ -243,7 +220,11 @@ where
     }
 
     /// Similar to `seek`, but traverse the tree with only two pointers
-    fn seek_leaf(&self, key: &K, guard: &Guard<Node<K, V>>) -> Result<SeekRecord<K, V>, ()> {
+    fn seek_leaf<'g>(
+        &'g self,
+        key: &K,
+        guard: &'g Guard<Node<K, V>>,
+    ) -> Result<SeekRecord<'g, K, V>, ()> {
         let r = self.r.load(guard)?;
         let s = unsafe { r.deref() }.left.load(Ordering::Relaxed, guard)?;
         let s_node = unsafe { s.deref() };
@@ -304,6 +285,7 @@ where
                 Ordering::Relaxed,
                 guard,
             )
+            .success()
             .is_err()
         {
             return Ok(false);
@@ -324,6 +306,7 @@ where
                 Ordering::Acquire,
                 &guard,
             )
+            .success()
             .is_ok();
 
         if is_unlinked {
@@ -342,7 +325,7 @@ where
 
                     stack.push(node_ref.left.load_unchecked(Ordering::Relaxed));
                     stack.push(node_ref.right.load_unchecked(Ordering::Relaxed));
-                    let _ = guard.retire(node);
+                    guard.retire(node);
                 }
             }
             Ok(true)
@@ -367,59 +350,42 @@ where
         }
     }
 
-    fn insert_inner(
-        &self,
-        key: K,
-        value: V,
-        new_leaf: Shared<Node<K, V>>,
-        new_internal: Shared<Node<K, V>>,
-        guard: &Guard<Node<K, V>>,
-    ) -> Result<bool, ()> {
-        let new_leaf_node = unsafe { new_leaf.deref() };
-        new_leaf_node.key.set(key);
-        new_leaf_node.value.set(value);
-
-        let new_internal_node = unsafe { new_internal.deref() };
-        new_internal_node.key.set(K::max_value());
-        new_internal_node.value.set(unsafe { zeroed() });
-
+    fn insert_inner(&self, key: K, value: V, guard: &Guard<Node<K, V>>) -> Result<bool, ()> {
         loop {
             let record = self.seek(&key, guard)?;
             let leaf = record.leaf;
+            let leaf_key = unsafe { leaf.deref() }.key.get(guard)?;
 
-            let (new_left, new_right) = match unsafe { leaf.deref() }.key.get(guard)?.cmp(&key) {
-                cmp::Ordering::Equal => return Ok(false),
-                cmp::Ordering::Greater => (new_leaf, leaf),
-                cmp::Ordering::Less => (leaf, new_leaf),
+            if leaf_key == key {
+                return Ok(false);
+            }
+
+            let new_leaf = guard.allocate(|node| unsafe {
+                let node_ref = node.deref();
+                node_ref.key.set(key);
+                node_ref.value.set(value);
+                node_ref.left.store(node, Shared::null());
+                node_ref.right.store(node, Shared::null());
+            })?;
+
+            let (new_left, new_right, new_right_key) = if leaf_key < key {
+                (leaf, new_leaf, key)
+            } else {
+                (new_leaf, leaf, leaf_key)
             };
 
-            new_internal_node
-                .key
-                .set(unsafe { new_right.deref() }.key.get(guard)?);
-            let left = new_internal_node.left.nullify(new_internal, 0, guard);
-            let right = new_internal_node.right.nullify(new_internal, 0, guard);
-            new_internal_node
-                .left
-                .compare_exchange(
-                    new_internal,
-                    left,
-                    new_left,
-                    Ordering::Release,
-                    Ordering::Relaxed,
-                    guard,
-                )
-                .unwrap();
-            new_internal_node
-                .right
-                .compare_exchange(
-                    new_internal,
-                    right,
-                    new_right,
-                    Ordering::Release,
-                    Ordering::Relaxed,
-                    guard,
-                )
-                .unwrap();
+            let new_internal_res = guard.allocate(|node| unsafe {
+                let node_ref = node.deref();
+                node_ref.key.set(new_right_key);
+                node_ref.value.set(zeroed());
+                node_ref.left.store(node, new_left);
+                node_ref.right.store(node, new_right);
+            });
+
+            let Ok(new_internal) = new_internal_res else {
+                unsafe { guard.retire(new_leaf) };
+                return Err(());
+            };
 
             // NOTE: record.leaf_addr is called childAddr in the paper.
             match record.leaf_addr().compare_exchange(
@@ -430,42 +396,30 @@ where
                 Ordering::Acquire,
                 &guard,
             ) {
-                Ok(_) => return Ok(true),
-                Err(e) => {
+                Success(_) => return Ok(true),
+                Failure(e) => {
                     // Insertion failed. Help the conflicting remove operation if needed.
                     // NOTE: The paper version checks if any of the mark is set, which is redundant.
                     if e.1 == record.leaf.as_raw() {
                         self.cleanup(&record, guard)?;
                     }
+                    unsafe {
+                        guard.retire(new_leaf);
+                        guard.retire(new_internal);
+                    }
                 }
+                Reallocated => unsafe {
+                    guard.retire(new_leaf);
+                    guard.retire(new_internal);
+                },
             }
         }
     }
 
     pub fn insert(&self, key: K, value: V, local: &Local<Node<K, V>>) -> bool {
-        let guard = &mut local.guard();
-        let new_leaf = Node::new_leaf(key, value, guard);
-        let new_internal = loop {
-            guard.refresh();
-            let node = ok_or!(guard.allocate(), continue);
-            let node_ref = unsafe { node.deref() };
-            node_ref.left.nullify(node, 0, guard);
-            node_ref.right.nullify(node, 0, guard);
-            break node;
-        };
-
         loop {
-            guard.refresh();
-            if let Ok(inserted) = self.insert_inner(key, value, new_leaf, new_internal, guard) {
-                if inserted {
-                    return true;
-                } else {
-                    unsafe {
-                        let _ = guard.retire(new_leaf);
-                        let _ = guard.retire(new_internal);
-                    }
-                    return false;
-                }
+            if let Ok(r) = self.insert_inner(key, value, &mut local.guard()) {
+                return r;
             }
         }
     }
@@ -496,15 +450,15 @@ where
                 Ordering::Acquire,
                 &guard,
             ) {
-                Ok(_) => {
+                Success(_) => {
                     // Finalize the node to be removed
                     if Ok(true) == self.cleanup(&record, guard) {
                         return Ok(Some(value));
                     }
                     // In-place cleanup failed. Enter the cleanup phase.
-                    break (leaf, value);
+                    break (leaf.as_raw(), value);
                 }
-                Err(e) => {
+                Failure(e) => {
                     // Flagging failed.
                     // case 1. record.leaf_addr(e.current) points to another node: restart.
                     // case 2. Another thread flagged/tagged the edge to leaf: help and restart
@@ -513,6 +467,7 @@ where
                         self.cleanup(&record, guard)?;
                     }
                 }
+                Reallocated => {}
             }
         };
 
@@ -520,7 +475,7 @@ where
         loop {
             guard.refresh();
             let record = ok_or!(self.seek(key, guard), continue);
-            if record.leaf.as_raw() != leaf.as_raw() {
+            if record.leaf.as_raw() != leaf {
                 // The edge to leaf flagged for deletion was removed by a helping thread
                 return Ok(Some(value));
             }
@@ -534,10 +489,8 @@ where
 
     pub fn remove(&self, key: &K, local: &Local<Node<K, V>>) -> Option<V> {
         loop {
-            let guard = &mut local.guard();
-            match self.remove_inner(key, guard) {
-                Ok(result) => return result,
-                Err(_) => continue,
+            if let Ok(r) = self.remove_inner(key, &mut local.guard()) {
+                return r;
             }
         }
     }

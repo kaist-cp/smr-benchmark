@@ -3,6 +3,7 @@ use std::{
     sync::atomic::{fence, AtomicUsize, Ordering},
 };
 
+use vbr_rs::CompareExchangeError::*;
 use vbr_rs::{Entry, Global, Guard, ImmAtomic, Local, MutAtomic, Shared};
 
 use super::concurrent_map::ConcurrentMap;
@@ -41,31 +42,12 @@ where
     K: 'static + Copy,
     V: 'static + Copy,
 {
-    pub fn new(
-        key: K,
-        value: V,
-        height: usize,
-        tag: usize,
-        guard: &Guard<Node<K, V>>,
-    ) -> Result<Shared<Self>, ()> {
-        let node = guard.allocate()?;
-        let node_ref = unsafe { node.deref() };
-        node_ref.key.set(key);
-        node_ref.value.set(value);
-        node_ref.height.set(height);
-        for next in node_ref.next.iter() {
-            next.nullify(node, tag, guard);
-        }
-        Ok(node)
-    }
-
-    pub fn decrement(ptr: Shared<Node<K, V>>, guard: &Guard<Node<K, V>>) -> Result<(), ()> {
+    pub fn decrement(ptr: Shared<Node<K, V>>, guard: &Guard<Node<K, V>>) {
         let prev = unsafe { ptr.deref() }.refs.fetch_sub(1, Ordering::Release);
         if prev == 1 {
             fence(Ordering::Acquire);
-            return unsafe { guard.retire(ptr) };
+            unsafe { guard.retire(ptr) };
         }
-        Ok(())
     }
 
     pub fn mark_tower(ptr: Shared<Node<K, V>>, guard: &Guard<Node<K, V>>) -> Result<bool, ()> {
@@ -73,47 +55,49 @@ where
         let height = node.height.get(guard)?;
 
         for level in (0..height).rev() {
-            let next = node.next[level].load(Ordering::Acquire, guard)?;
-            let next_tag = next.tag()?;
-            if level == 0 && (next_tag & 1) != 0 {
-                return Ok(false);
-            } else if (next_tag & 1) != 0 {
-                continue;
-            }
+            loop {
+                let next = node.next[level].load(Ordering::Acquire, guard)?;
+                let next_tag = next.tag()?;
+                if level == 0 && (next_tag & 1) != 0 {
+                    return Ok(false);
+                } else if (next_tag & 1) != 0 {
+                    break;
+                }
 
-            let result = node.next[level].compare_exchange(
-                ptr,
-                next,
-                next.with_tag(next_tag | 1),
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-                guard,
-            );
-
-            if level == 0 && result.is_err() {
-                return Ok(false);
+                match node.next[level].compare_exchange(
+                    ptr,
+                    next,
+                    next.with_tag(next_tag | 1),
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                    guard,
+                ) {
+                    Success(_) => break,
+                    Failure(_) => continue,
+                    Reallocated => return Err(()),
+                }
             }
         }
         Ok(true)
     }
 }
 
-struct Cursor<K, V>
+struct Cursor<'g, K, V>
 where
     K: 'static + Copy,
     V: 'static + Copy,
 {
-    found: Option<Shared<Node<K, V>>>,
-    preds: [Shared<Node<K, V>>; MAX_HEIGHT],
-    succs: [Shared<Node<K, V>>; MAX_HEIGHT],
+    found: Option<Shared<'g, Node<K, V>>>,
+    preds: [Shared<'g, Node<K, V>>; MAX_HEIGHT],
+    succs: [Shared<'g, Node<K, V>>; MAX_HEIGHT],
 }
 
-impl<K, V> Cursor<K, V>
+impl<'g, K, V> Cursor<'g, K, V>
 where
     K: 'static + Copy,
     V: 'static + Copy,
 {
-    fn new(head: Shared<Node<K, V>>) -> Self {
+    fn new(head: Shared<'g, Node<K, V>>) -> Self {
         Self {
             found: None,
             preds: [head; MAX_HEIGHT],
@@ -136,25 +120,28 @@ where
     V: 'static + Copy,
 {
     pub fn new(local: &Local<Node<K, V>>) -> Self {
-        loop {
-            let guard = &local.guard();
-            let node = ok_or!(
-                Node::new(
-                    unsafe { zeroed() },
-                    unsafe { zeroed() },
-                    0,
-                    MAX_HEIGHT,
-                    guard
-                ),
-                continue
-            );
-            return Self {
-                head: Entry::new(node),
-            };
-        }
+        let guard = &local.guard();
+        let node = guard
+            .allocate(|node| unsafe {
+                let node_ref = node.deref();
+                node_ref.key.set(zeroed());
+                node_ref.value.set(zeroed());
+                node_ref.height.set(MAX_HEIGHT);
+                for next in &node_ref.next {
+                    next.store(node, Shared::null());
+                }
+            })
+            .unwrap();
+        return Self {
+            head: Entry::new(node),
+        };
     }
 
-    fn find_optimistic(&self, key: &K, guard: &Guard<Node<K, V>>) -> Result<Cursor<K, V>, ()> {
+    fn find_optimistic<'g>(
+        &'g self,
+        key: &K,
+        guard: &'g Guard<Node<K, V>>,
+    ) -> Result<Cursor<'g, K, V>, ()> {
         let head = self.head.load(guard)?;
         let mut cursor = Cursor::new(head);
 
@@ -200,7 +187,7 @@ where
         Ok(cursor)
     }
 
-    fn find(&self, key: &K, guard: &Guard<Node<K, V>>) -> Result<Cursor<K, V>, ()> {
+    fn find<'g>(&'g self, key: &K, guard: &'g Guard<Node<K, V>>) -> Result<Cursor<'g, K, V>, ()> {
         let head = self.head.load(guard)?;
         let mut cursor = Cursor::new(head);
 
@@ -227,13 +214,8 @@ where
                 let succ = curr_ref.next[level].load(Ordering::Acquire, guard)?;
 
                 if (succ.tag()? & 1) == 1 {
-                    if self.help_unlink(
-                        pred,
-                        &unsafe { pred.deref() }.next[level],
-                        curr,
-                        succ,
-                        guard,
-                    )? {
+                    let pred_link = &unsafe { pred.deref() }.next[level];
+                    if self.help_unlink(pred, pred_link, curr, succ, guard) {
                         curr = succ.with_tag(0);
                         continue;
                     } else {
@@ -273,7 +255,7 @@ where
         curr: Shared<Node<K, V>>,
         succ: Shared<Node<K, V>>,
         guard: &Guard<Node<K, V>>,
-    ) -> Result<bool, ()> {
+    ) -> bool {
         let success = pred_link
             .compare_exchange(
                 pred,
@@ -283,42 +265,34 @@ where
                 Ordering::Relaxed,
                 guard,
             )
+            .success()
             .is_ok();
 
         if success {
-            Node::decrement(curr, guard)?;
+            Node::decrement(curr, guard);
         }
-        Ok(success)
+        success
     }
 
-    fn insert_inner(
-        &self,
-        key: K,
-        new_node: Shared<Node<K, V>>,
-        height: usize,
-        guard: &Guard<Node<K, V>>,
-    ) -> Result<bool, ()> {
-        let cursor = match self.find(&key, guard) {
-            Ok(cursor) => cursor,
-            Err(_) => return Err(()),
-        };
+    fn insert_inner(&self, key: K, value: V, guard: &Guard<Node<K, V>>) -> Result<bool, ()> {
+        let cursor = self.find(&key, guard)?;
         if cursor.found.is_some() {
             return Ok(false);
         }
 
-        let new_node_ref = unsafe { new_node.deref() };
-        new_node_ref.refs.store(height + 1, Ordering::SeqCst);
-        let null = new_node_ref.next[0].nullify(new_node, 2, guard);
-        new_node_ref.next[0]
-            .compare_exchange(
-                new_node,
-                null,
-                cursor.succs[0],
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-                guard,
-            )
-            .unwrap();
+        let height = generate_height();
+        let new_node = guard.allocate(|node| unsafe {
+            let node_ref = node.deref();
+            node_ref.key.set(key);
+            node_ref.value.set(value);
+            node_ref.height.set(height);
+            node_ref.refs.store(height + 1, Ordering::SeqCst);
+            for next in &node_ref.next {
+                next.store(node, Shared::null());
+            }
+            node_ref.next[0].store(node, cursor.succs[0]);
+        })?;
+
         if unsafe { cursor.preds[0].deref() }.next[0]
             .compare_exchange(
                 cursor.preds[0],
@@ -328,8 +302,10 @@ where
                 Ordering::SeqCst,
                 guard,
             )
+            .success()
             .is_err()
         {
+            unsafe { guard.retire(new_node) };
             return Err(());
         }
 
@@ -337,7 +313,7 @@ where
         // Build the rest of the tower above level 0.
         for level in 1..height {
             if self.insert_level(&cursor, level, new_node, guard).is_err() {
-                new_node_ref
+                unsafe { new_node.deref() }
                     .refs
                     .fetch_sub(height - level, Ordering::SeqCst);
                 break;
@@ -348,12 +324,12 @@ where
         Ok(true)
     }
 
-    fn insert_level(
+    fn insert_level<'g>(
         &self,
-        cursor: &Cursor<K, V>,
+        cursor: &Cursor<'g, K, V>,
         level: usize,
         new_node: Shared<Node<K, V>>,
-        guard: &Guard<Node<K, V>>,
+        guard: &'g Guard<Node<K, V>>,
     ) -> Result<(), ()> {
         let new_node_ref = unsafe { new_node.deref() };
 
@@ -378,7 +354,7 @@ where
                 Ordering::SeqCst,
                 guard,
             )
-            .map_err(|_| ())?;
+            .success()?;
 
         // Try installing the new node at the current level.
         unsafe { pred.deref() }.next[level]
@@ -390,79 +366,32 @@ where
                 Ordering::SeqCst,
                 guard,
             )
+            .success()
             .map(|_| ())
-            .map_err(|_| ())
     }
 
     fn insert(&self, key: K, value: V, local: &Local<Node<K, V>>) -> bool {
-        let guard = &mut local.guard();
-        let height = generate_height();
-        let new_node = loop {
-            match Node::new(key, value, height, 2, guard) {
-                Ok(node) => break node,
-                Err(_) => guard.refresh(),
-            }
-        };
-
         loop {
-            guard.refresh();
-            match self.insert_inner(key, new_node, height, guard) {
-                Ok(inserted) => {
-                    if !inserted {
-                        let _ = unsafe { guard.retire(new_node) };
-                    }
-                    return inserted;
-                }
-                _ => continue,
+            let guard = &mut local.guard();
+            if let Ok(r) = self.insert_inner(key, value, guard) {
+                return r;
             }
         }
     }
 
     pub fn remove(&self, key: &K, local: &Local<Node<K, V>>) -> Option<V> {
-        'outer: loop {
+        loop {
             let guard = &mut local.guard();
-            let cursor = match self.find(key, guard) {
-                Ok(cursor) => cursor,
-                Err(_) => continue,
-            };
+            let cursor = ok_or!(self.find(key, guard), continue);
             let node = cursor.found?;
-            let height = ok_or!(unsafe { node.deref() }.height.get(guard), continue);
             let value = ok_or!(unsafe { node.deref() }.value.get(guard), continue);
 
             // Try removing the node by marking its tower.
             let marked = ok_or!(Node::mark_tower(node, guard), continue);
             if marked {
-                for level in (0..height).rev() {
-                    let succ = ok_or!(
-                        unsafe { node.deref() }.next[level].load(Ordering::SeqCst, guard),
-                        continue 'outer
-                    );
-                    let succ_tag = ok_or!(succ.tag(), continue 'outer);
-                    if (succ_tag & 2) != 0 {
-                        continue;
-                    }
-
-                    // Try linking the predecessor and successor at this level.
-                    if unsafe { cursor.preds[level].deref() }.next[level]
-                        .compare_exchange(
-                            cursor.preds[level],
-                            node,
-                            succ.with_tag(0),
-                            Ordering::SeqCst,
-                            Ordering::SeqCst,
-                            guard,
-                        )
-                        .is_ok()
-                    {
-                        let _ = Node::decrement(node, guard);
-                    } else {
-                        guard.refresh();
-                        let _ = self.find(key, guard);
-                        break;
-                    }
-                }
+                // Note: Trying unlinking here in VBR seems to be non-trivial...
+                return Some(value);
             }
-            return Some(value);
         }
     }
 }

@@ -38,7 +38,7 @@ impl<T> Global<T> {
             avail.push(Box::into_raw(Box::new(Bag::new_with_alloc())));
         }
         Self {
-            epoch: CachePadded::new(AtomicU64::new(0)),
+            epoch: CachePadded::new(AtomicU64::new(1)),
             avail,
         }
     }
@@ -284,7 +284,10 @@ impl<T> Guard<T> {
         self.epoch = self.global().epoch();
     }
 
-    pub fn allocate(&self) -> Result<Shared<T>, ()> {
+    pub fn allocate<'g, F>(&'g self, init: F) -> Result<Shared<'g, T>, ()>
+    where
+        F: Fn(Shared<'g, T>),
+    {
         let ptr = self.local().pop_avail();
         debug_assert!(!ptr.is_null());
         let slot_ref = unsafe { &*ptr };
@@ -298,29 +301,28 @@ impl<T> Guard<T> {
 
         slot_ref.birth.store(self.epoch, Ordering::SeqCst);
         slot_ref.retire.store(NOT_RETIRED, Ordering::SeqCst);
-        Ok(Shared {
+        let result = Shared {
             ptr,
             birth: self.epoch,
-        })
+            _marker: PhantomData,
+        };
+        init(result);
+        Ok(result)
     }
 
-    pub unsafe fn retire(&self, ptr: Shared<T>) -> Result<(), ()> {
+    pub unsafe fn retire(&self, ptr: Shared<T>) {
         let inner = ptr.as_inner().expect("Attempted to retire a null pointer.");
 
         if inner.birth.load(Ordering::SeqCst) > ptr.birth
             || inner.retire.load(Ordering::SeqCst) != NOT_RETIRED
         {
-            return Ok(());
+            return;
         }
 
         let curr_epoch = self.global().epoch();
         inner.retire.store(curr_epoch, Ordering::SeqCst);
         self.local()
             .push_retired((inner as *const Inner<T>).cast_mut());
-        if self.epoch < curr_epoch {
-            return Err(());
-        }
-        Ok(())
     }
 
     pub fn validate_epoch(&self) -> Result<(), ()> {
@@ -332,22 +334,30 @@ impl<T> Guard<T> {
     }
 }
 
-pub struct Shared<T> {
+pub struct Shared<'g, T> {
     ptr: *mut Inner<T>,
     birth: u64,
+    _marker: PhantomData<&'g T>,
 }
 
-impl<T> Shared<T> {
-    pub unsafe fn deref(&self) -> &T {
+impl<'g, T> Shared<'g, T> {
+    pub unsafe fn deref(&self) -> &'g T {
         &unsafe { &*ptr_with_tag(self.ptr, 0) }.data
     }
 
-    pub fn as_ref(&self) -> Option<&T> {
+    pub fn as_ref(&self) -> Option<&'g T> {
         self.as_inner().map(|inner| &inner.data)
     }
 
-    fn as_inner(&self) -> Option<&Inner<T>> {
+    fn as_inner(&self) -> Option<&'g Inner<T>> {
         unsafe { ptr_with_tag(self.ptr, 0).as_ref() }
+    }
+
+    pub fn validate_birth_epoch(&self) -> bool {
+        let Some(inner) = self.as_inner() else {
+            return true;
+        };
+        inner.birth.load(Ordering::SeqCst) == self.birth
     }
 
     pub fn is_null(&self) -> bool {
@@ -358,6 +368,7 @@ impl<T> Shared<T> {
         Self {
             ptr: null_mut(),
             birth: 0,
+            _marker: PhantomData,
         }
     }
 
@@ -376,6 +387,7 @@ impl<T> Shared<T> {
         Self {
             ptr: ptr_with_tag(self.ptr, tag),
             birth: self.birth,
+            _marker: PhantomData,
         }
     }
 
@@ -384,15 +396,15 @@ impl<T> Shared<T> {
     }
 }
 
-impl<T> Clone for Shared<T> {
+impl<'g, T> Clone for Shared<'g, T> {
     fn clone(&self) -> Self {
         Self { ..*self }
     }
 }
 
-impl<T> Copy for Shared<T> {}
+impl<'g, T> Copy for Shared<'g, T> {}
 
-impl<T> PartialEq for Shared<T> {
+impl<'g, T> PartialEq for Shared<'g, T> {
     fn eq(&self, other: &Self) -> bool {
         self.ptr == other.ptr && self.birth == other.birth
     }
@@ -414,21 +426,25 @@ impl<T> MutAtomic<T> {
         }
     }
 
-    pub fn load(&self, order: Ordering, guard: &Guard<T>) -> Result<Shared<T>, ()> {
+    pub fn load<'g>(&self, order: Ordering, guard: &'g Guard<T>) -> Result<Shared<'g, T>, ()> {
         let result = unsafe { self.load_unchecked(order) };
         compiler_fence(Ordering::SeqCst);
         guard.validate_epoch()?;
         Ok(result)
     }
 
-    pub unsafe fn load_unchecked(&self, order: Ordering) -> Shared<T> {
+    pub unsafe fn load_unchecked<'g>(&self, order: Ordering) -> Shared<'g, T> {
         let (_, ptr) = decompose_u128::<Inner<T>>(self.link.load(order));
         let birth = if let Some(ver) = unsafe { ptr_with_tag(ptr, 0).as_ref() } {
             ver.birth.load(Ordering::SeqCst)
         } else {
             0
         };
-        Shared { ptr, birth }
+        Shared {
+            ptr,
+            birth,
+            _marker: PhantomData,
+        }
     }
 
     pub fn compare_exchange(
@@ -439,30 +455,43 @@ impl<T> MutAtomic<T> {
         success: Ordering,
         failure: Ordering,
         _: &Guard<T>,
-    ) -> Result<(u64, *mut Inner<T>), (u64, *mut Inner<T>)> {
+    ) -> CompareExchangeError<T> {
+        if !owner.validate_birth_epoch() {
+            return CompareExchangeError::Reallocated;
+        }
         let curr = compose_u128(owner.birth.max(current.birth), current.as_raw());
         let next = compose_u128(owner.birth.max(new.birth), new.as_raw());
-        self.link
-            .compare_exchange(curr, next, success, failure)
-            .map(|comp| decompose_u128(comp))
-            .map_err(|comp| decompose_u128(comp))
+        match self.link.compare_exchange(curr, next, success, failure) {
+            Ok(comp) => CompareExchangeError::Success(decompose_u128(comp)),
+            Err(comp) => CompareExchangeError::Failure(decompose_u128(comp)),
+        }
     }
 
-    pub fn nullify(&self, owner: Shared<T>, tag: usize, _: &Guard<T>) -> Shared<T> {
-        let prev = self.link.load(Ordering::SeqCst);
-        let result = Shared {
-            ptr: ptr_with_tag(null_mut(), tag),
-            birth: 0,
-        };
+    /// # Safety
+    ///
+    /// It is allowed only in an `allocate` of an owning object.
+    pub unsafe fn store(&self, owner: Shared<T>, new: Shared<T>) {
+        let curr = self.link.load(Ordering::SeqCst);
+        let next = compose_u128(owner.birth.max(new.birth), new.as_raw());
         self.link
-            .compare_exchange(
-                prev,
-                compose_u128(owner.birth, result.ptr),
-                Ordering::AcqRel,
-                Ordering::SeqCst,
-            )
+            .compare_exchange(curr, next, Ordering::SeqCst, Ordering::SeqCst)
             .unwrap();
-        result
+    }
+}
+
+pub enum CompareExchangeError<T> {
+    Success(VerPtr<Inner<T>>),
+    Failure(VerPtr<Inner<T>>),
+    Reallocated,
+}
+
+impl<T> CompareExchangeError<T> {
+    pub fn success(&self) -> Result<VerPtr<Inner<T>>, ()> {
+        if let Self::Success(vp) = self {
+            Ok(*vp)
+        } else {
+            Err(())
+        }
     }
 }
 
@@ -486,9 +515,17 @@ impl<T> Entry<T> {
             let birth = ver.birth.load(Ordering::SeqCst);
             compiler_fence(Ordering::SeqCst);
             guard.validate_epoch()?;
-            Ok(Shared { ptr, birth })
+            Ok(Shared {
+                ptr,
+                birth,
+                _marker: PhantomData,
+            })
         } else {
-            Ok(Shared { ptr, birth: 0 })
+            Ok(Shared {
+                ptr,
+                birth: 0,
+                _marker: PhantomData,
+            })
         }
     }
 }
@@ -514,7 +551,10 @@ impl<T: Copy> ImmAtomic<T> {
         Ok(value)
     }
 
-    pub fn set(&self, v: T) {
+    /// # Safety
+    ///
+    /// It is allowed only in an `allocate` of an owning object.
+    pub unsafe fn set(&self, v: T) {
         self.data.store(v, Ordering::SeqCst);
     }
 }
@@ -523,11 +563,13 @@ fn compose_u128<T>(meta: u64, ptr: *mut T) -> u128 {
     ((meta as u128) << 64) | (ptr as usize as u128)
 }
 
-fn decompose_u128<T>(value: u128) -> (u64, *mut T) {
+fn decompose_u128<T>(value: u128) -> VerPtr<T> {
     let meta = (value >> 64) as u64;
     let ptr = (value & (u64::MAX as u128)) as usize as *mut T;
     (meta, ptr)
 }
+
+pub type VerPtr<T> = (u64, *mut T);
 
 /// Returns a bitmask containing the unused least significant bits of an aligned pointer to `T`.
 #[inline]
