@@ -1,6 +1,7 @@
 use std::{
     cell::RefCell,
     collections::VecDeque,
+    fmt::Display,
     marker::PhantomData,
     mem::{align_of, zeroed},
     ptr::null_mut,
@@ -372,15 +373,8 @@ impl<'g, T> Shared<'g, T> {
         }
     }
 
-    pub fn tag(&self) -> Result<usize, ()> {
-        let result = decompose_ptr(self.ptr).1;
-        compiler_fence(Ordering::SeqCst);
-        if let Some(inner) = unsafe { ptr_with_tag(self.ptr, 0).as_ref() } {
-            if self.birth != inner.birth.load(Ordering::SeqCst) {
-                return Err(());
-            }
-        }
-        Ok(result)
+    pub fn tag(&self) -> usize {
+        decompose_ptr(self.ptr).1
     }
 
     pub fn with_tag(&self, tag: usize) -> Self {
@@ -407,6 +401,12 @@ impl<'g, T> Copy for Shared<'g, T> {}
 impl<'g, T> PartialEq for Shared<'g, T> {
     fn eq(&self, other: &Self) -> bool {
         self.ptr == other.ptr && self.birth == other.birth
+    }
+}
+
+impl<'g, T> Display for Shared<'g, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<{:p}, {}>", self.ptr, self.birth)
     }
 }
 

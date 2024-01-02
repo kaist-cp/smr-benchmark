@@ -188,7 +188,7 @@ where
             leaf_dir: Direction::L,
         };
 
-        let mut prev_tag = Marks::from_bits_truncate(leaf.tag()?).tag();
+        let mut prev_tag = Marks::from_bits_truncate(leaf.tag()).tag();
         let mut curr_dir = Direction::L;
         let mut curr = leaf_node.left.load(Ordering::Relaxed, guard)?;
 
@@ -206,7 +206,7 @@ where
             record.leaf_dir = curr_dir;
 
             // update other variables
-            prev_tag = Marks::from_bits_truncate(curr.tag()?).tag();
+            prev_tag = Marks::from_bits_truncate(curr.tag()).tag();
             if curr_node.key.get(guard)?.cmp(key) == cmp::Ordering::Greater {
                 curr_dir = Direction::L;
                 curr = curr_node.left.load(Ordering::Acquire, guard)?;
@@ -264,7 +264,7 @@ where
     fn cleanup(&self, record: &SeekRecord<K, V>, guard: &Guard<Node<K, V>>) -> Result<bool, ()> {
         // Identify the node(subtree) that will replace `successor`.
         let leaf_marked = record.leaf_addr().load(Ordering::Acquire, guard)?;
-        let leaf_flag = Marks::from_bits_truncate(leaf_marked.tag()?).flag();
+        let leaf_flag = Marks::from_bits_truncate(leaf_marked.tag()).flag();
         let target_sibling_addr = if leaf_flag {
             record.leaf_sibling_addr()
         } else {
@@ -275,7 +275,7 @@ where
         // tag (parent, sibling) edge -> all of the parent's edges can't change now
         // TODO: Is Release enough?
         let target_sibling = target_sibling_addr.load(Ordering::Acquire, guard)?;
-        let current_tag = target_sibling.tag()?;
+        let current_tag = target_sibling.tag();
         if target_sibling_addr
             .compare_exchange(
                 record.parent,
@@ -295,7 +295,7 @@ where
         // Since (parent, sibling) might have been concurrently flagged, copy
         // the flag to the new edge (ancestor, sibling).
         let target_sibling = target_sibling_addr.load(Ordering::Acquire, guard)?;
-        let flag = Marks::from_bits_truncate(target_sibling.tag()?).flag();
+        let flag = Marks::from_bits_truncate(target_sibling.tag()).flag();
         let is_unlinked = record
             .successor_addr()
             .compare_exchange(

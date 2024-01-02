@@ -1,6 +1,6 @@
 use std::{
     mem::zeroed,
-    sync::atomic::{fence, AtomicUsize, Ordering},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use vbr_rs::CompareExchangeError::*;
@@ -43,9 +43,8 @@ where
     V: 'static + Copy,
 {
     pub fn decrement(ptr: Shared<Node<K, V>>, guard: &Guard<Node<K, V>>) {
-        let prev = unsafe { ptr.deref() }.refs.fetch_sub(1, Ordering::Release);
+        let prev = unsafe { ptr.deref() }.refs.fetch_sub(1, Ordering::SeqCst);
         if prev == 1 {
-            fence(Ordering::Acquire);
             unsafe { guard.retire(ptr) };
         }
     }
@@ -57,7 +56,7 @@ where
         for level in (0..height).rev() {
             loop {
                 let next = node.next[level].load(Ordering::Acquire, guard)?;
-                let next_tag = next.tag()?;
+                let next_tag = next.tag();
                 if level == 0 && (next_tag & 1) != 0 {
                     return Ok(false);
                 } else if (next_tag & 1) != 0 {
@@ -164,7 +163,7 @@ where
                 let curr_node = some_or!(curr.as_ref(), break);
                 let succ = curr_node.next[level].load(Ordering::Acquire, guard)?;
 
-                if succ.tag()? != 0 {
+                if succ.tag() != 0 {
                     curr = succ;
                     continue;
                 }
@@ -206,16 +205,27 @@ where
             let mut curr = unsafe { pred.deref() }.next[level].load(Ordering::Acquire, guard)?;
             // If `curr` is marked, that means `pred` is removed and we have to restart the
             // search.
-            if (curr.tag()? & 1) == 1 {
+            if (curr.tag() & 1) == 1 {
                 return Err(());
             }
 
             while let Some(curr_ref) = curr.as_ref() {
                 let succ = curr_ref.next[level].load(Ordering::Acquire, guard)?;
 
-                if (succ.tag()? & 1) == 1 {
-                    let pred_link = &unsafe { pred.deref() }.next[level];
-                    if self.help_unlink(pred, pred_link, curr, succ, guard) {
+                if (succ.tag() & 1) == 1 {
+                    if unsafe { pred.deref() }.next[level]
+                        .compare_exchange(
+                            pred,
+                            curr.with_tag(0),
+                            succ.with_tag(0),
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                            guard,
+                        )
+                        .success()
+                        .is_ok()
+                    {
+                        Node::decrement(curr, guard);
                         curr = succ.with_tag(0);
                         continue;
                     } else {
@@ -230,7 +240,9 @@ where
                 match curr_ref.key.get(guard)?.cmp(key) {
                     std::cmp::Ordering::Greater => break,
                     std::cmp::Ordering::Equal => {
-                        cursor.found = Some(curr);
+                        if level == 0 {
+                            cursor.found = Some(curr);
+                        }
                         break;
                     }
                     std::cmp::Ordering::Less => {}
@@ -246,32 +258,6 @@ where
         }
 
         return Ok(cursor);
-    }
-
-    fn help_unlink(
-        &self,
-        pred: Shared<Node<K, V>>,
-        pred_link: &MutAtomic<Node<K, V>>,
-        curr: Shared<Node<K, V>>,
-        succ: Shared<Node<K, V>>,
-        guard: &Guard<Node<K, V>>,
-    ) -> bool {
-        let success = pred_link
-            .compare_exchange(
-                pred,
-                curr.with_tag(0),
-                succ.with_tag(0),
-                Ordering::Release,
-                Ordering::Relaxed,
-                guard,
-            )
-            .success()
-            .is_ok();
-
-        if success {
-            Node::decrement(curr, guard);
-        }
-        success
     }
 
     fn insert_inner(&self, key: K, value: V, guard: &Guard<Node<K, V>>) -> Result<bool, ()> {
@@ -340,8 +326,7 @@ where
         // If the current pointer is marked, that means another thread is already
         // removing the node we've just inserted. In that case, let's just stop
         // building the tower.
-        let next_tag = next.tag()?;
-        if (next_tag & 1) != 0 {
+        if (next.tag() & 1) != 0 {
             return Err(());
         }
 
@@ -357,7 +342,7 @@ where
             .success()?;
 
         // Try installing the new node at the current level.
-        unsafe { pred.deref() }.next[level]
+        let result = unsafe { pred.deref() }.next[level]
             .compare_exchange(
                 pred,
                 succ,
@@ -367,7 +352,28 @@ where
                 guard,
             )
             .success()
-            .map(|_| ())
+            .map(|_| ());
+
+        if result.is_err() {
+            // If we have failed to link the predecessor to the new node, we have to restore the
+            // next pointer of the new one into a null. This is because it can cause a deadlock
+            // in `mark_tower` function for the new node.
+            //
+            // The successor node might be retired and reclaimed by some threads. Then, the
+            // successor will have a birth epoch that is greater than the version of the
+            // next pointer of the new node, breaking the invariant of VBR. And it will
+            // prevent marking CAS forever.
+            new_node_ref.next[level].compare_exchange(
+                new_node,
+                succ,
+                next,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+                guard,
+            );
+        }
+
+        result
     }
 
     fn insert(&self, key: K, value: V, local: &Local<Node<K, V>>) -> bool {

@@ -99,7 +99,7 @@ where
             // - stop cursor.curr if (not marked) && (cursor.curr >= key)
             // - advance cursor.prev if not marked
 
-            if next.tag()? != 0 {
+            if next.tag() != 0 {
                 // We add a 0 tag here so that `self.curr`s tag is always 0.
                 cursor.curr = next.with_tag(0);
                 continue;
@@ -154,14 +154,14 @@ where
     ) -> Result<(bool, Cursor<'g, K, V>), ()> {
         let mut cursor = Cursor::head(self.head.load(guard)?, guard)?;
         loop {
-            debug_assert_eq!(cursor.curr.tag()?, 0);
+            debug_assert_eq!(cursor.curr.tag(), 0);
 
             let curr_node = some_or!(cursor.curr.as_ref(), return Ok((false, cursor)));
             let mut next = curr_node.next.load(Ordering::Acquire, guard)?;
 
             // NOTE: original version aborts here if self.prev is tagged
 
-            if next.tag()? != 0 {
+            if next.tag() != 0 {
                 next = next.with_tag(0);
                 let _ = unsafe { cursor.prev.deref() }
                     .next
@@ -206,7 +206,7 @@ where
                     cursor.curr = next;
                     continue;
                 }
-                Equal => break (next.tag()? == 0, cursor),
+                Equal => break (next.tag() == 0, cursor),
                 Greater => break (false, cursor),
             }
         })
@@ -282,8 +282,7 @@ where
             let value = ok_or!(curr_node.value.get(guard), continue);
 
             let next = ok_or!(curr_node.next.load(Ordering::Acquire, guard), continue);
-            let tag = ok_or!(next.tag(), continue);
-            if tag == 1 {
+            if next.tag() == 1 {
                 continue;
             }
 
@@ -338,8 +337,7 @@ where
             let value = ok_or!(curr_node.value.get(guard), continue);
 
             let next = ok_or!(curr_node.next.load(Ordering::Acquire, guard), continue);
-            let tag = ok_or!(next.tag(), continue);
-            if tag == 1 {
+            if next.tag() == 1 {
                 continue;
             }
             if curr_node
