@@ -72,7 +72,16 @@ where
                     guard,
                 ) {
                     Success(_) => break,
-                    Failure(_) => continue,
+                    Failure((link_ver, link_ptr)) => {
+                        if link_ptr == next.as_raw() && link_ver < ptr.birth().max(next.birth()) {
+                            // The version of the link is stale. It means that an insertion gave up
+                            // linking this level and the successive node has been retired and
+                            // reclaimed. In this case we don't have to mark this level, as nobody
+                            // can reach this node by traversing on this level.
+                            break;
+                        }
+                        continue;
+                    }
                     Reallocated => return Err(()),
                 }
             }
@@ -342,7 +351,7 @@ where
             .success()?;
 
         // Try installing the new node at the current level.
-        let result = unsafe { pred.deref() }.next[level]
+        unsafe { pred.deref() }.next[level]
             .compare_exchange(
                 pred,
                 succ,
@@ -352,28 +361,7 @@ where
                 guard,
             )
             .success()
-            .map(|_| ());
-
-        if result.is_err() {
-            // If we have failed to link the predecessor to the new node, we have to restore the
-            // next pointer of the new one into a null. This is because it can cause a deadlock
-            // in `mark_tower` function for the new node.
-            //
-            // The successor node might be retired and reclaimed by some threads. Then, the
-            // successor will have a birth epoch that is greater than the version of the
-            // next pointer of the new node, breaking the invariant of VBR. And it will
-            // prevent marking CAS forever.
-            new_node_ref.next[level].compare_exchange(
-                new_node,
-                succ,
-                next,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-                guard,
-            );
-        }
-
-        result
+            .map(|_| ())
     }
 
     fn insert(&self, key: K, value: V, local: &Local<Node<K, V>>) -> bool {

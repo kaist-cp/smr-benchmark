@@ -361,6 +361,10 @@ impl<'g, T> Shared<'g, T> {
         inner.birth.load(Ordering::SeqCst) == self.birth
     }
 
+    pub fn birth(&self) -> u64 {
+        self.birth
+    }
+
     pub fn is_null(&self) -> bool {
         self.ptr.is_null()
     }
