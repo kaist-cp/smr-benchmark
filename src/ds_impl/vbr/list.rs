@@ -432,7 +432,7 @@ where
     type Local = Local<Node<K, V>>;
 
     fn global(key_range_hint: usize) -> Self::Global {
-        Global::new(key_range_hint * 2)
+        Global::new(key_range_hint)
     }
 
     fn local(global: &Self::Global) -> Self::Local {
@@ -476,7 +476,7 @@ where
     type Local = Local<Node<K, V>>;
 
     fn global(key_range_hint: usize) -> Self::Global {
-        Global::new(key_range_hint * 2)
+        Global::new(key_range_hint)
     }
 
     fn local(global: &Self::Global) -> Self::Local {
@@ -532,7 +532,7 @@ where
     type Local = Local<Node<K, V>>;
 
     fn global(key_range_hint: usize) -> Self::Global {
-        Global::new(key_range_hint * 2)
+        Global::new(key_range_hint)
     }
 
     fn local(global: &Self::Global) -> Self::Local {

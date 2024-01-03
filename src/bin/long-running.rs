@@ -1472,7 +1472,7 @@ fn bench_map_nbr(
 
 fn bench_map_vbr(config: &Config, strategy: PrefillStrategy) -> (u64, usize, usize, usize, usize) {
     use vbr::ConcurrentMap;
-    let global = &vbr::HHSList::global(config.prefill * 2);
+    let global = &vbr::HHSList::global(config.prefill);
     let local = &vbr::HHSList::local(global);
     let map = &vbr::HHSList::new(local);
     strategy.prefill_vbr(config, map, local);
