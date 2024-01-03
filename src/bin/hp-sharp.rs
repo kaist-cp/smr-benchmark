@@ -10,8 +10,7 @@ use std::time::Instant;
 
 use smr_benchmark::config::map::{setup, BagSize, BenchWriter, Config, Op, Perf, DS};
 use smr_benchmark::ds_impl::hp_sharp::{
-    list_alter::{HHSList, HList, HMList},
-    ConcurrentMap, HashMap, NMTreeMap, SkipList,
+    ConcurrentMap, HHSList, HList, HMList, HashMap, NMTreeMap, SkipList,
 };
 
 fn main() {
