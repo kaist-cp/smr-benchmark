@@ -16,7 +16,7 @@ if not cpu_count or cpu_count <= 24:
 elif cpu_count <= 64:
     ts = list(map(str, [1] + list(range(8, 129, 8))))
 else:
-    ts = list(map(str, [1] + list(range(8, 193, 8))))
+    ts = list(map(str, [1] + list(range(12, 193, 12))))
 runs = 1
 gs = [0, 1, 2, 3]
 

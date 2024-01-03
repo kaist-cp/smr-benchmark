@@ -67,7 +67,7 @@ if not cpu_count or cpu_count <= 24:
 elif cpu_count <= 64:
     ts = [1] + list(range(8, 129, 8))
 else:
-    ts = [1] + list(range(10, 151, 10))
+    ts = [1] + list(range(12, 193, 12))
 n_map = {0: ''}
 
 # https://matplotlib.org/stable/api/markers_api.html
