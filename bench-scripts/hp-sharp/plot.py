@@ -253,6 +253,8 @@ for ds in dss_all:
     data.avg_mem = data.avg_mem.map(lambda x: x / (2 ** 20))
     data.peak_garb = data.peak_garb.map(lambda x: x / 10000)
     data.avg_garb = data.avg_garb.map(lambda x: x / 10000)
+    data.mm = list(map(lambda tup: tup[0] if tup[1] == "small" else tup[0] + "-large", zip(data.mm, data.bag_size)))
+    data = data.drop("bag_size", axis=1)
     data = data[data.mm.isin(SMR_ONLYs)]
 
     raw_data[ds] = data.copy()
