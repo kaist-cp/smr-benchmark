@@ -57,9 +57,9 @@ impl PrefillStrategy {
         match self {
             PrefillStrategy::Random => {
                 let (bag_cap_pow2, lowatermark) = extract_nbr_params(config);
-                let collector =
-                    &nbr_rs::Collector::new(config.threads, bag_cap_pow2, lowatermark, max_hazptrs);
                 let threads = available_parallelism().map(|v| v.get()).unwrap_or(1);
+                let collector =
+                    &nbr_rs::Collector::new(threads, bag_cap_pow2, lowatermark, max_hazptrs);
                 print!("prefilling with {threads} threads... ");
                 stdout().flush().unwrap();
                 scope(|s| {
