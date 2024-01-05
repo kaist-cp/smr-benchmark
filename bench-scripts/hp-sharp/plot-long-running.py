@@ -139,6 +139,7 @@ def draw_throughput(data):
 def draw_peak_garb(data, full):
     data = data.copy()
     data = data[data.mm != NR]
+    data = data[data.mm != VBR]
     y_label = 'Peak unreclaimed memory blocks (×10³)'
     legend = False
     if full:
@@ -153,6 +154,7 @@ def draw_peak_garb(data, full):
 def draw_avg_garb(data, full):
     data = data.copy()
     data = data[data.mm != NR]
+    data = data[data.mm != VBR]
     y_label = 'Avg. unreclaimed memory blocks (×10³)'
     legend = False
     if full:
