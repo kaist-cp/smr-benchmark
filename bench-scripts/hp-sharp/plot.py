@@ -193,35 +193,6 @@ def draw_throughput(data, ds, bench, key_range):
     draw(plot_title(ds, bench), f'{RESULTS_PATH}/{ds}_{bench}_{range_to_str(key_range)}_throughput.pdf',
          data, SMR_ONLY, THROUGHPUT, y_label, y_max, legend)
 
-def draw_mem(data, ds, bench, key_range):
-    data = data[ds].copy()
-    data = data[data.key_range == key_range]
-    if ds == NMTREE:
-        data = data[data.mm != HP]
-    y_label = 'Peak memory usage (MiB)'
-    y_max = None
-    legend = False
-    _d = data[~data[SMR_ONLY].isin([NR])]  # exclude NR and EBR stalled
-    y_max = _d[_d.ds == ds].peak_mem.max() * 1.05
-    draw(plot_title(ds, bench), f'{RESULTS_PATH}/{ds}_{bench}_{range_to_str(key_range)}_peak_mem.pdf',
-         data, SMR_ONLY, PEAK_MEM, y_label, y_max, legend)
-
-def draw_garb(data, ds, bench, key_range):
-    data = data[ds].copy()
-    data = data[data.key_range == key_range]
-    data = data[data.mm != NR]
-    data = data[data.mm != VBR]
-    data = filter_invalid_data(data, ds)
-    y_label = 'Avg. Unreclaimed memory blocks (×10⁴)'
-    legend = False
-
-    nbr_max = data[data.mm == NBR].avg_garb.max()
-    hp_pp_max = data[data.mm == HP_PP].avg_garb.max()
-    y_max = max(0 if math.isnan(nbr_max) else nbr_max, 0 if math.isnan(hp_pp_max) else hp_pp_max) * 2
-
-    draw(plot_title(ds, bench), f'{RESULTS_PATH}/{ds}_{bench}_{range_to_str(key_range)}_avg_garb.pdf',
-         data, SMR_ONLY, AVG_GARB, y_label, y_max, legend)
-
 
 def draw_peak_garb(data, ds, bench, key_range):
     data = data[ds].copy()
@@ -232,9 +203,11 @@ def draw_peak_garb(data, ds, bench, key_range):
     y_label = 'Peak unreclaimed memory blocks (×10⁴)'
     legend = False
 
-    nbr_max = data[data.mm == NBR].peak_garb.max()
-    hp_pp_max = data[data.mm == HP_PP].peak_garb.max()
-    y_max = max(0 if math.isnan(nbr_max) else nbr_max, 0 if math.isnan(hp_pp_max) else hp_pp_max) * 2
+    y_max = 0
+    for cand in [NBR, HP_PP, HP_SHARP]:
+        max_garb = data[data.mm == cand].peak_garb.max()
+        if not math.isnan(max_garb):
+            y_max = max(y_max, max_garb * 2)
 
     draw(plot_title(ds, bench), f'{RESULTS_PATH}/{ds}_{bench}_{range_to_str(key_range)}_peak_garb.pdf',
          data, SMR_ONLY, PEAK_GARB, y_label, y_max, legend)
@@ -276,25 +249,7 @@ for ds in dss_read:
         draw_throughput(avg_data[HALF], ds, HALF, kr)
         draw_throughput(avg_data[READ], ds, READ, kr)
 
-# 2. avg garbage graph, 7 lines (SMR_ONLY)
-for ds in dss_write:
-    for kr in key_ranges(ds):
-        draw_garb(avg_data[WRITE], ds, WRITE, kr)
-for ds in dss_read:
-    for kr in key_ranges(ds):
-        draw_garb(avg_data[HALF], ds, HALF, kr)
-        draw_garb(avg_data[READ], ds, READ, kr)
-
-# 3. peak mem graph
-for ds in dss_write:
-    for kr in key_ranges(ds):
-        draw_mem(avg_data[WRITE], ds, WRITE, kr)
-for ds in dss_read:
-    for kr in key_ranges(ds):
-        draw_mem(avg_data[HALF], ds, HALF, kr)
-        draw_mem(avg_data[READ], ds, READ, kr)
-
-# 4. peak garbage graph
+# 2. peak garbage graph
 for ds in dss_write:
     for kr in key_ranges(ds):
         draw_peak_garb(avg_data[WRITE], ds, WRITE, kr)
@@ -303,7 +258,7 @@ for ds in dss_read:
         draw_peak_garb(avg_data[HALF], ds, HALF, kr)
         draw_peak_garb(avg_data[READ], ds, READ, kr)
 
-# 5. Read-only throughput
+# 3. Read-only throughput
 for ds in dss_read:
     for kr in key_ranges(ds):
         draw_throughput(avg_data[READ_ONLY], ds, READ_ONLY, kr)
