@@ -130,7 +130,7 @@ def draw(title, name, data, line_name, y_value, y_label=None, y_max=None, legend
 def draw_throughput(data):
     data = data.copy()
     y_label = 'Throughput ratio to NR'
-    legend = True
+    legend = False
     y_max = data.throughput.max() * 1.05
     draw("", f'{RESULTS_PATH}/long-running-throughput.pdf',
          data, SMR_ONLY, THROUGHPUT, y_label, y_max, legend,
@@ -140,7 +140,7 @@ def draw_peak_garb(data, full):
     data = data.copy()
     data = data[data.mm != NR]
     y_label = 'Peak unreclaimed memory blocks (×10³)'
-    legend = True
+    legend = False
     if full:
         y_max = data.peak_garb.max() * 1.05
         tail = "-full"
@@ -154,7 +154,7 @@ def draw_avg_garb(data, full):
     data = data.copy()
     data = data[data.mm != NR]
     y_label = 'Avg. unreclaimed memory blocks (×10³)'
-    legend = True
+    legend = False
     if full:
         y_max = data.avg_garb.max() * 1.05
         tail = "-full"

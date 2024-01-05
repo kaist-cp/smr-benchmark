@@ -10,7 +10,7 @@ krs = [(2 ** e) for e in range(18, 30, 1)]
 cpu_count = os.cpu_count()
 writers = cpu_count // 2
 readers = cpu_count // 2
-runs = 1
+runs = 4
 i = 10
 
 if os.path.exists('.git'):
