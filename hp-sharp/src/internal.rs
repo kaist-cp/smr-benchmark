@@ -452,7 +452,7 @@ impl Local {
     }
 
     #[inline]
-    pub(crate) fn iter_guarded_ptrs<'s>(&'s mut self) -> impl Iterator<Item = *mut u8> + 's {
+    pub(crate) fn iter_guarded_ptrs(&mut self) -> impl Iterator<Item = *mut u8> + '_ {
         unsafe { &*self.global }.iter_guarded_ptrs(self)
     }
 

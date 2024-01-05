@@ -1,4 +1,3 @@
-use arrayvec::{ArrayVec, IntoIter};
 use std::mem::forget;
 
 use crate::epoch::Epoch;
@@ -55,10 +54,9 @@ impl Drop for Deferred {
 unsafe impl Send for Deferred {}
 
 /// A bag of deferred functions.
-#[derive(Default)]
 pub(crate) struct Bag {
     /// Stashed garbages.
-    defs: ArrayVec<Deferred, MAX_OBJECTS>,
+    defs: Vec<Deferred>,
 }
 
 /// `Bag::try_push()` requires that it is safe for another thread to execute the given functions.
@@ -68,7 +66,9 @@ impl Bag {
     /// Returns a new, empty bag.
     #[inline]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            defs: Vec::with_capacity(MAX_OBJECTS),
+        }
     }
 
     /// Attempts to insert a deferred function into the bag.
@@ -77,19 +77,28 @@ impl Bag {
     /// full.
     #[inline]
     pub fn try_push(&mut self, def: Deferred) -> Result<(), Deferred> {
-        self.defs.try_push(def).map_err(|e| e.element())
+        if self.len() == MAX_OBJECTS {
+            return Err(def);
+        }
+        self.defs.push(def);
+        Ok(())
     }
 
     /// Creates an iterator of [`Deferred`] from a [`Bag`].
-    #[must_use]
     #[inline]
-    pub fn into_iter(self) -> IntoIter<Deferred, MAX_OBJECTS> {
+    pub fn into_iter(self) -> impl Iterator<Item = Deferred> {
         self.defs.into_iter()
     }
 
     #[inline]
     pub fn len(&self) -> usize {
         self.defs.len()
+    }
+}
+
+impl Default for Bag {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

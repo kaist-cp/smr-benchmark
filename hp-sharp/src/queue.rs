@@ -179,7 +179,7 @@ struct LocalHandle {
 }
 
 impl LocalHandle {
-    const RECL_PERIOD: usize = 8;
+    const RECL_PERIOD: usize = 32;
 
     fn new(local: &Local) -> Self {
         Self { local }
@@ -230,14 +230,13 @@ impl LocalHandle {
 
         *bag = bag
             .drain(..)
-            .filter_map(|d| {
+            .filter(|&d| {
                 let tail_adj = unsafe { &*d }.next.load(Ordering::SeqCst) == ltail;
-                if is_guarded(d) || tail_adj {
-                    Some(d)
-                } else {
+                if !is_guarded(d) && !tail_adj {
                     unsafe { drop(Box::from_raw(d)) };
-                    None
+                    return false;
                 }
+                true
             })
             .collect();
     }
