@@ -549,10 +549,14 @@ impl<T: Copy> ImmAtomic<T> {
     }
 
     pub fn get<G>(&self, guard: &Guard<G>) -> Result<T, ()> {
-        let value = self.data.load(Ordering::SeqCst);
+        let value = unsafe { self.get_unchecked() };
         compiler_fence(Ordering::SeqCst);
         guard.validate_epoch()?;
         Ok(value)
+    }
+
+    pub unsafe fn get_unchecked(&self) -> T {
+        self.data.load(Ordering::SeqCst)
     }
 
     /// # Safety

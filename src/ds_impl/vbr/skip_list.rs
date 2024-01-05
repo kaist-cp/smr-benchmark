@@ -282,7 +282,7 @@ where
             node_ref.value.set(value);
             node_ref.height.set(height);
             node_ref.refs.store(height + 1, Ordering::SeqCst);
-            for next in &node_ref.next {
+            for next in node_ref.next.iter().take(height) {
                 next.store(node, Shared::null());
             }
             node_ref.next[0].store(node, cursor.succs[0]);
