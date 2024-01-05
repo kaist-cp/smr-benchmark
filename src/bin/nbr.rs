@@ -34,6 +34,13 @@ fn bench(config: &Config, output: BenchWriter) {
     println!("{}", perf);
 }
 
+fn extract_nbr_params(config: &Config) -> (usize, usize) {
+    match config.bag_size {
+        BagSize::Small => (256, 32),
+        BagSize::Large => (8192, 1024),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrefillStrategy {
     Random,
@@ -47,9 +54,11 @@ impl PrefillStrategy {
         map: &M,
         max_hazptrs: usize,
     ) {
-        let collector = &nbr_rs::Collector::new(1, 256, 32, max_hazptrs);
         match self {
             PrefillStrategy::Random => {
+                let (bag_cap_pow2, lowatermark) = extract_nbr_params(config);
+                let collector =
+                    &nbr_rs::Collector::new(config.threads, bag_cap_pow2, lowatermark, max_hazptrs);
                 let threads = available_parallelism().map(|v| v.get()).unwrap_or(1);
                 print!("prefilling with {threads} threads... ");
                 stdout().flush().unwrap();
@@ -72,6 +81,7 @@ impl PrefillStrategy {
                 .unwrap();
             }
             PrefillStrategy::Decreasing => {
+                let collector = &nbr_rs::Collector::new(1, 256, 32, max_hazptrs);
                 let mut guard = collector.register();
                 let mut handle = M::handle(&mut guard);
                 let rng = &mut rand::thread_rng();
@@ -96,10 +106,7 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
     strategy: PrefillStrategy,
     max_hazptrs: usize,
 ) -> Perf {
-    let (bag_cap_pow2, lowatermark) = match config.bag_size {
-        BagSize::Small => (256, 32),
-        BagSize::Large => (8192, 1024),
-    };
+    let (bag_cap_pow2, lowatermark) = extract_nbr_params(config);
     let map = &M::new();
     strategy.prefill(config, map, max_hazptrs);
 
