@@ -8,7 +8,7 @@ use std::mem::{take, zeroed};
 use std::ptr::null_mut;
 use std::sync::atomic::{compiler_fence, fence, AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 
-use crate::deferred::{Bag, Deferred};
+use crate::deferred::{Bag, Deferred, SealedBag};
 use crate::epoch::{AtomicEpoch, Epoch};
 use crate::handle::{CsGuard, Thread};
 use crate::hazard::HazardPointer;
@@ -26,35 +26,13 @@ pub unsafe fn set_rollback(enable: bool) {
     unsafe { USE_ROLLBACK = enable };
 }
 
-/// A pair of an epoch and a bag.
-struct SealedBag {
-    epoch: Epoch,
-    inner: Bag,
-}
-
-/// It is safe to share `SealedBag` because `is_expired` only inspects the epoch.
-unsafe impl Sync for SealedBag {}
-
-impl SealedBag {
-    /// Checks if it is safe to drop the bag w.r.t. the given global epoch.
-    #[inline]
-    fn is_expired(&self, global_epoch: Epoch) -> bool {
-        global_epoch.value() - self.epoch.value() >= 2
-    }
-
-    #[inline]
-    fn into_inner(self) -> Bag {
-        self.inner
-    }
-}
-
 /// The global data for a garbage collector.
 pub struct Global {
     /// The intrusive linked list of `Local`s.
     locals: LocalList,
 
     /// The global pool of bags of deferred functions.
-    epoch_bags: DoubleLink<SealedBag>,
+    epoch_bags: DoubleLink,
 
     /// The global epoch.
     epoch: CachePadded<AtomicEpoch>,
@@ -95,7 +73,7 @@ impl Global {
         fence(Ordering::SeqCst);
 
         let epoch = self.epoch.load(Ordering::Relaxed);
-        self.epoch_bags.push(SealedBag { epoch, inner: bag });
+        self.epoch_bags.push(SealedBag::new(epoch, bag));
     }
 
     #[must_use]

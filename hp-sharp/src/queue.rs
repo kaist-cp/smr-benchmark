@@ -1,21 +1,22 @@
 use std::{
     cell::UnsafeCell,
     marker::PhantomData,
-    mem::{forget, MaybeUninit},
+    mem::MaybeUninit,
     ptr::null_mut,
     sync::atomic::{fence, AtomicBool, AtomicPtr, Ordering},
 };
 
 use crossbeam_utils::{Backoff, CachePadded};
 
-#[repr(C, align(8))]
-pub struct Node<T> {
-    prev: *mut Node<T>,
-    next: AtomicPtr<Node<T>>,
-    item: MaybeUninit<T>,
+type Item = crate::deferred::SealedBag;
+
+pub struct Node {
+    prev: *mut Node,
+    next: AtomicPtr<Node>,
+    item: MaybeUninit<Item>,
 }
 
-impl<T> Node<T> {
+impl Node {
     fn sentinel() -> Self {
         Self {
             item: MaybeUninit::uninit(),
@@ -24,7 +25,7 @@ impl<T> Node<T> {
         }
     }
 
-    fn new(item: T) -> Self {
+    fn new(item: Item) -> Self {
         Self {
             item: MaybeUninit::new(item),
             prev: null_mut(),
@@ -33,12 +34,12 @@ impl<T> Node<T> {
     }
 }
 
-pub struct DoubleLink<T> {
-    head: CachePadded<AtomicPtr<Node<T>>>,
-    tail: CachePadded<AtomicPtr<Node<T>>>,
+pub struct DoubleLink {
+    head: CachePadded<AtomicPtr<Node>>,
+    tail: CachePadded<AtomicPtr<Node>>,
 }
 
-impl<T> DoubleLink<T> {
+impl DoubleLink {
     pub fn new() -> Self {
         let sentinel = Box::into_raw(Box::new(Node::sentinel()));
         unsafe { (*sentinel).prev = sentinel };
@@ -48,18 +49,18 @@ impl<T> DoubleLink<T> {
         }
     }
 
-    pub fn push(&self, item: T) {
+    pub fn push(&self, item: Item) {
         HANDLE.with(|handle| self.push_internal(item, handle))
     }
 
-    pub fn pop_if<F>(&self, pred: F) -> Option<T>
+    pub fn pop_if<F>(&self, pred: F) -> Option<Item>
     where
-        F: Fn(&T) -> bool,
+        F: Fn(&Item) -> bool,
     {
         HANDLE.with(|handle| self.pop_internal(pred, handle))
     }
 
-    fn push_internal(&self, item: T, handle: &LocalHandle) {
+    fn push_internal(&self, item: Item, handle: &LocalHandle) {
         let node = Box::into_raw(Box::new(Node::new(item)));
         let node_mut = unsafe { &mut *node };
         let backoff = Backoff::new();
@@ -87,9 +88,9 @@ impl<T> DoubleLink<T> {
         }
     }
 
-    fn pop_internal<F>(&self, pred: F, handle: &LocalHandle) -> Option<T>
+    fn pop_internal<F>(&self, pred: F, handle: &LocalHandle) -> Option<Item>
     where
-        F: Fn(&T) -> bool,
+        F: Fn(&Item) -> bool,
     {
         let backoff = Backoff::new();
         loop {
@@ -116,7 +117,7 @@ impl<T> DoubleLink<T> {
     }
 }
 
-fn protect_link<T>(link: &AtomicPtr<Node<T>>, handle: &LocalHandle) -> *mut Node<T> {
+fn protect_link(link: &AtomicPtr<Node>, handle: &LocalHandle) -> *mut Node {
     let mut ptr = link.load(Ordering::Relaxed);
     loop {
         handle.protect(ptr);
@@ -147,26 +148,11 @@ impl Global {
     }
 }
 
-struct Deferred(*mut Node<u8>, unsafe fn(*mut Node<u8>));
-
-impl Deferred {
-    unsafe fn execute(self) {
-        (self.1)(self.0);
-        forget(self);
-    }
-}
-
-impl Drop for Deferred {
-    fn drop(&mut self) {
-        panic!("`Deferred must be executed.`")
-    }
-}
-
 struct Local {
     using: AtomicBool,
     next: AtomicPtr<Local>,
-    bag: UnsafeCell<Vec<Deferred>>,
-    hazptr: AtomicPtr<Node<u8>>,
+    bag: UnsafeCell<Vec<*mut Node>>,
+    hazptr: AtomicPtr<Node>,
     global: *const Global,
 }
 
@@ -207,25 +193,23 @@ impl LocalHandle {
         unsafe { &*self.local().global }
     }
 
-    fn protect<T>(&self, ptr: *mut Node<T>) {
-        self.local()
-            .hazptr
-            .store(ptr as *mut Node<_>, Ordering::Release)
+    fn protect(&self, ptr: *mut Node) {
+        self.local().hazptr.store(ptr, Ordering::Release)
     }
 
     fn reset_protection(&self) {
         self.local().hazptr.store(null_mut(), Ordering::Release)
     }
 
-    fn retire<T>(&self, ptr: *mut Node<T>, ltail: *mut Node<T>) {
+    fn retire(&self, ptr: *mut Node, ltail: *mut Node) {
         let bag = unsafe { &mut *self.local().bag.get() };
-        bag.push(Deferred(ptr as *mut Node<_>, free::<Node<T>>));
+        bag.push(ptr);
         if bag.len() % Self::RECL_PERIOD == 0 {
-            self.try_reclaim(bag, ltail as *mut Node<_>);
+            self.try_reclaim(bag, ltail);
         }
     }
 
-    fn try_reclaim(&self, bag: &mut Vec<Deferred>, ltail: *mut Node<u8>) {
+    fn try_reclaim(&self, bag: &mut Vec<*mut Node>, ltail: *mut Node) {
         fence(Ordering::SeqCst);
         let mut guarded = self
             .global()
@@ -235,7 +219,7 @@ impl LocalHandle {
             .collect::<Vec<_>>();
         guarded.sort();
 
-        let is_guarded = |ptr: *mut Node<u8>| {
+        let is_guarded = |ptr: *mut Node| {
             let node = unsafe { &*ptr };
             guarded.binary_search(&ptr).is_ok()
                 || guarded.binary_search(&node.prev).is_ok()
@@ -247,11 +231,11 @@ impl LocalHandle {
         *bag = bag
             .drain(..)
             .filter_map(|d| {
-                let tail_adj = unsafe { &*d.0 }.next.load(Ordering::SeqCst) == ltail;
-                if is_guarded(d.0) || tail_adj {
+                let tail_adj = unsafe { &*d }.next.load(Ordering::SeqCst) == ltail;
+                if is_guarded(d) || tail_adj {
                     Some(d)
                 } else {
-                    unsafe { d.execute() };
+                    unsafe { drop(Box::from_raw(d)) };
                     None
                 }
             })
@@ -361,81 +345,8 @@ where
     }
 }
 
-unsafe fn free<T>(ptr: *mut Node<u8>) {
-    let ptr = ptr as *mut Node<T>;
-    drop(Box::from_raw(ptr));
-}
-
 static GLOBAL: Global = Global::new();
 
 thread_local! {
     static HANDLE: LocalHandle = GLOBAL.register();
-}
-
-#[cfg(test)]
-mod test {
-    use std::sync::atomic::{AtomicU32, Ordering};
-
-    use super::DoubleLink;
-    use crossbeam_utils::thread::scope;
-
-    #[test]
-    fn simple() {
-        let queue = DoubleLink::new();
-        assert!(queue.pop().is_none());
-        queue.push(1);
-        queue.push(2);
-        queue.push(3);
-        assert_eq!(queue.pop().unwrap(), 1);
-        assert_eq!(queue.pop().unwrap(), 2);
-        assert_eq!(queue.pop().unwrap(), 3);
-        assert!(queue.pop().is_none());
-    }
-
-    #[test]
-    fn smoke() {
-        const THREADS: usize = 100;
-        const ELEMENTS_PER_THREAD: usize = 10000;
-
-        let queue = DoubleLink::new();
-        let mut found = Vec::new();
-        found.resize_with(THREADS * ELEMENTS_PER_THREAD, || AtomicU32::new(0));
-
-        scope(|s| {
-            for t in 0..THREADS {
-                let queue = &queue;
-                s.spawn(move |_| {
-                    for i in 0..ELEMENTS_PER_THREAD {
-                        queue.push((t * ELEMENTS_PER_THREAD + i).to_string());
-                    }
-                });
-            }
-        })
-        .unwrap();
-
-        scope(|s| {
-            for _ in 0..THREADS {
-                let queue = &queue;
-                let found = &found;
-                s.spawn(move |_| {
-                    for _ in 0..ELEMENTS_PER_THREAD {
-                        let res = queue.pop().unwrap();
-                        assert_eq!(
-                            found[res.parse::<usize>().unwrap()].fetch_add(1, Ordering::Relaxed),
-                            0
-                        );
-                    }
-                });
-            }
-        })
-        .unwrap();
-
-        assert!(
-            found
-                .iter()
-                .filter(|v| v.load(Ordering::Relaxed) == 0)
-                .count()
-                == 0
-        );
-    }
 }

@@ -1,11 +1,13 @@
 use arrayvec::{ArrayVec, IntoIter};
 use std::mem::forget;
 
+use crate::epoch::Epoch;
+
 /// Maximum number of objects a bag can contain.
 #[cfg(not(sanitize = "address"))]
-const MAX_OBJECTS: usize = 128;
+pub(crate) const MAX_OBJECTS: usize = 128;
 #[cfg(sanitize = "address")]
-const MAX_OBJECTS: usize = 4;
+pub(crate) const MAX_OBJECTS: usize = 4;
 
 /// A deferred task consisted of data and a callable function.
 ///
@@ -88,5 +90,32 @@ impl Bag {
     #[inline]
     pub fn len(&self) -> usize {
         self.defs.len()
+    }
+}
+
+/// A pair of an epoch and a bag.
+pub(crate) struct SealedBag {
+    epoch: Epoch,
+    inner: Bag,
+}
+
+/// It is safe to share `SealedBag` because `is_expired` only inspects the epoch.
+unsafe impl Sync for SealedBag {}
+
+impl SealedBag {
+    #[inline]
+    pub(crate) fn new(epoch: Epoch, inner: Bag) -> Self {
+        Self { epoch, inner }
+    }
+
+    /// Checks if it is safe to drop the bag w.r.t. the given global epoch.
+    #[inline]
+    pub(crate) fn is_expired(&self, global_epoch: Epoch) -> bool {
+        global_epoch.value() - self.epoch.value() >= 2
+    }
+
+    #[inline]
+    pub(crate) fn into_inner(self) -> Bag {
+        self.inner
     }
 }

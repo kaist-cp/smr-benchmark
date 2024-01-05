@@ -1,7 +1,7 @@
 use std::mem::{transmute, ManuallyDrop};
 use std::sync::atomic::{compiler_fence, fence, AtomicUsize, Ordering};
 
-use crate::deferred::Deferred;
+use crate::deferred::{Deferred, MAX_OBJECTS};
 use crate::internal::{free, Local};
 use crate::pointers::Shared;
 use crate::rollback::Rollbacker;
@@ -259,7 +259,7 @@ impl Thread {
 
     pub(crate) unsafe fn do_reclamation(&mut self, mut deferred: Vec<Deferred>) -> Vec<Deferred> {
         let deferred_len = deferred.len();
-        if deferred_len < 256 {
+        if deferred_len < MAX_OBJECTS * 2 {
             return deferred;
         }
 
