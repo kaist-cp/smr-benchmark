@@ -276,9 +276,9 @@ impl Thread {
 
         let not_freed: Vec<Deferred> = deferred
             .into_iter()
-            .enumerate()
-            .filter_map(|(i, element)| {
-                if guarded[i] {
+            .zip(guarded)
+            .filter_map(|(element, guarded)| {
+                if guarded {
                     Some(element)
                 } else {
                     unsafe { element.execute() };
