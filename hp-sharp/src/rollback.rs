@@ -38,8 +38,8 @@ bitflags! {
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub(crate) struct Status: u8 {
         const InCs = 0b001;
-        const InCa = 0b010;
-        const InCaRb = 0b100;
+        const InRm = 0b010;
+        const RbReq = 0b100;
     }
 }
 
@@ -81,7 +81,7 @@ impl Rollbacker {
     where
         F: FnOnce(&Self) -> R,
     {
-        STATUS.store(Status::InCa.bits(), Ordering::Relaxed);
+        STATUS.store(Status::InRm.bits(), Ordering::Relaxed);
 
         compiler_fence(Ordering::SeqCst);
         let result = body(self);
@@ -89,7 +89,7 @@ impl Rollbacker {
 
         if STATUS
             .compare_exchange(
-                Status::InCa.bits(),
+                Status::InRm.bits(),
                 Status::InCs.bits(),
                 Ordering::Relaxed,
                 Ordering::Relaxed,
@@ -151,8 +151,8 @@ extern "C" fn handle_signal(_: i32, _: *mut siginfo_t, _: *mut c_void) {
         unsafe { siglongjmp(CHKPT.as_mut_ptr(), 1) }
     }
 
-    // If we are in crash-atomic section by `Rollbacker::atomic`, turn `InCaRb` on.
-    if current == Status::InCa {
-        STATUS.store((Status::InCa | Status::InCaRb).bits(), Ordering::Relaxed);
+    // If we are in crash-atomic section by `Rollbacker::atomic`, turn `RbReq` on.
+    if current == Status::InRm {
+        STATUS.store((Status::InRm | Status::RbReq).bits(), Ordering::Relaxed);
     }
 }
