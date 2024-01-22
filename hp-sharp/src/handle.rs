@@ -142,6 +142,7 @@ impl Thread {
 
             for i in 1.. {
                 let (next, done) = step(curr, guard);
+                curr = next;
 
                 if done.is_some() || i % BACKUP_PERIOD == 0 {
                     prots[(bi + 1) % 2].protect(&next);
@@ -156,7 +157,6 @@ impl Thread {
                 if let Some(r) = done {
                     return Ok(r);
                 }
-                curr = next;
             }
             unreachable!()
         });

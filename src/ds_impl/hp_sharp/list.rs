@@ -244,6 +244,7 @@ where
                                 .map(|_| guard.retire(curr))
                                 .map_err(|_| ())
                         })?;
+                        curr = next;
                         continue;
                     }
 

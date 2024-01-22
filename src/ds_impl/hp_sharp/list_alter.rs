@@ -310,6 +310,7 @@ where
                             .is_ok();
 
                         if success {
+                            cursor.curr = next;
                             return (cursor, None);
                         }
                         return (cursor, Some(Err(())));
