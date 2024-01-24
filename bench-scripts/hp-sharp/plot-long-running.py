@@ -39,6 +39,7 @@ CDRC_HP_SHARP = "cdrc-hp-sharp"
 VBR = "vbr"
 
 SMR_ONLYs = [EBR, PEBR, NR, HP, HP_PP, NBR, NBR_LARGE, HP_SHARP, HP_SHARP_0, VBR]
+SMR_PART = [NR, EBR, HP, NBR, HP_SHARP, HP_SHARP_0]
 
 # https://matplotlib.org/stable/api/markers_api.html
 line_shapes = {
@@ -88,13 +89,12 @@ line_types = {
 
 krs = [(2 ** e) for e in range(18, 30, 1)]
 
-# line_name: SMR, SMR_I
-def draw(title, name, data, line_name, y_value, y_label=None, y_max=None, legend=False, y_breaks=None):
+def draw(title, name, data, line_name, y_value, y_label=None, y_max=None, legend=False, y_breaks=None, width=10, height=7, point_size=7, line_size=0.5, x_label="Key range"):
     p = ggplot(
             data,
             aes(x=KEY_RANGE, y=y_value,
                 color=line_name, shape=line_name, linetype=line_name)) + \
-        geom_line() + xlab('Key range') + geom_point(size=7) + \
+        geom_line(size=line_size) + xlab(x_label) + geom_point(size=point_size) + \
         scale_shape_manual(line_shapes, na_value='x') + \
         scale_color_manual(line_colors, na_value='y') + \
         scale_linetype_manual(line_types, na_value='-.') + \
@@ -125,7 +125,7 @@ def draw(title, name, data, line_name, y_value, y_label=None, y_max=None, legend
     else:
         p += theme(legend_position='none')
     
-    p.save(name, width=10, height=7, units="in")
+    p.save(name, width=width, height=height, units="in")
 
 def draw_throughput(data):
     data = data.copy()
@@ -135,6 +135,18 @@ def draw_throughput(data):
     draw("", f'{RESULTS_PATH}/long-running-throughput.pdf',
          data, SMR_ONLY, THROUGHPUT, y_label, y_max, legend,
          y_breaks=[0, 0.2, 0.4, 0.6, 0.8, 1, 1.2])
+
+def draw_throughput_partial(data):
+    data = data.copy()
+    data = data[data.mm.isin(SMR_PART)]
+    data = data[data.key_range < krs[-4]]
+    y_label = 'Throughput ratio to NR'
+    legend = False
+    y_max = data.throughput.max() * 1.05
+    draw("", f'{RESULTS_PATH}/long-running-throughput-partial.pdf',
+         data, SMR_ONLY, THROUGHPUT, y_label, y_max, legend,
+         y_breaks=[0, 0.4, 0.8, 1, 1.2],
+         width=7, height=5, point_size=9, line_size=1, x_label="Length of a read operation")
 
 def draw_peak_garb(data, full):
     data = data.copy()
@@ -150,6 +162,19 @@ def draw_peak_garb(data, full):
         tail = "-trunc"
     draw("", f'{RESULTS_PATH}/long-running-peak-garb{tail}.pdf',
          data, SMR_ONLY, PEAK_GARB, y_label, y_max, legend)
+
+def draw_peak_garb_partial(data):
+    data = data.copy()
+    data = data[data.mm != NR]
+    data = data[data.mm != VBR]
+    y_label = 'Peak unreclaimed memory blocks (×10³)'
+    legend = False
+    y_max = data[data.mm == EBR][data.key_range < krs[-7]].peak_garb.max() * 1.4
+    data = data[data.mm.isin(SMR_PART)]
+    data = data[data.key_range < krs[-4]]
+    draw("", f'{RESULTS_PATH}/long-running-peak-garb-partial.pdf',
+         data, SMR_ONLY, PEAK_GARB, y_label, y_max, legend,
+         width=7, height=5, point_size=9, line_size=1, x_label="Length of a read operation")
     
 def draw_avg_garb(data, full):
     data = data.copy()
@@ -186,7 +211,9 @@ for kr in krs:
 
 avg[SMR_ONLY] = pd.Categorical(avg.mm.map(str), SMR_ONLYs)
 draw_throughput(avg)
+draw_throughput_partial(avg)
 draw_peak_garb(avg, True)
 draw_peak_garb(avg, False)
+draw_peak_garb_partial(avg)
 draw_avg_garb(avg, True)
 draw_avg_garb(avg, False)
