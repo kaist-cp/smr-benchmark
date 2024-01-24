@@ -15,6 +15,9 @@ cd cdrc-rs; cargo clean; cd ..
 cd circ; cargo clean; cd ..
 cd crossbeam-ebr; cargo clean; cd ..
 cd hp_pp; cargo clean; cd ..
+cd hp-brcu; cargo clean; cd ..
+cd nbr-rs; cargo clean; cd ..
+cd vbr-rs; cargo clean; cd ..
 
 rm -rf archive
 rm -f .gitattributes .gitignore .gitmodules .gitlab-ci.yml \
