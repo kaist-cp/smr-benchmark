@@ -8,7 +8,7 @@ BIN_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..",
 
 dss = ['h-list', 'hm-list', 'hhs-list', 'hash-map', 'nm-tree', 'skip-list']
 # "-large" suffix if it uses a large garbage bag.
-mms = ['nr', 'ebr', 'pebr', 'hp', 'hp-pp', 'nbr', 'nbr-large', 'hp-sharp', 'vbr', 'hp-sharp-0']
+mms = ['nr', 'ebr', 'pebr', 'hp', 'hp-pp', 'nbr', 'nbr-large', 'hp-brcu', 'vbr', 'hp-rcu']
 i = 10
 cpu_count = os.cpu_count()
 if not cpu_count or cpu_count <= 24:

@@ -1,15 +1,9 @@
-use hp_sharp::{Atomic, CsGuard, Owned, RollbackProof, Shared, Shield, Thread, Unprotected};
+use super::concurrent_map::{ConcurrentMap, OutputHolder};
+
+use hp_brcu::{Atomic, CsGuard, Owned, RollbackProof, Shared, Shield, Thread, Unprotected};
 
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::sync::atomic::Ordering;
-
-pub trait ConcurrentMap<K, V> {
-    fn new() -> Self;
-    fn get(&self, key: &K, output: &mut Output<K, V>, thread: &mut Thread) -> bool;
-    fn insert(&self, key: K, value: V, output: &mut Output<K, V>, thread: &mut Thread) -> bool;
-    fn remove<'domain, 'hp>(&self, key: &K, output: &mut Output<K, V>, thread: &mut Thread)
-        -> bool;
-}
 
 struct Node<K, V> {
     /// Mark: tag(), Tag: not needed
@@ -73,7 +67,7 @@ impl<K: Default, V: Default> Default for Node<K, V> {
     }
 }
 
-struct Cursor<K, V> {
+pub struct Cursor<K, V> {
     prev: Shield<Node<K, V>>,
     prev_next: Shield<Node<K, V>>,
     // Tag of `curr` should always be zero so when `curr` is stored in a `prev`, we don't store a
@@ -101,12 +95,15 @@ fn initialize<'g, K, V>(
     (prev, curr)
 }
 
-pub struct Output<K, V>(Cursor<K, V>, Cursor<K, V>);
-
-impl<K, V> Output<K, V> {
+impl<K, V> OutputHolder<V> for Cursor<K, V> {
     #[inline]
-    fn empty(thread: &mut Thread) -> Self {
-        Self(Cursor::empty(thread), Cursor::empty(thread))
+    fn default(thread: &mut Thread) -> Self {
+        Cursor::empty(thread)
+    }
+
+    #[inline]
+    fn output(&self) -> &V {
+        self.curr.as_ref().map(|node| &node.value).unwrap()
     }
 }
 
@@ -127,10 +124,9 @@ where
     fn harris_traverse(
         &self,
         key: &K,
-        output: &mut Output<K, V>,
+        cursor: &mut Cursor<K, V>,
         thread: &mut Thread,
     ) -> Result<bool, ()> {
-        let cursor = &mut output.0;
         let found = unsafe {
             thread.critical_section(|guard| {
                 let (mut prev, mut curr) = initialize(&self.head, guard);
@@ -217,10 +213,9 @@ where
     fn harris_michael_traverse(
         &self,
         key: &K,
-        output: &mut Output<K, V>,
+        cursor: &mut Cursor<K, V>,
         thread: &mut Thread,
     ) -> Result<bool, ()> {
-        let cursor = &mut output.0;
         unsafe {
             thread.critical_section(|guard| {
                 let (mut prev, mut curr) = initialize(&self.head, guard);
@@ -249,6 +244,7 @@ where
                                 .map(|_| guard.retire(curr))
                                 .map_err(|_| ())
                         })?;
+                        curr = next;
                         continue;
                     }
 
@@ -273,10 +269,9 @@ where
     fn harris_herlihy_shavit_traverse(
         &self,
         key: &K,
-        output: &mut Output<K, V>,
+        cursor: &mut Cursor<K, V>,
         thread: &mut Thread,
     ) -> Result<bool, ()> {
-        let cursor = &mut output.0;
         unsafe {
             thread.critical_section(|guard| {
                 let (_, mut curr) = initialize(&self.head, guard);
@@ -301,12 +296,12 @@ where
     }
 
     #[inline]
-    pub fn get<F>(&self, find: &F, key: &K, output: &mut Output<K, V>, thread: &mut Thread) -> bool
+    pub fn get<F>(&self, find: &F, key: &K, cursor: &mut Cursor<K, V>, thread: &mut Thread) -> bool
     where
-        F: Fn(&List<K, V>, &K, &mut Output<K, V>, &mut Thread) -> Result<bool, ()>,
+        F: Fn(&List<K, V>, &K, &mut Cursor<K, V>, &mut Thread) -> Result<bool, ()>,
     {
         loop {
-            if let Ok(found) = find(self, key, output, thread) {
+            if let Ok(found) = find(self, key, cursor, thread) {
                 return found;
             }
         }
@@ -318,18 +313,17 @@ where
         find: &F,
         key: K,
         value: V,
-        output: &mut Output<K, V>,
+        cursor: &mut Cursor<K, V>,
         thread: &mut Thread,
     ) -> bool
     where
-        F: Fn(&List<K, V>, &K, &mut Output<K, V>, &mut Thread) -> Result<bool, ()>,
+        F: Fn(&List<K, V>, &K, &mut Cursor<K, V>, &mut Thread) -> Result<bool, ()>,
     {
         let mut new_node = Owned::new(Node::new(key, value));
         loop {
-            if self.get(&find, &new_node.key, output, thread) {
+            if self.get(&find, &new_node.key, cursor, thread) {
                 return false;
             }
-            let cursor = &mut output.0;
 
             new_node
                 .next
@@ -353,17 +347,16 @@ where
         &self,
         find: &F,
         key: &K,
-        output: &mut Output<K, V>,
+        cursor: &mut Cursor<K, V>,
         thread: &mut Thread,
     ) -> bool
     where
-        F: Fn(&List<K, V>, &K, &mut Output<K, V>, &mut Thread) -> Result<bool, ()>,
+        F: Fn(&List<K, V>, &K, &mut Cursor<K, V>, &mut Thread) -> Result<bool, ()>,
     {
         loop {
-            if !self.get(&find, &key, output, thread) {
+            if !self.get(&find, &key, cursor, thread) {
                 return true;
             }
-            let cursor = &mut output.0;
 
             let curr_node = cursor.curr.as_ref().unwrap();
             let next = curr_node.next.fetch_or(1, Ordering::AcqRel, thread);
@@ -393,225 +386,154 @@ where
     }
 }
 
-pub mod traverse {
-    use super::{ConcurrentMap, List, Output};
+pub struct HList<K, V> {
+    inner: List<K, V>,
+}
 
-    pub struct HList<K, V> {
-        inner: List<K, V>,
+impl<K, V> ConcurrentMap<K, V> for HList<K, V>
+where
+    K: Ord + Default,
+    V: Default,
+{
+    type Output = Cursor<K, V>;
+
+    #[inline]
+    fn new() -> Self {
+        Self { inner: List::new() }
     }
 
-    impl<K, V> ConcurrentMap<K, V> for HList<K, V>
-    where
-        K: Ord + Default,
-        V: Default,
-    {
-        #[inline]
-        fn new() -> Self {
-            Self { inner: List::new() }
-        }
-
-        #[inline(always)]
-        fn get(&self, key: &K, output: &mut Output<K, V>, thread: &mut hp_sharp::Thread) -> bool {
-            self.inner.get(&List::harris_traverse, key, output, thread)
-        }
-
-        #[inline(always)]
-        fn insert(
-            &self,
-            key: K,
-            value: V,
-            output: &mut Output<K, V>,
-            thread: &mut hp_sharp::Thread,
-        ) -> bool {
-            self.inner
-                .insert(&List::harris_traverse, key, value, output, thread)
-        }
-
-        #[inline(always)]
-        fn remove<'domain, 'hp>(
-            &self,
-            key: &K,
-            output: &mut Output<K, V>,
-            thread: &mut hp_sharp::Thread,
-        ) -> bool {
-            self.inner
-                .remove(&List::harris_traverse, key, output, thread)
-        }
+    #[inline(always)]
+    fn get(&self, key: &K, output: &mut Self::Output, thread: &mut hp_brcu::Thread) -> bool {
+        self.inner.get(&List::harris_traverse, key, output, thread)
     }
 
-    pub struct HMList<K, V> {
-        inner: List<K, V>,
+    #[inline(always)]
+    fn insert(
+        &self,
+        key: K,
+        value: V,
+        output: &mut Self::Output,
+        thread: &mut hp_brcu::Thread,
+    ) -> bool {
+        self.inner
+            .insert(&List::harris_traverse, key, value, output, thread)
     }
 
-    impl<K, V> ConcurrentMap<K, V> for HMList<K, V>
-    where
-        K: Ord + Default,
-        V: Default,
-    {
-        #[inline]
-        fn new() -> Self {
-            Self { inner: List::new() }
-        }
-
-        #[inline(always)]
-        fn get(&self, key: &K, output: &mut Output<K, V>, thread: &mut hp_sharp::Thread) -> bool {
-            self.inner
-                .get(&List::harris_michael_traverse, key, output, thread)
-        }
-
-        #[inline(always)]
-        fn insert(
-            &self,
-            key: K,
-            value: V,
-            output: &mut Output<K, V>,
-            thread: &mut hp_sharp::Thread,
-        ) -> bool {
-            self.inner
-                .insert(&List::harris_michael_traverse, key, value, output, thread)
-        }
-
-        #[inline(always)]
-        fn remove<'domain, 'hp>(
-            &self,
-            key: &K,
-            output: &mut Output<K, V>,
-            thread: &mut hp_sharp::Thread,
-        ) -> bool {
-            self.inner
-                .remove(&List::harris_michael_traverse, key, output, thread)
-        }
-    }
-
-    pub struct HHSList<K, V> {
-        inner: List<K, V>,
-    }
-
-    impl<K, V> ConcurrentMap<K, V> for HHSList<K, V>
-    where
-        K: Ord + Default,
-        V: Default,
-    {
-        #[inline]
-        fn new() -> Self {
-            Self { inner: List::new() }
-        }
-
-        #[inline(always)]
-        fn get(&self, key: &K, output: &mut Output<K, V>, thread: &mut hp_sharp::Thread) -> bool {
-            self.inner
-                .get(&List::harris_herlihy_shavit_traverse, key, output, thread)
-        }
-
-        #[inline(always)]
-        fn insert(
-            &self,
-            key: K,
-            value: V,
-            output: &mut Output<K, V>,
-            thread: &mut hp_sharp::Thread,
-        ) -> bool {
-            self.inner
-                .insert(&List::harris_traverse, key, value, output, thread)
-        }
-
-        #[inline(always)]
-        fn remove<'domain, 'hp>(
-            &self,
-            key: &K,
-            output: &mut Output<K, V>,
-            thread: &mut hp_sharp::Thread,
-        ) -> bool {
-            self.inner
-                .remove(&List::harris_traverse, key, output, thread)
-        }
-    }
-
-    #[test]
-    fn smoke_h_list() {
-        crate::smoke::<HList<i32, String>>();
-    }
-
-    #[test]
-    fn smoke_hm_list() {
-        crate::smoke::<HMList<i32, String>>();
-    }
-
-    #[test]
-    fn smoke_hhs_list() {
-        crate::smoke::<HHSList<i32, String>>();
+    #[inline(always)]
+    fn remove<'domain, 'hp>(
+        &self,
+        key: &K,
+        output: &mut Self::Output,
+        thread: &mut hp_brcu::Thread,
+    ) -> bool {
+        self.inner
+            .remove(&List::harris_traverse, key, output, thread)
     }
 }
 
-#[cfg(test)]
-fn smoke<M: ConcurrentMap<i32, String> + Send + Sync>() {
-    extern crate rand;
-    use rand::prelude::SliceRandom;
-    const THREADS: i32 = 30;
-    const ELEMENTS_PER_THREADS: i32 = 1000;
+pub struct HMList<K, V> {
+    inner: List<K, V>,
+}
 
-    let map = &M::new();
+impl<K, V> ConcurrentMap<K, V> for HMList<K, V>
+where
+    K: Ord + Default,
+    V: Default,
+{
+    type Output = Cursor<K, V>;
 
-    std::thread::scope(|s| {
-        for t in 0..THREADS {
-            s.spawn(move || {
-                hp_sharp::THREAD.with(|thread| {
-                    let thread = &mut **thread.borrow_mut();
-                    let output = &mut Output::empty(thread);
-                    let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> =
-                        (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
-                    keys.shuffle(&mut rng);
-                    for i in keys {
-                        assert!(map.insert(i, i.to_string(), output, thread));
-                    }
-                });
-            });
-        }
-    });
+    #[inline]
+    fn new() -> Self {
+        Self { inner: List::new() }
+    }
 
-    std::thread::scope(|s| {
-        for t in 0..(THREADS / 2) {
-            s.spawn(move || {
-                hp_sharp::THREAD.with(|thread| {
-                    let thread = &mut **thread.borrow_mut();
-                    let output = &mut Output::empty(thread);
-                    let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> =
-                        (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
-                    keys.shuffle(&mut rng);
-                    for i in keys {
-                        assert!(map.remove(&i, output, thread));
-                    }
-                });
-            });
-        }
-    });
+    #[inline(always)]
+    fn get(&self, key: &K, output: &mut Self::Output, thread: &mut hp_brcu::Thread) -> bool {
+        self.inner
+            .get(&List::harris_michael_traverse, key, output, thread)
+    }
 
-    std::thread::scope(|s| {
-        for t in (THREADS / 2)..THREADS {
-            s.spawn(move || {
-                hp_sharp::THREAD.with(|thread| {
-                    let thread = &mut **thread.borrow_mut();
-                    let output = &mut Output::empty(thread);
-                    let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> =
-                        (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
-                    keys.shuffle(&mut rng);
-                    for i in keys {
-                        assert!(map.get(&i, output, thread));
-                        assert_eq!(
-                            i.to_string(),
-                            output
-                                .0
-                                .curr
-                                .as_ref()
-                                .map(|node| node.value.clone())
-                                .unwrap()
-                        );
-                    }
-                });
-            });
-        }
-    });
+    #[inline(always)]
+    fn insert(
+        &self,
+        key: K,
+        value: V,
+        output: &mut Self::Output,
+        thread: &mut hp_brcu::Thread,
+    ) -> bool {
+        self.inner
+            .insert(&List::harris_michael_traverse, key, value, output, thread)
+    }
+
+    #[inline(always)]
+    fn remove<'domain, 'hp>(
+        &self,
+        key: &K,
+        output: &mut Self::Output,
+        thread: &mut hp_brcu::Thread,
+    ) -> bool {
+        self.inner
+            .remove(&List::harris_michael_traverse, key, output, thread)
+    }
+}
+
+pub struct HHSList<K, V> {
+    inner: List<K, V>,
+}
+
+impl<K, V> ConcurrentMap<K, V> for HHSList<K, V>
+where
+    K: Ord + Default,
+    V: Default,
+{
+    type Output = Cursor<K, V>;
+
+    #[inline]
+    fn new() -> Self {
+        Self { inner: List::new() }
+    }
+
+    #[inline(always)]
+    fn get(&self, key: &K, output: &mut Self::Output, thread: &mut hp_brcu::Thread) -> bool {
+        self.inner
+            .get(&List::harris_herlihy_shavit_traverse, key, output, thread)
+    }
+
+    #[inline(always)]
+    fn insert(
+        &self,
+        key: K,
+        value: V,
+        output: &mut Self::Output,
+        thread: &mut hp_brcu::Thread,
+    ) -> bool {
+        self.inner
+            .insert(&List::harris_traverse, key, value, output, thread)
+    }
+
+    #[inline(always)]
+    fn remove<'domain, 'hp>(
+        &self,
+        key: &K,
+        output: &mut Self::Output,
+        thread: &mut hp_brcu::Thread,
+    ) -> bool {
+        self.inner
+            .remove(&List::harris_traverse, key, output, thread)
+    }
+}
+
+#[test]
+fn smoke_h_list() {
+    super::concurrent_map::tests::smoke::<HList<i32, String>>();
+}
+
+#[test]
+fn smoke_hm_list() {
+    super::concurrent_map::tests::smoke::<HMList<i32, String>>();
+}
+
+#[test]
+fn smoke_hhs_list() {
+    super::concurrent_map::tests::smoke::<HHSList<i32, String>>();
 }

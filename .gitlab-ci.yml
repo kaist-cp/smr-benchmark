@@ -42,12 +42,12 @@ check:
   script:
     - cargo check --verbose
     - cargo fmt -- --check
-    - cargo clippy -p hp-sharp -- -D warnings
+    - cargo clippy -p hp-brcu -- -D warnings
     - cargo audit
 
-    # Note: Using `-p` flag to individually test `hp-sharp` doesn't work,
-    # because `hp-sharp` requires dev-dependencies.
-    - cd hp-sharp
+    # Note: Using `-p` flag to individually test `hp-brcu` doesn't work,
+    # because `hp-brcu` requires dev-dependencies.
+    - cd hp-brcu
     - cargo test -- --nocapture
     - cargo test --release -- --nocapture
     - cd ..

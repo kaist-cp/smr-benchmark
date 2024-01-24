@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 use typenum::{Unsigned, U1};
 
 use smr_benchmark::ds_impl::{cdrc, ebr, vbr};
-use smr_benchmark::ds_impl::{hp, hp_pp, hp_sharp as hp_sharp_bench};
+use smr_benchmark::ds_impl::{hp, hp_pp, hp_brcu as hp_brcu_bench};
 use smr_benchmark::ds_impl::{nbr, pebr};
 
 const NBR_CAP: NBRConfig = NBRConfig {
@@ -52,8 +52,8 @@ pub enum MM {
     HP,
     HP_PP,
     CDRC_EBR,
-    HP_SHARP,
-    HP_SHARP_0,
+    HP_BRCU,
+    HP_RCU,
     NBR,
     NBR_LARGE,
     VBR,
@@ -272,8 +272,8 @@ fn bench<N: Unsigned>(config: &Config, output: Option<&mut Writer<File>>) {
         MM::HP => bench_map_hp(config, PrefillStrategy::Decreasing),
         MM::HP_PP => bench_map_hp_pp(config, PrefillStrategy::Decreasing),
         MM::CDRC_EBR => bench_map_cdrc::<cdrc_rs::CsEBR, N>(config, PrefillStrategy::Decreasing),
-        MM::HP_SHARP => bench_map_hp_sharp::<true>(config, PrefillStrategy::Decreasing),
-        MM::HP_SHARP_0 => bench_map_hp_sharp::<false>(config, PrefillStrategy::Decreasing),
+        MM::HP_BRCU => bench_map_hp_brcu::<true>(config, PrefillStrategy::Decreasing),
+        MM::HP_RCU => bench_map_hp_brcu::<false>(config, PrefillStrategy::Decreasing),
         MM::NBR => bench_map_nbr(config, PrefillStrategy::Decreasing, &NBR_CAP, 2),
         MM::NBR_LARGE => bench_map_nbr(config, PrefillStrategy::Decreasing, &NBR_LARGE_CAP, 2),
         MM::VBR => bench_map_vbr(config, PrefillStrategy::Decreasing),
@@ -438,12 +438,12 @@ impl PrefillStrategy {
         stdout().flush().unwrap();
     }
 
-    fn prefill_hp_sharp<M: hp_sharp_bench::ConcurrentMap<usize, usize> + Send + Sync>(
+    fn prefill_hp_brcu<M: hp_brcu_bench::ConcurrentMap<usize, usize> + Send + Sync>(
         self,
         config: &Config,
         map: &M,
     ) {
-        hp_sharp::THREAD.with(|handle| {
+        hp_brcu::THREAD.with(|handle| {
             let handle = &mut **handle.borrow_mut();
             let output = &mut M::empty_output(handle);
             let rng = &mut rand::thread_rng();
@@ -1224,16 +1224,16 @@ fn bench_map_cdrc<C: cdrc_rs::Cs, N: Unsigned>(
     (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
 }
 
-fn bench_map_hp_sharp<const ROLLBACK: bool>(
+fn bench_map_hp_brcu<const ROLLBACK: bool>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
-    use hp_sharp_bench::concurrent_map::OutputHolder;
-    use hp_sharp_bench::ConcurrentMap;
+    use hp_brcu_bench::concurrent_map::OutputHolder;
+    use hp_brcu_bench::ConcurrentMap;
 
-    unsafe { hp_sharp::set_rollback(ROLLBACK) };
-    let map = &hp_sharp_bench::list_alter::HHSList::new();
-    strategy.prefill_hp_sharp(config, map);
+    unsafe { hp_brcu::set_rollback(ROLLBACK) };
+    let map = &hp_brcu_bench::list_alter::HHSList::new();
+    strategy.prefill_hp_brcu(config, map);
 
     let barrier = &Arc::new(Barrier::new(
         config.writers + config.readers + config.aux_thread,
@@ -1264,7 +1264,7 @@ fn bench_map_hp_sharp<const ROLLBACK: bool>(
                         acc += allocated;
                         peak = max(peak, allocated);
 
-                        let garbages = hp_sharp::global().garbage_count();
+                        let garbages = hp_brcu::global().garbage_count();
                         garb_acc += garbages;
                         garb_peak = max(garb_peak, garbages);
 
@@ -1288,10 +1288,10 @@ fn bench_map_hp_sharp<const ROLLBACK: bool>(
         // Spawn writer threads.
         for _ in 0..config.writers {
             s.spawn(move |_| {
-                hp_sharp::THREAD.with(|handle| {
+                hp_brcu::THREAD.with(|handle| {
                     let handle = &mut **handle.borrow_mut();
                     let output =
-                        &mut hp_sharp_bench::list_alter::HHSList::<usize, usize>::empty_output(
+                        &mut hp_brcu_bench::list_alter::HHSList::<usize, usize>::empty_output(
                             handle,
                         );
                     barrier.clone().wait();
@@ -1314,10 +1314,10 @@ fn bench_map_hp_sharp<const ROLLBACK: bool>(
         for _ in 0..config.readers {
             let ops_sender = ops_sender.clone();
             s.spawn(move |_| {
-                hp_sharp::THREAD.with(|handle| {
+                hp_brcu::THREAD.with(|handle| {
                     let handle = &mut **handle.borrow_mut();
                     let output =
-                        &mut hp_sharp_bench::list_alter::HHSList::<usize, usize>::empty_output(
+                        &mut hp_brcu_bench::list_alter::HHSList::<usize, usize>::empty_output(
                             handle,
                         );
                     let mut ops: u64 = 0;

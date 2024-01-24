@@ -33,13 +33,13 @@ HP_PP = "hp-pp"
 NBR = "nbr"
 NBR_LARGE = "nbr-large"
 CDRC_EBR = "cdrc-ebr"
-HP_SHARP = "hp-sharp"
-HP_SHARP_0 = "hp-sharp-0"
-CDRC_HP_SHARP = "cdrc-hp-sharp"
+HP_BRCU = "hp-brcu"
+HP_RCU = "hp-rcu"
+CDRC_HP_BRCU = "cdrc-hp-brcu"
 VBR = "vbr"
 
-SMR_ONLYs = [EBR, PEBR, NR, HP, HP_PP, NBR, NBR_LARGE, HP_SHARP, HP_SHARP_0, VBR]
-SMR_PART = [NR, EBR, HP, NBR, HP_SHARP, HP_SHARP_0]
+SMR_ONLYs = [EBR, PEBR, NR, HP, HP_PP, NBR, NBR_LARGE, HP_BRCU, HP_RCU, VBR]
+SMR_PART = [NR, EBR, HP, NBR, HP_BRCU, HP_RCU]
 
 # https://matplotlib.org/stable/api/markers_api.html
 line_shapes = {
@@ -51,9 +51,9 @@ line_shapes = {
     CDRC_EBR: "1",
     NBR: "p",
     NBR_LARGE: "H",
-    HP_SHARP: "s",
-    HP_SHARP_0: "P",
-    CDRC_HP_SHARP: "P",
+    HP_BRCU: "s",
+    HP_RCU: "P",
+    CDRC_HP_BRCU: "P",
     VBR: "*",
 }
 
@@ -66,9 +66,9 @@ line_colors = {
     CDRC_EBR: "green",
     NBR: "blue",
     NBR_LARGE: "indigo",
-    HP_SHARP: "r",
-    HP_SHARP_0: "green",
-    CDRC_HP_SHARP: "brown",
+    HP_BRCU: "r",
+    HP_RCU: "green",
+    CDRC_HP_BRCU: "brown",
     VBR: "orange",
 }
 
@@ -81,9 +81,9 @@ line_types = {
     CDRC_EBR: (0, (3, 1)),
     NBR: (5, (10, 3)),
     NBR_LARGE: (5, (10, 3)),
-    HP_SHARP: (0, (3, 1, 1, 1)),
-    HP_SHARP_0: (0, (3, 1, 1, 1)),
-    CDRC_HP_SHARP: (0, (3, 1, 1, 1)),
+    HP_BRCU: (0, (3, 1, 1, 1)),
+    HP_RCU: (0, (3, 1, 1, 1)),
+    CDRC_HP_BRCU: (0, (3, 1, 1, 1)),
     VBR: (0, (2, 1)),
 }
 
@@ -158,7 +158,7 @@ def draw_peak_garb(data, full):
         y_max = data.peak_garb.max() * 1.05
         tail = "-full"
     else:
-        y_max = data[data.mm == HP_SHARP_0].peak_garb.max() * 1.05
+        y_max = data[data.mm == HP_RCU].peak_garb.max() * 1.05
         tail = "-trunc"
     draw("", f'{RESULTS_PATH}/long-running-peak-garb{tail}.pdf',
          data, SMR_ONLY, PEAK_GARB, y_label, y_max, legend)
@@ -186,7 +186,7 @@ def draw_avg_garb(data, full):
         y_max = data.avg_garb.max() * 1.05
         tail = "-full"
     else:
-        y_max = data[data.mm == HP_SHARP_0].avg_garb.max() * 1.05
+        y_max = data[data.mm == HP_RCU].avg_garb.max() * 1.05
         tail = "-trunc"
     draw("", f'{RESULTS_PATH}/long-running-avg-garb{tail}.pdf',
          data, SMR_ONLY, AVG_GARB, y_label, y_max, legend)

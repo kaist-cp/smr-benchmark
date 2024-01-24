@@ -4,7 +4,7 @@ import os
 RESULTS_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "results")
 BIN_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "target", "release", "long-running")
 
-mms = ['nr', 'ebr', 'pebr', 'hp', 'hp-pp', 'nbr', 'nbr-large', 'hp-sharp', 'hp-sharp-0', 'vbr']
+mms = ['nr', 'ebr', 'pebr', 'hp', 'hp-pp', 'nbr', 'nbr-large', 'hp-brcu', 'hp-rcu', 'vbr']
 
 krs = [(2 ** e) for e in range(18, 30, 1)]
 cpu_count = os.cpu_count()

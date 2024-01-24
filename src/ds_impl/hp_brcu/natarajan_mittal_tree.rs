@@ -1,6 +1,6 @@
 use std::{cmp, sync::atomic::Ordering};
 
-use hp_sharp::{Atomic, Owned, Pointer, RollbackProof, Shared, Shield, Thread, Unprotected};
+use hp_brcu::{Atomic, Owned, Pointer, RollbackProof, Shared, Shield, Thread, Unprotected};
 
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 
@@ -558,7 +558,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::NMTreeMap;
-    use crate::ds_impl::hp_sharp::concurrent_map;
+    use crate::ds_impl::hp_brcu::concurrent_map;
 
     #[test]
     fn smoke_nm_tree() {

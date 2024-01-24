@@ -1,5 +1,5 @@
 use crossbeam_utils::thread::scope;
-use hp_sharp::{global, THREAD};
+use hp_brcu::{global, THREAD};
 use rand::prelude::*;
 use std::cmp::max;
 use std::io::{stdout, Write};
@@ -9,12 +9,11 @@ use std::thread::available_parallelism;
 use std::time::Instant;
 
 use smr_benchmark::config::map::{setup, BagSize, BenchWriter, Config, Op, Perf, DS};
-use smr_benchmark::ds_impl::hp_sharp::{
+use smr_benchmark::ds_impl::hp_brcu::{
     ConcurrentMap, HHSList, HList, HMList, HashMap, NMTreeMap, SkipList,
 };
 
 fn main() {
-    unsafe { hp_sharp::set_rollback(false) };
     let (config, output) = setup(
         Path::new(file!())
             .file_stem()
@@ -34,7 +33,7 @@ fn bench(config: &Config, output: BenchWriter) {
         DS::HashMap => bench_map::<HashMap<usize, usize>>(config, PrefillStrategy::Decreasing),
         DS::NMTree => bench_map::<NMTreeMap<usize, usize>>(config, PrefillStrategy::Random),
         DS::SkipList => bench_map::<SkipList<usize, usize>>(config, PrefillStrategy::Decreasing),
-        _ => panic!("Unsupported(or unimplemented) data structure for HP#"),
+        _ => panic!("Unsupported(or unimplemented) data structure for HP-BRCU"),
     };
     output.write_record(config, &perf);
     println!("{}", perf);
@@ -56,7 +55,7 @@ impl PrefillStrategy {
                 scope(|s| {
                     for t in 0..threads {
                         s.spawn(move |_| {
-                            hp_sharp::THREAD.with(|handle| {
+                            hp_brcu::THREAD.with(|handle| {
                                 let handle = &mut **handle.borrow_mut();
                                 let output = &mut M::empty_output(handle);
                                 let rng = &mut rand::thread_rng();
@@ -74,7 +73,7 @@ impl PrefillStrategy {
                 .unwrap();
             }
             PrefillStrategy::Decreasing => {
-                hp_sharp::THREAD.with(|handle| {
+                hp_brcu::THREAD.with(|handle| {
                     let handle = &mut **handle.borrow_mut();
                     let output = &mut M::empty_output(handle);
                     let rng = &mut rand::thread_rng();
@@ -100,7 +99,7 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
     strategy: PrefillStrategy,
 ) -> Perf {
     if config.bag_size == BagSize::Large {
-        println!("Warning: Large bag size is currently unavailable for HP#.");
+        println!("Warning: Large bag size is currently unavailable for HP-BRCU.");
     }
     let map = &M::new();
     strategy.prefill(config, map);

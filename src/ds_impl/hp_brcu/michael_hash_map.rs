@@ -38,7 +38,7 @@ where
     }
 
     #[inline]
-    pub fn get(&self, k: &K, cursor: &mut Cursor<K, V>, thread: &mut hp_sharp::Thread) -> bool {
+    pub fn get(&self, k: &K, cursor: &mut Cursor<K, V>, thread: &mut hp_brcu::Thread) -> bool {
         let i = Self::hash(k);
         self.get_bucket(i).get(k, cursor, thread)
     }
@@ -49,14 +49,14 @@ where
         k: K,
         v: V,
         cursor: &mut Cursor<K, V>,
-        thread: &mut hp_sharp::Thread,
+        thread: &mut hp_brcu::Thread,
     ) -> bool {
         let i = Self::hash(&k);
         self.get_bucket(i).insert(k, v, cursor, thread)
     }
 
     #[inline]
-    pub fn remove(&self, k: &K, cursor: &mut Cursor<K, V>, thread: &mut hp_sharp::Thread) -> bool {
+    pub fn remove(&self, k: &K, cursor: &mut Cursor<K, V>, thread: &mut hp_brcu::Thread) -> bool {
         let i = Self::hash(&k);
         self.get_bucket(i).remove(k, cursor, thread)
     }
@@ -75,7 +75,7 @@ where
     }
 
     #[inline(always)]
-    fn get(&self, key: &K, cursor: &mut Cursor<K, V>, thread: &mut hp_sharp::Thread) -> bool {
+    fn get(&self, key: &K, cursor: &mut Cursor<K, V>, thread: &mut hp_brcu::Thread) -> bool {
         self.get(key, cursor, thread)
     }
     #[inline(always)]
@@ -84,12 +84,12 @@ where
         key: K,
         value: V,
         cursor: &mut Cursor<K, V>,
-        thread: &mut hp_sharp::Thread,
+        thread: &mut hp_brcu::Thread,
     ) -> bool {
         self.insert(key, value, cursor, thread)
     }
     #[inline(always)]
-    fn remove(&self, key: &K, cursor: &mut Cursor<K, V>, thread: &mut hp_sharp::Thread) -> bool {
+    fn remove(&self, key: &K, cursor: &mut Cursor<K, V>, thread: &mut hp_brcu::Thread) -> bool {
         self.remove(key, cursor, thread)
     }
 }
@@ -97,7 +97,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::HashMap;
-    use crate::ds_impl::hp_sharp::concurrent_map;
+    use crate::ds_impl::hp_brcu::concurrent_map;
 
     #[test]
     fn smoke_hashmap() {

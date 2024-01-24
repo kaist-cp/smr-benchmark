@@ -1,4 +1,4 @@
-use hp_sharp::Thread;
+use hp_brcu::Thread;
 
 pub trait OutputHolder<V> {
     fn default(thread: &mut Thread) -> Self;
@@ -24,7 +24,7 @@ pub mod tests {
     extern crate rand;
     use super::{ConcurrentMap, OutputHolder};
     use crossbeam_utils::thread;
-    use hp_sharp::THREAD;
+    use hp_brcu::THREAD;
     use rand::prelude::*;
 
     const THREADS: i32 = 30;

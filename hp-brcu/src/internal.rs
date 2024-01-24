@@ -17,11 +17,11 @@ use crate::rollback;
 
 pub(crate) static mut USE_ROLLBACK: bool = true;
 
-/// Turn on or off the functionality to rollback. By default, HP# will use rollbacks.
+/// Turn on or off the functionality to rollback. By default, HP-BRCU will use rollbacks.
 ///
 /// # Safety
 ///
-/// Set this configuration before actually running an application with HP#.
+/// Set this configuration before actually running an application with HP-BRCU.
 pub unsafe fn set_rollback(enable: bool) {
     unsafe { USE_ROLLBACK = enable };
 }

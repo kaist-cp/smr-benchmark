@@ -3,7 +3,7 @@ use std::{
     sync::atomic::{fence, AtomicUsize, Ordering},
 };
 
-use hp_sharp::{
+use hp_brcu::{
     Atomic, CsGuard, Owned, Pointer, RollbackProof, Shared, Shield, Thread, Unprotected,
 };
 
@@ -450,7 +450,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::SkipList;
-    use crate::ds_impl::hp_sharp::concurrent_map;
+    use crate::ds_impl::hp_brcu::concurrent_map;
 
     #[test]
     fn smoke_skip_list() {

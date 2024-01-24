@@ -362,7 +362,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "hp-sharp"
+name = "hp-brcu"
 version = "0.1.0"
 dependencies = [
  "arrayvec 0.7.4",
@@ -790,7 +790,7 @@ dependencies = [
  "crossbeam-pebr-epoch",
  "crossbeam-utils 0.8.14",
  "csv",
- "hp-sharp",
+ "hp-brcu",
  "hp_pp",
  "nbr-rs",
  "num",

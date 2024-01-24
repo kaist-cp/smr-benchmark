@@ -48,8 +48,8 @@ HP = "hp"
 HP_PP = "hp-pp"
 NBR = "nbr"
 NBR_LARGE = "nbr-large"
-HP_SHARP = "hp-sharp"
-HP_SHARP_0 = "hp-sharp-0"
+HP_BRCU = "hp-brcu"
+HP_RCU = "hp-rcu"
 VBR = "vbr"
 
 # DS with read-dominated bench & write-only bench
@@ -59,7 +59,7 @@ dss_write = [HLIST, HMLIST,          HASHMAP, NMTREE, SKIPLIST]
 
 WRITE, HALF, READ, READ_ONLY = "write", "half", "read", "read-only"
 
-SMR_ONLYs = [NR, EBR, NBR, NBR_LARGE, HP_PP, HP, PEBR, HP_SHARP, HP_SHARP_0, VBR]
+SMR_ONLYs = [NR, EBR, NBR, NBR_LARGE, HP_PP, HP, PEBR, HP_BRCU, HP_RCU, VBR]
 
 cpu_count = os.cpu_count()
 if not cpu_count or cpu_count <= 24:
@@ -79,8 +79,8 @@ line_shapes = {
     PEBR: "x",
     NBR: "p",
     NBR_LARGE: "H",
-    HP_SHARP: "s",
-    HP_SHARP_0: "P",
+    HP_BRCU: "s",
+    HP_RCU: "P",
     VBR: "*",
 }
 
@@ -92,8 +92,8 @@ line_colors = {
     PEBR: "y",
     NBR: "blue",
     NBR_LARGE: "indigo",
-    HP_SHARP: "r",
-    HP_SHARP_0: "green",
+    HP_BRCU: "r",
+    HP_RCU: "green",
     VBR: "orange",
 }
 
@@ -105,8 +105,8 @@ line_types = {
     PEBR: (5, (10, 3)),
     NBR: (5, (10, 3)),
     NBR_LARGE: (5, (10, 3)),
-    HP_SHARP: (0, (3, 1, 1, 1)),
-    HP_SHARP_0: (0, (3, 1, 1, 1)),
+    HP_BRCU: (0, (3, 1, 1, 1)),
+    HP_RCU: (0, (3, 1, 1, 1)),
     VBR: (0, (2, 1)),
 }
 
@@ -204,7 +204,7 @@ def draw_peak_garb(data, ds, bench, key_range):
     legend = False
 
     y_max = 0
-    for cand in [NBR, HP_PP, HP_SHARP]:
+    for cand in [NBR, HP_PP, HP_BRCU]:
         max_garb = data[data.mm == cand].peak_garb.max()
         if not math.isnan(max_garb):
             y_max = max(y_max, max_garb * 2)

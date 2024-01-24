@@ -1,6 +1,6 @@
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 
-use hp_sharp::{
+use hp_brcu::{
     Atomic, CsGuard, Owned, Protector, RollbackProof, Shared, Shield, Thread, Unprotected,
     Validatable,
 };
@@ -513,7 +513,7 @@ where
     }
 
     #[inline(always)]
-    fn get(&self, key: &K, output: &mut Self::Output, thread: &mut hp_sharp::Thread) -> bool {
+    fn get(&self, key: &K, output: &mut Self::Output, thread: &mut hp_brcu::Thread) -> bool {
         self.inner.get(&List::harris_traverse, key, output, thread)
     }
 
@@ -523,7 +523,7 @@ where
         key: K,
         value: V,
         output: &mut Self::Output,
-        thread: &mut hp_sharp::Thread,
+        thread: &mut hp_brcu::Thread,
     ) -> bool {
         self.inner
             .insert(&List::harris_traverse, key, value, output, thread)
@@ -534,7 +534,7 @@ where
         &self,
         key: &K,
         output: &mut Self::Output,
-        thread: &mut hp_sharp::Thread,
+        thread: &mut hp_brcu::Thread,
     ) -> bool {
         self.inner
             .remove(&List::harris_traverse, key, output, thread)
@@ -558,7 +558,7 @@ where
     }
 
     #[inline(always)]
-    fn get(&self, key: &K, output: &mut Self::Output, thread: &mut hp_sharp::Thread) -> bool {
+    fn get(&self, key: &K, output: &mut Self::Output, thread: &mut hp_brcu::Thread) -> bool {
         self.inner
             .get(&List::harris_michael_traverse, key, output, thread)
     }
@@ -569,7 +569,7 @@ where
         key: K,
         value: V,
         output: &mut Self::Output,
-        thread: &mut hp_sharp::Thread,
+        thread: &mut hp_brcu::Thread,
     ) -> bool {
         self.inner
             .insert(&List::harris_michael_traverse, key, value, output, thread)
@@ -580,7 +580,7 @@ where
         &self,
         key: &K,
         output: &mut Self::Output,
-        thread: &mut hp_sharp::Thread,
+        thread: &mut hp_brcu::Thread,
     ) -> bool {
         self.inner
             .remove(&List::harris_michael_traverse, key, output, thread)
@@ -615,7 +615,7 @@ where
     }
 
     #[inline(always)]
-    fn get(&self, key: &K, output: &mut Self::Output, thread: &mut hp_sharp::Thread) -> bool {
+    fn get(&self, key: &K, output: &mut Self::Output, thread: &mut hp_brcu::Thread) -> bool {
         self.inner
             .get(&List::harris_herlihy_shavit_traverse, key, output, thread)
     }
@@ -626,7 +626,7 @@ where
         key: K,
         value: V,
         output: &mut Self::Output,
-        thread: &mut hp_sharp::Thread,
+        thread: &mut hp_brcu::Thread,
     ) -> bool {
         self.inner
             .insert(&List::harris_traverse, key, value, output, thread)
@@ -637,7 +637,7 @@ where
         &self,
         key: &K,
         output: &mut Self::Output,
-        thread: &mut hp_sharp::Thread,
+        thread: &mut hp_brcu::Thread,
     ) -> bool {
         self.inner
             .remove(&List::harris_traverse, key, output, thread)

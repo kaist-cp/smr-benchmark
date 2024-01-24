@@ -61,8 +61,7 @@ where
   * `cdrc-ebr`: EBR flavor of CDRC [13]
   * `nbr`: Neutralization based reclamation with signal optimization (NBR+) with a moderate reclamation threshold (256) [14]
   * `nbr-large`: NBR+ with a large reclamation threshold (8192)
-  * `hp-sharp`: An extension of HP scheme with signal-based rollback that overcomes the above limitations
-  * `cdrc-hp-sharp`: HP# flavor of CDRC [13]
+  * `hp-brcu`: An extension of HP scheme with signal-based rollback
   * `vbr`: Version-based reclamation scheme by Sheffi et al. [15]
 
 For detailed usage information,
@@ -83,7 +82,7 @@ This takes several hours and creates raw CSV data and plots under `./results/`.
 
 ## Debug
 
-We used `./sanitize.sh` to debug our implementation. This script runs the benchmark with [LLVM address sanitizer for Rust](https://github.com/japaric/rust-san) and uses parameters that impose high stress on HP# by triggering more frequent global epoch advancements.
+We used `./sanitize.sh` to debug our implementation. This script runs the benchmark with [LLVM address sanitizer for Rust](https://github.com/japaric/rust-san) and uses parameters that impose high stress on HP-BRCU by triggering more frequent global epoch advancements.
 
 
 ## Project structure
@@ -95,7 +94,7 @@ We used `./sanitize.sh` to debug our implementation. This script runs the benchm
   The main implementation of PEBR lies under
   `./crossbeam-pebr/crossbeam-epoch`.
 * `./hp_pp` is an implementation of the original HP and our HP++.
-* `./hp-sharp` is our implementation of HP# scheme and HP# flavor of CDRC.
+* `./hp-brcu` is our implementation of HP-BRCU scheme.
 * `./nbr-rs` is an implementation of NBR+ with signal optimizing.
 * `./vbr-rs` is an implementation of Version Based Reclamation.
 * `./src` contains the benchmark driver (`./src/main.rs`) and the
