@@ -1,10 +1,9 @@
-# type: ignore
 import pandas as pd
-from plotnine import *
 import warnings
-import os
+import os, math
 import matplotlib
-import math
+import matplotlib.pyplot as plt
+from legends import *
 
 RESULTS_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "results")
 
@@ -41,25 +40,12 @@ FORMAL_NAMES = {
     SKIPLIST: "SkipList",
 }
 
-EBR = "ebr"
-PEBR = "pebr"
-NR = "nr"
-HP = "hp"
-HP_PP = "hp-pp"
-NBR = "nbr"
-NBR_LARGE = "nbr-large"
-HP_BRCU = "hp-brcu"
-HP_RCU = "hp-rcu"
-VBR = "vbr"
-
 # DS with read-dominated bench & write-only bench
 dss_all   = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, SKIPLIST]
 dss_read  = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, SKIPLIST]
 dss_write = [HLIST, HMLIST,          HASHMAP, NMTREE, SKIPLIST]
 
 WRITE, HALF, READ, READ_ONLY = "write", "half", "read", "read-only"
-
-SMR_ONLYs = [NR, EBR, NBR, NBR_LARGE, HP_PP, HP, PEBR, HP_BRCU, HP_RCU, VBR]
 
 cpu_count = os.cpu_count()
 if not cpu_count or cpu_count <= 24:
@@ -70,45 +56,20 @@ else:
     ts = [1] + list(range(12, 193, 12))
 n_map = {0: ''}
 
-# https://matplotlib.org/stable/api/markers_api.html
-line_shapes = {
-    NR: '.',
-    EBR: 'o',
-    HP: 'v',
-    HP_PP: 'D',
-    PEBR: "x",
-    NBR: "p",
-    NBR_LARGE: "H",
-    HP_BRCU: "s",
-    HP_RCU: "P",
-    VBR: "*",
-}
+(label_size, xtick_size, ytick_size, marker_size) = (24, 20, 18, 20)
 
-line_colors = {
-    NR: 'k',
-    EBR: 'c',
-    HP: 'hotpink',
-    HP_PP: 'purple',
-    PEBR: "y",
-    NBR: "blue",
-    NBR_LARGE: "indigo",
-    HP_BRCU: "r",
-    HP_RCU: "green",
-    VBR: "orange",
-}
-
-line_types = {
-    NR: '-',
-    EBR: 'dotted',
-    HP: 'dashed',
-    HP_PP: 'dashdot',
-    PEBR: (5, (10, 3)),
-    NBR: (5, (10, 3)),
-    NBR_LARGE: (5, (10, 3)),
-    HP_BRCU: (0, (3, 1, 1, 1)),
-    HP_RCU: (0, (3, 1, 1, 1)),
-    VBR: (0, (2, 1)),
-}
+mm_order = [
+    HP_BRCU,
+    HP_RCU,
+    EBR,
+    HP,
+    HP_PP,
+    PEBR,
+    NBR,
+    NBR_LARGE,
+    VBR,
+    NR,
+]
 
 def filter_invalid_data(data, ds):
     if ds == NMTREE:
@@ -140,47 +101,34 @@ def range_to_str(kr: int):
         if div < 1000 or i == len(UNITS) - 1:
             return f"{div}{UNITS[i]}"
 
-def draw(title, name, data, line_name, y_value, y_label=None, y_max=None, legend=False, y_log=False, y_min=None):
+def draw(title, name, data, y_value, y_label=None, y_max=None, y_min=None):
     print(name)
-    p = ggplot(
-            data,
-            aes(x=THREADS, y=y_value,
-                color=line_name, shape=line_name, linetype=line_name)) + \
-        geom_line() + xlab('Threads') + geom_point(size=7) + \
-        scale_shape_manual(line_shapes, na_value='x') + \
-        scale_color_manual(line_colors, na_value='y') + \
-        scale_linetype_manual(line_types, na_value='-.') + \
-        theme_bw() + scale_x_continuous(breaks=ts) + \
-        labs(title = title) + theme(plot_title = element_text(size=36))
+    plt.figure(figsize=(10, 7))
+    plt.title(title, fontsize=36, pad=15)
 
-    if y_log:
-        p += scale_y_continuous(trans='log10')
+    for mm in sorted(list(set(data.mm)), key=lambda mm: len(mm_order) - mm_order.index(mm)):
+        d = data[data.mm == mm].sort_values(by=[THREADS], axis=0)
+        plt.plot(d[THREADS], d[y_value],
+                 linewidth=3, markersize=marker_size, **line_shapes[mm], zorder=30)
 
-    p += theme(
-            axis_title_x=element_text(size=15),
-            axis_text_x=element_text(size=14),
-            axis_text_y=element_text(size=14))
-    if y_label:
-        p += ylab(y_label)
-        p += theme(axis_title_y=element_text(size=14))
-    else:
-        p += theme(axis_title_y=element_blank())
+    plt.xlabel("Threads", fontsize=label_size)
+    plt.ylabel(y_label, fontsize=label_size)
+    plt.yticks(fontsize=ytick_size)
+    plt.xticks(ts, fontsize=xtick_size, rotation=90)
+    plt.grid(alpha=0.5)
 
-    y_min = y_min if y_min != None else 0
-    if y_max:
-        p += coord_cartesian(ylim=(y_min, y_max))
-    if legend:
-        # HACK: `\n` at the end of legend title
-        p += theme(legend_title=element_text(size=18, linespacing=1.5))
-        p += theme(legend_key_size=15)
-        p += theme(legend_text=element_text(size=18))
-        p += theme(legend_entry_spacing=15)
-    else:
-        p += theme(legend_position='none')
-    
-    p += annotate(geom="rect", xmin=cpu_count, xmax=float("inf"), ymin=-float("inf"), ymax=float("inf"), fill = "#FF00000A")
+    if data.threads.max() >= cpu_count:
+        left, right = plt.xlim()
+        plt.axvspan(cpu_count, right, facecolor="#FF00000A")
+        plt.xlim(left, right)
 
-    p.save(name, width=10, height=7, units="in")
+    y_max = min(y_max, data[y_value].max()) if y_max else data[y_value].max()
+    y_min = max(y_min, data[y_value].min()) if y_min else data[y_value].min()
+    y_margin = (y_max - y_min) * 0.05
+    plt.ylim(y_min-y_margin, y_max+y_margin)
+
+    plt.savefig(name, bbox_inches='tight')
+
 
 def draw_throughput(data, ds, bench, key_range):
     data = data[ds].copy()
@@ -188,10 +136,9 @@ def draw_throughput(data, ds, bench, key_range):
     data = data[data.non_coop == 0]
     data = filter_invalid_data(data, ds)
     y_label = 'Throughput (M op/s)'
-    legend = False
     y_max = data.throughput.max() * 1.05
     draw(plot_title(ds, bench), f'{RESULTS_PATH}/{ds}_{bench}_{range_to_str(key_range)}_throughput.pdf',
-         data, SMR_ONLY, THROUGHPUT, y_label, y_max, legend)
+         data, THROUGHPUT, y_label, y_max)
 
 
 def draw_peak_garb(data, ds, bench, key_range):
@@ -200,17 +147,14 @@ def draw_peak_garb(data, ds, bench, key_range):
     data = data[data.mm != NR]
     data = data[data.mm != VBR]
     data = filter_invalid_data(data, ds)
-    y_label = 'Peak unreclaimed memory blocks (×10⁴)'
-    legend = False
-
+    y_label = 'Peak unreclaimed blocks (×10⁴)'
     y_max = 0
     for cand in [NBR, HP_PP, HP_BRCU]:
         max_garb = data[data.mm == cand].peak_garb.max()
         if not math.isnan(max_garb):
             y_max = max(y_max, max_garb * 2)
-
     draw(plot_title(ds, bench), f'{RESULTS_PATH}/{ds}_{bench}_{range_to_str(key_range)}_peak_garb.pdf',
-         data, SMR_ONLY, PEAK_GARB, y_label, y_max, legend)
+         data, PEAK_GARB, y_label, y_max)
 
 
 raw_data = {}
@@ -228,14 +172,14 @@ for ds in dss_all:
     data.avg_garb = data.avg_garb.map(lambda x: x / 10000)
     data.mm = list(map(lambda tup: tup[0] if tup[1] == "small" else tup[0] + "-large", zip(data.mm, data.bag_size)))
     data = data.drop("bag_size", axis=1)
-    data = data[data.mm.isin(SMR_ONLYs)]
+    data = data[data.mm.isin(SMRs)]
 
     raw_data[ds] = data.copy()
 
     # take average of each runs
     avg = data.groupby(['ds', 'mm', 'threads', 'non_coop', 'get_rate', 'key_range']).mean().reset_index()
 
-    avg[SMR_ONLY] = pd.Categorical(avg.mm.map(str), SMR_ONLYs)
+    avg[SMR_ONLY] = pd.Categorical(avg.mm.map(str), SMRs)
     avg.sort_values(by=SMR_ONLY, inplace=True)
     for i, bench in enumerate([WRITE, HALF, READ, READ_ONLY]):
         avg_data[bench][ds] = avg[avg.get_rate == i]
