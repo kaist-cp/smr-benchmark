@@ -70,11 +70,7 @@ impl<K, V> Node<K, V> {
     }
 
     #[inline]
-    pub fn protect_next<'domain>(
-        &self,
-        index: usize,
-        hazptr: &mut HazardPointer<'domain>,
-    ) -> *mut Node<K, V> {
+    pub fn protect_next(&self, index: usize, hazptr: &mut HazardPointer<'_>) -> *mut Node<K, V> {
         let mut next = self.next[index].load(Ordering::Relaxed);
         loop {
             hazptr.protect_raw(untagged(next));
@@ -142,6 +138,16 @@ impl<K, V> Drop for SkipList<K, V> {
     }
 }
 
+impl<K, V> Default for SkipList<K, V>
+where
+    K: Ord + Clone,
+    V: Clone,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<K, V> SkipList<K, V>
 where
     K: Ord + Clone,
@@ -153,7 +159,7 @@ where
         }
     }
 
-    fn find<'domain, 'hp>(&self, key: &K, handle: &'hp mut Handle<'domain>) -> Cursor<K, V> {
+    fn find(&self, key: &K, handle: &mut Handle<'_>) -> Cursor<K, V> {
         'search: loop {
             let mut cursor = Cursor::new(&self.head);
 
@@ -213,12 +219,12 @@ where
         }
     }
 
-    fn help_unlink<'domain, 'hp>(
+    fn help_unlink(
         &self,
         pred: &AtomicPtr<Node<K, V>>,
         curr: *mut Node<K, V>,
         succ: *mut Node<K, V>,
-        handle: &'hp mut Handle<'domain>,
+        handle: &mut Handle<'_>,
     ) -> bool {
         let success = pred
             .compare_exchange(
@@ -230,12 +236,12 @@ where
             .is_ok();
 
         if success {
-            unsafe { (&*untagged(curr)).decrement(handle) };
+            unsafe { (*untagged(curr)).decrement(handle) };
         }
         success
     }
 
-    pub fn insert<'domain, 'hp>(&self, key: K, value: V, handle: &'hp mut Handle<'domain>) -> bool {
+    pub fn insert(&self, key: K, value: V, handle: &mut Handle<'_>) -> bool {
         let mut cursor = self.find(&key, handle);
         if cursor.found.is_some() {
             return false;
@@ -327,42 +333,40 @@ where
         key: &K,
         handle: &'hp mut Handle<'domain>,
     ) -> Option<&'hp V> {
-        loop {
-            let cursor = self.find(key, handle);
-            let node_ptr = cursor.found?;
-            let node = unsafe { &*node_ptr };
-            handle
-                .removed_h
-                .protect_raw(node as *const _ as *mut Node<K, V>);
-            light_membarrier();
+        let cursor = self.find(key, handle);
+        let node_ptr = cursor.found?;
+        let node = unsafe { &*node_ptr };
+        handle
+            .removed_h
+            .protect_raw(node as *const _ as *mut Node<K, V>);
+        light_membarrier();
 
-            // Try removing the node by marking its tower.
-            if node.mark_tower() {
-                for level in (0..node.height).rev() {
-                    let succ = node.next[level].load(Ordering::SeqCst);
-                    if (tag(succ) & 2) != 0 {
-                        continue;
-                    }
+        // Try removing the node by marking its tower.
+        if node.mark_tower() {
+            for level in (0..node.height).rev() {
+                let succ = node.next[level].load(Ordering::SeqCst);
+                if (tag(succ) & 2) != 0 {
+                    continue;
+                }
 
-                    // Try linking the predecessor and successor at this level.
-                    if unsafe { &*cursor.preds[level] }.next[level]
-                        .compare_exchange(
-                            node as *const _ as _,
-                            untagged(succ),
-                            Ordering::SeqCst,
-                            Ordering::SeqCst,
-                        )
-                        .is_ok()
-                    {
-                        node.decrement(handle);
-                    } else {
-                        self.find(key, handle);
-                        break;
-                    }
+                // Try linking the predecessor and successor at this level.
+                if unsafe { &*cursor.preds[level] }.next[level]
+                    .compare_exchange(
+                        node as *const _ as _,
+                        untagged(succ),
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    )
+                    .is_ok()
+                {
+                    node.decrement(handle);
+                } else {
+                    self.find(key, handle);
+                    break;
                 }
             }
-            return Some(unsafe { transmute::<&V, &'hp V>(&node.value) });
         }
+        Some(unsafe { transmute::<&V, &'hp V>(&node.value) })
     }
 }
 
@@ -382,10 +386,10 @@ where
     }
 
     #[inline(always)]
-    fn get<'domain, 'hp>(&self, handle: &'hp mut Self::Handle<'domain>, key: &K) -> Option<&'hp V> {
+    fn get<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
         let cursor = self.find(key, handle);
         let node = unsafe { cursor.found?.as_ref()? };
-        if node.key.eq(&key) {
+        if node.key.eq(key) {
             Some(unsafe { transmute(&node.value) })
         } else {
             None
@@ -393,21 +397,12 @@ where
     }
 
     #[inline(always)]
-    fn insert<'domain, 'hp>(
-        &self,
-        handle: &'hp mut Self::Handle<'domain>,
-        key: K,
-        value: V,
-    ) -> bool {
+    fn insert(&self, handle: &mut Self::Handle<'_>, key: K, value: V) -> bool {
         self.insert(key, value, handle)
     }
 
     #[inline(always)]
-    fn remove<'domain, 'hp>(
-        &self,
-        handle: &'hp mut Self::Handle<'domain>,
-        key: &K,
-    ) -> Option<&'hp V> {
+    fn remove<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
         self.remove(key, handle)
     }
 }

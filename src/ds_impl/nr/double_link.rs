@@ -35,6 +35,12 @@ pub struct DoubleLink<T: Sync + Send> {
     tail: CachePadded<Atomic<Node<T>>>,
 }
 
+impl<T: Sync + Send> Default for DoubleLink<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: Sync + Send> DoubleLink<T> {
     #[inline]
     pub fn new() -> Self {

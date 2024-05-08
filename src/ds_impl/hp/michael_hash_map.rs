@@ -27,7 +27,6 @@ where
         unsafe { self.buckets.get_unchecked(index % self.buckets.len()) }
     }
 
-    // TODO(@jeehoonkang): we're converting u64 to usize, which may lose information.
     #[inline]
     fn hash(k: &K) -> usize {
         let mut s = DefaultHasher::new();
@@ -35,18 +34,18 @@ where
         s.finish() as usize
     }
 
-    pub fn get<'domain, 'hp>(&self, handle: &'hp mut Handle<'domain>, k: &K) -> Option<&'hp V> {
+    pub fn get<'hp>(&self, handle: &'hp mut Handle<'_>, k: &K) -> Option<&'hp V> {
         let i = Self::hash(k);
         self.get_bucket(i).get(handle, k)
     }
 
-    pub fn insert<'domain, 'hp>(&self, handle: &'hp mut Handle<'domain>, k: K, v: V) -> bool {
+    pub fn insert(&self, handle: &mut Handle<'_>, k: K, v: V) -> bool {
         let i = Self::hash(&k);
         self.get_bucket(i).insert(handle, k, v)
     }
 
-    pub fn remove<'domain, 'hp>(&self, handle: &'hp mut Handle<'domain>, k: &K) -> Option<&'hp V> {
-        let i = Self::hash(&k);
+    pub fn remove<'hp>(&self, handle: &'hp mut Handle<'_>, k: &K) -> Option<&'hp V> {
+        let i = Self::hash(k);
         self.get_bucket(i).remove(handle, k)
     }
 }
@@ -67,24 +66,15 @@ where
     }
 
     #[inline(always)]
-    fn get<'domain, 'hp>(&self, handle: &'hp mut Self::Handle<'domain>, key: &K) -> Option<&'hp V> {
+    fn get<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
         self.get(handle, key)
     }
     #[inline(always)]
-    fn insert<'domain, 'hp>(
-        &self,
-        handle: &'hp mut Self::Handle<'domain>,
-        key: K,
-        value: V,
-    ) -> bool {
+    fn insert(&self, handle: &mut Self::Handle<'_>, key: K, value: V) -> bool {
         self.insert(handle, key, value)
     }
     #[inline(always)]
-    fn remove<'domain, 'hp>(
-        &self,
-        handle: &'hp mut Self::Handle<'domain>,
-        key: &K,
-    ) -> Option<&'hp V> {
+    fn remove<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
         self.remove(handle, key)
     }
 }

@@ -39,7 +39,7 @@ bitflags! {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Ord, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Key<K> {
     Fin(K),
     Inf1,
@@ -164,7 +164,7 @@ impl<K, V> Node<K, V> {
 
     /// Protect correct `update` of the node.
     #[inline]
-    fn protect_update<'domain>(&self, hazptr: &mut HazardPointer<'domain>) -> *mut Update<K, V> {
+    fn protect_update(&self, hazptr: &mut HazardPointer<'_>) -> *mut Update<K, V> {
         let mut update = self.update.load(Ordering::Acquire);
         loop {
             hazptr.protect_raw(untagged(update));
@@ -204,7 +204,7 @@ impl<K, V> Node<K, V> {
     }
 
     #[inline]
-    fn child<'g>(&'g self, dir: Direction) -> &'g AtomicPtr<Self> {
+    fn child(&self, dir: Direction) -> &AtomicPtr<Self> {
         match dir {
             Direction::L => &self.left,
             Direction::R => &self.right,
@@ -253,7 +253,7 @@ impl Default for Handle<'static> {
 impl<'domain> Handle<'domain> {
     // bypass E0499-E0503, etc that are supposed to be fixed by polonius
     #[inline]
-    fn launder<'hp1, 'hp2>(&'hp1 mut self) -> &'hp2 mut Self {
+    fn launder<'hp2>(&mut self) -> &'hp2 mut Self {
         unsafe { core::mem::transmute(self) }
     }
 }
@@ -301,7 +301,7 @@ where
     }
 
     #[inline]
-    fn validate_lower<'g>(&'g self) -> Option<(&'g Node<K, V>, &'g Node<K, V>, &'g Node<K, V>)> {
+    fn validate_lower(&self) -> Option<(&Node<K, V>, &Node<K, V>, &Node<K, V>)> {
         let p_node = unsafe { self.p.as_ref().unwrap() };
         let l_node = unsafe { self.l.as_ref().unwrap() };
         let l_other_node = unsafe { self.l_other.as_ref().unwrap() };
@@ -316,14 +316,7 @@ where
     }
 
     #[inline]
-    fn validate_full<'g>(
-        &'g self,
-    ) -> Option<(
-        &'g Node<K, V>,
-        &'g Node<K, V>,
-        &'g Node<K, V>,
-        &'g Node<K, V>,
-    )> {
+    fn validate_full(&self) -> Option<(&Node<K, V>, &Node<K, V>, &Node<K, V>, &Node<K, V>)> {
         let (p_node, l_node, l_other_node) = some_or!(self.validate_lower(), return None);
         let gp_node = unsafe { self.gp.as_ref().unwrap() };
 
@@ -410,7 +403,7 @@ where
     ///     - either gp → left has contained p (if k < gp → key) or gp → right has contained p (if k ≥ gp → key)
     ///     - gp → update has contained gpupdate
     #[inline]
-    fn search_inner<'domain, 'hp>(&self, key: &K, cursor: &mut Cursor<'domain, 'hp, K, V>) -> bool {
+    fn search_inner(&self, key: &K, cursor: &mut Cursor<'_, '_, K, V>) -> bool {
         cursor.l = self.root.load(Ordering::Relaxed);
         cursor.handle.l_h.protect_raw(cursor.l);
         light_membarrier();
@@ -481,7 +474,7 @@ where
         }
     }
 
-    fn search<'domain, 'hp>(&self, key: &K, cursor: &mut Cursor<'domain, 'hp, K, V>) {
+    fn search(&self, key: &K, cursor: &mut Cursor<'_, '_, K, V>) {
         loop {
             cursor.reset();
             if self.search_inner(key, cursor) {
@@ -490,7 +483,7 @@ where
         }
     }
 
-    pub fn find<'domain, 'hp>(&self, key: &K, handle: &'hp mut Handle<'domain>) -> Option<&'hp V> {
+    pub fn find<'hp>(&self, key: &K, handle: &'hp mut Handle<'_>) -> Option<&'hp V> {
         let mut cursor = Cursor::new(handle);
         self.search(key, &mut cursor);
         let l_node = unsafe { &*cursor.l };
@@ -501,12 +494,7 @@ where
         }
     }
 
-    pub fn insert<'domain, 'hp>(
-        &self,
-        key: &K,
-        value: V,
-        handle: &'hp mut Handle<'domain>,
-    ) -> bool {
+    pub fn insert(&self, key: &K, value: V, handle: &mut Handle<'_>) -> bool {
         loop {
             let mut cursor = Cursor::new(handle.launder());
             self.search(key, &mut cursor);
@@ -598,11 +586,7 @@ where
         }
     }
 
-    pub fn delete<'domain, 'hp>(
-        &self,
-        key: &K,
-        handle: &'hp mut Handle<'domain>,
-    ) -> Option<&'hp V> {
+    pub fn delete<'hp>(&self, key: &K, handle: &'hp mut Handle<'_>) -> Option<&'hp V> {
         loop {
             let mut cursor = Cursor::new(handle.launder());
             self.search(key, &mut cursor);
@@ -679,11 +663,11 @@ where
     // Precondition:
     // 1. The owner of op_src must be protected by help_src_h.
     #[inline]
-    fn help<'domain, 'hp>(
+    fn help(
         &self,
         op: *mut Update<K, V>,
         op_src: &AtomicPtr<Update<K, V>>,
-        handle: &'hp mut Handle<'domain>,
+        handle: &mut Handle<'_>,
     ) {
         // Protect helping op. And it must be validated.
         handle.aux_update_h.protect_raw(untagged(op));
@@ -719,13 +703,9 @@ where
 
     // Precondition:
     // 1. gp and p must be protected by p_h and gp_h respectively.
-    fn help_delete<'domain, 'hp>(
-        &self,
-        op: *mut Update<K, V>,
-        handle: &'hp mut Handle<'domain>,
-    ) -> bool {
+    fn help_delete(&self, op: *mut Update<K, V>, handle: &mut Handle<'_>) -> bool {
         // Precondition: op points to a DInfo record (i.e., it is not ⊥)
-        let op_ref = unsafe { untagged(op).as_ref().unwrap().clone() };
+        let op_ref = unsafe { untagged(op).as_ref().unwrap() };
         let Update { gp, p, pupdate, .. } = op_ref;
 
         let gp_ref = unsafe { gp.as_ref() }.unwrap();
@@ -751,13 +731,13 @@ where
                     }
                 }
                 self.help_marked(new_op, handle);
-                return true;
+                true
             }
             Err(current) => {
                 if current == new_op {
                     // (prev value) = <Mark, op>
                     self.help_marked(new_op, handle);
-                    return true;
+                    true
                 } else {
                     // backtrack CAS
                     let _ = gp_ref.update.compare_exchange(
@@ -771,7 +751,7 @@ where
                     // so backtrack CAS must be called before helping.
                     HazardPointer::swap(&mut handle.p_h, &mut handle.help_src_h);
                     self.help(current, &p_ref.update, handle);
-                    return false;
+                    false
                 }
             }
         }
@@ -782,9 +762,9 @@ where
     // Precondition:
     // 1. gp and p must be protected by some hazard pointers.
     // 2. op must be protected by aux_update_h.
-    fn help_marked<'domain, 'hp>(&self, op: *mut Update<K, V>, handle: &'hp mut Handle<'domain>) {
+    fn help_marked(&self, op: *mut Update<K, V>, handle: &mut Handle<'_>) {
         // Precondition: op points to a DInfo record (i.e., it is not ⊥)
-        let op_ref = unsafe { untagged(op).as_ref().unwrap().clone() };
+        let op_ref = unsafe { untagged(op).as_ref().unwrap() };
         let Update {
             gp,
             p,
@@ -820,7 +800,7 @@ where
     // Precondition:
     // 1. p must be protected by a hazard pointer.
     // 2. op must be protected by aux_update_h.
-    fn help_insert<'domain, 'hp>(&self, op: *mut Update<K, V>, handle: &'hp mut Handle<'domain>) {
+    fn help_insert(&self, op: *mut Update<K, V>, handle: &mut Handle<'_>) {
         // Precondition: op points to an IInfo record (i.e., it is not ⊥)
         let op_ref = unsafe { untagged(op).as_ref().unwrap() };
         let Update {
@@ -868,7 +848,7 @@ where
     }
 
     #[inline(always)]
-    fn get<'domain, 'hp>(&self, handle: &'hp mut Self::Handle<'domain>, key: &K) -> Option<&'hp V> {
+    fn get<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
         match self.find(key, handle) {
             Some(value) => Some(value),
             None => None,
@@ -876,21 +856,12 @@ where
     }
 
     #[inline(always)]
-    fn insert<'domain, 'hp>(
-        &self,
-        handle: &'hp mut Self::Handle<'domain>,
-        key: K,
-        value: V,
-    ) -> bool {
+    fn insert(&self, handle: &mut Self::Handle<'_>, key: K, value: V) -> bool {
         self.insert(&key, value, handle)
     }
 
     #[inline(always)]
-    fn remove<'domain, 'hp>(
-        &self,
-        handle: &'hp mut Self::Handle<'domain>,
-        key: &K,
-    ) -> Option<&'hp V> {
+    fn remove<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
         self.delete(key, handle)
     }
 }

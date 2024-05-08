@@ -134,7 +134,7 @@ impl<K, V> Default for State<'static, K, V> {
 impl<'domain, K, V> State<'domain, K, V> {
     // bypass E0499-E0503, etc that are supposed to be fixed by polonius
     #[inline]
-    fn launder<'hp1, 'hp2>(&'hp1 mut self) -> &'hp2 mut Self {
+    fn launder<'hp2>(&mut self) -> &'hp2 mut Self {
         unsafe { core::mem::transmute(self) }
     }
 }
@@ -264,7 +264,7 @@ where
         }
 
         // double left rotation
-        return self.double_left(left, right, right_left, right_right, key, value);
+        self.double_left(left, right, right_left, right_right, key, value)
     }
 
     #[inline]
@@ -286,7 +286,7 @@ where
             right_ref.value.clone(),
         );
         self.retire_node(right);
-        return res;
+        res
     }
 
     #[inline]
@@ -356,7 +356,7 @@ where
             return Ok(self.single_right(left, right, left_right, left_left, key, value));
         }
         // double right rotation
-        return self.double_right(left, right, left_right, left_left, key, value);
+        self.double_right(left, right, left_right, left_left, key, value)
     }
 
     #[inline]
@@ -378,7 +378,7 @@ where
             left_ref.value.clone(),
         );
         self.retire_node(left);
-        return res;
+        res
     }
 
     #[inline]
@@ -560,7 +560,7 @@ where
             node_ref.value.clone(),
         );
         self.retire_node(node);
-        return Ok((right, succ, Some(right_h)));
+        Ok((right, succ, Some(right_h)))
     }
 
     fn pull_rightmost(
@@ -602,7 +602,7 @@ where
             node_ref.value.clone(),
         );
         self.retire_node(node);
-        return Ok((left, succ, Some(left_h)));
+        Ok((left, succ, Some(left_h)))
     }
 
     pub fn check_root(&self) -> Result<(), ()> {
@@ -622,6 +622,16 @@ pub struct BonsaiTreeMap<K, V> {
     root: AtomicPtr<Node<K, V>>,
 }
 
+impl<K, V> Default for BonsaiTreeMap<K, V>
+where
+    K: Ord + Clone,
+    V: Clone,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<K, V> BonsaiTreeMap<K, V>
 where
     K: Ord + Clone,
@@ -634,14 +644,14 @@ where
     }
 
     #[inline]
-    pub fn protect_root<'domain, 'hp>(&self, state: &'hp mut State<'domain, K, V>) {
+    pub fn protect_root(&self, state: &mut State<'_, K, V>) {
         state.curr_root = Self::protect_link(&self.root, &mut state.root_h);
     }
 
     #[inline]
-    pub fn protect_link<'domain, 'hp>(
+    pub fn protect_link(
         link: &AtomicPtr<Node<K, V>>,
-        hazptr: &'hp mut HazardPointer<'domain>,
+        hazptr: &mut HazardPointer<'_>,
     ) -> *mut Node<K, V> {
         let mut node = link.load(Ordering::Relaxed);
         loop {
@@ -656,11 +666,7 @@ where
         node
     }
 
-    pub fn get<'domain, 'hp>(
-        &self,
-        key: &K,
-        state: &'hp mut State<'domain, K, V>,
-    ) -> Option<&'hp V> {
+    pub fn get<'hp>(&self, key: &K, state: &'hp mut State<'_, K, V>) -> Option<&'hp V> {
         loop {
             self.protect_root(state);
             let mut node = state.curr_root;
@@ -690,12 +696,7 @@ where
         }
     }
 
-    pub fn insert<'domain, 'hp>(
-        &self,
-        key: K,
-        value: V,
-        state: &'hp mut State<'domain, K, V>,
-    ) -> bool {
+    pub fn insert(&self, key: K, value: V, state: &mut State<'_, K, V>) -> bool {
         loop {
             self.protect_root(state);
             state.root_link = &self.root;
@@ -722,11 +723,7 @@ where
         }
     }
 
-    pub fn remove<'domain, 'hp>(
-        &self,
-        key: &K,
-        state: &'hp mut State<'domain, K, V>,
-    ) -> Option<&'hp V> {
+    pub fn remove<'hp>(&self, key: &K, state: &'hp mut State<'_, K, V>) -> Option<&'hp V> {
         loop {
             self.protect_root(state);
             state.root_link = &self.root;
@@ -790,26 +787,17 @@ where
     }
 
     #[inline(always)]
-    fn get<'domain, 'hp>(&self, handle: &'hp mut Self::Handle<'domain>, key: &K) -> Option<&'hp V> {
+    fn get<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
         self.get(key, handle)
     }
 
     #[inline(always)]
-    fn insert<'domain, 'hp>(
-        &self,
-        handle: &'hp mut Self::Handle<'domain>,
-        key: K,
-        value: V,
-    ) -> bool {
+    fn insert(&self, handle: &mut Self::Handle<'_>, key: K, value: V) -> bool {
         self.insert(key, value, handle)
     }
 
     #[inline(always)]
-    fn remove<'domain, 'hp>(
-        &self,
-        handle: &'hp mut Self::Handle<'domain>,
-        key: &K,
-    ) -> Option<&'hp V> {
+    fn remove<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
         self.remove(key, handle)
     }
 }

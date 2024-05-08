@@ -27,7 +27,6 @@ where
         unsafe { self.buckets.get_unchecked(index % self.buckets.len()) }
     }
 
-    // TODO(@jeehoonkang): we're converting u64 to usize, which may lose information.
     #[inline]
     fn hash(k: &K) -> usize {
         let mut s = DefaultHasher::new();
@@ -46,7 +45,7 @@ where
     }
 
     pub fn remove(&self, k: &K) -> Option<&'static V> {
-        let i = Self::hash(&k);
+        let i = Self::hash(k);
         self.get_bucket(i).remove(k)
     }
 }

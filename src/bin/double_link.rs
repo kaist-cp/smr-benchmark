@@ -2,7 +2,6 @@ extern crate clap;
 extern crate csv;
 
 extern crate crossbeam_ebr;
-extern crate crossbeam_pebr;
 extern crate smr_benchmark;
 
 use circ::Cs;
@@ -98,12 +97,7 @@ fn setup(m: ArgMatches) -> (Config, Option<Writer<File>>) {
         let output_path = Path::new(output_name);
         let dir = output_path.parent().unwrap();
         create_dir_all(dir).unwrap();
-        match OpenOptions::new()
-            .read(true)
-            .write(true)
-            .append(true)
-            .open(output_path)
-        {
+        match OpenOptions::new().read(true).append(true).open(output_path) {
             Ok(f) => csv::Writer::from_writer(f),
             Err(_) => {
                 let f = OpenOptions::new()
@@ -115,7 +109,14 @@ fn setup(m: ArgMatches) -> (Config, Option<Writer<File>>) {
                 let mut output = csv::Writer::from_writer(f);
                 // NOTE: `write_record` on `bench`
                 output
-                    .write_record(&["mm", "threads", "throughput", "peak_mem", "avg_mem"])
+                    .write_record([
+                        "mm",
+                        "threads",
+                        "throughput",
+                        "peak_mem",
+                        "avg_mem",
+                        "interval",
+                    ])
                     .unwrap();
                 output.flush().unwrap();
                 output
@@ -167,6 +168,7 @@ fn bench(config: &Config, output: Option<&mut Writer<File>>) {
                 ops_per_sec.to_string(),
                 peak_mem.to_string(),
                 avg_mem.to_string(),
+                config.interval.to_string(),
             ])
             .unwrap();
         output.flush().unwrap();

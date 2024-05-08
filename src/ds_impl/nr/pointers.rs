@@ -141,7 +141,7 @@ impl<T> From<usize> for Shared<T> {
 
 impl<T> Clone for Shared<T> {
     fn clone(&self) -> Self {
-        Self { ptr: self.ptr }
+        *self
     }
 }
 

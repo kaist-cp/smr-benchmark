@@ -145,6 +145,16 @@ pub struct SkipList<K, V> {
     head: AtomicRc<Node<K, V>, CsEBR>,
 }
 
+impl<K, V> Default for SkipList<K, V>
+where
+    K: Ord + Clone + Default,
+    V: Clone + Default,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<K, V> SkipList<K, V>
 where
     K: Ord + Clone + Default,
@@ -189,7 +199,7 @@ where
             }
         }
 
-        return None;
+        None
     }
 
     fn find(&self, key: &K, cs: &CsEBR) -> Cursor<K, V> {

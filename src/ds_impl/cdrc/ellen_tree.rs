@@ -20,7 +20,7 @@ pub enum Direction {
     R,
 }
 
-#[derive(Clone, PartialEq, Eq, Ord, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Key<K> {
     Fin(K),
     Inf1,
@@ -257,6 +257,12 @@ pub struct EFRBTree<K, V, C: Cs> {
     root: AtomicRc<Node<K, V, C>, C>,
 }
 
+impl<K, V, C: Cs> Default for EFRBTree<K, V, C> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<K, V, C: Cs> EFRBTree<K, V, C> {
     pub fn new() -> Self {
         Self {
@@ -326,18 +332,19 @@ where
                 let new_pupdate = Rc::new(op).with_tag(UpdateTag::IFLAG.bits());
                 finder.new_update.protect(&new_pupdate, cs);
 
-                match p_node.update.compare_exchange(
-                    finder.pupdate.as_ptr(),
-                    new_pupdate,
-                    Ordering::Release,
-                    Ordering::Relaxed,
-                    cs,
-                ) {
-                    Ok(_) => {
-                        self.help_insert(&finder.new_update, &mut cursor.1, cs);
-                        return true;
-                    }
-                    Err(_) => {}
+                if p_node
+                    .update
+                    .compare_exchange(
+                        finder.pupdate.as_ptr(),
+                        new_pupdate,
+                        Ordering::Release,
+                        Ordering::Relaxed,
+                        cs,
+                    )
+                    .is_ok()
+                {
+                    self.help_insert(&finder.new_update, &mut cursor.1, cs);
+                    return true;
                 }
             }
         }
@@ -377,19 +384,18 @@ where
                 let new_update = Rc::new(op).with_tag(UpdateTag::DFLAG.bits());
                 finder.pupdate.protect(&new_update, cs);
 
-                match finder.gp.as_ref().unwrap().update.compare_exchange(
+                if let Ok(gpupdate) = finder.gp.as_ref().unwrap().update.compare_exchange(
                     finder.gpupdate.as_ptr(),
                     new_update,
                     Ordering::Release,
                     Ordering::Relaxed,
                     cs,
                 ) {
-                    Ok(_) => {
-                        if self.help_delete(&finder.pupdate, &mut cursor.1, cs) {
-                            return true;
-                        }
+                    if self.help_delete(&finder.pupdate, &mut cursor.1, cs) {
+                        return true;
                     }
-                    Err(_) => {}
+                    // Drop `gpupdate` after attempting helping.
+                    drop(gpupdate);
                 }
             }
         }
@@ -443,13 +449,13 @@ where
             Ok(_) => {
                 // (prev value) = op → pupdate
                 self.help_marked(op, helper, cs);
-                return true;
+                true
             }
             Err(e) => {
                 if e.current == op.with_tag(UpdateTag::MARK.bits()).as_ptr() {
                     // (prev value) = <Mark, op>
                     self.help_marked(op, helper, cs);
-                    return true;
+                    true
                 } else {
                     let _ = gp_ref.update.compare_exchange_tag(
                         op.with_tag(UpdateTag::DFLAG.bits()),
@@ -458,7 +464,7 @@ where
                         Ordering::Relaxed,
                         cs,
                     );
-                    return false;
+                    false
                 }
             }
         }

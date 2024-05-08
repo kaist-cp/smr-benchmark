@@ -9,6 +9,12 @@ pub struct Holder<T> {
     new: Snapshot<Node<T>, CsHP>,
 }
 
+impl<T> Default for Holder<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T> Holder<T> {
     pub fn new() -> Self {
         Self {
@@ -68,6 +74,12 @@ unsafe impl<T: Sync> Send for Node<T> {}
 pub struct DoubleLink<T: Sync + Send> {
     head: CachePadded<AtomicRc<Node<T>, CsHP>>,
     tail: CachePadded<AtomicRc<Node<T>, CsHP>>,
+}
+
+impl<T: Sync + Send> Default for DoubleLink<T> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<T: Sync + Send> DoubleLink<T> {

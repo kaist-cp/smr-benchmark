@@ -32,7 +32,7 @@ impl Marks {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Ord, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 enum Key<K> {
     Fin(K),
     Inf,
@@ -91,8 +91,6 @@ where
 #[derive(Debug)]
 struct Node<K, V> {
     key: Key<K>,
-    // TODO(@jeehoonkang): how about having another type that is either (1) value, or (2) left and
-    // right.
     value: Option<V>,
     left: AtomicPtr<Node<K, V>>,
     right: AtomicPtr<Node<K, V>>,
@@ -156,7 +154,7 @@ impl Default for Handle<'static> {
 impl<'domain> Handle<'domain> {
     // bypass E0499-E0503, etc that are supposed to be fixed by polonius
     #[inline]
-    fn launder<'hp1, 'hp2>(&'hp1 mut self) -> &'hp2 mut Self {
+    fn launder<'hp2>(&mut self) -> &'hp2 mut Self {
         unsafe { core::mem::transmute(self) }
     }
 }
@@ -181,7 +179,6 @@ pub struct SeekRecord<'domain, 'hp, K, V> {
     handle: &'hp mut Handle<'domain>,
 }
 
-// TODO(@jeehoonkang): code duplication...
 impl<'domain, 'hp, K, V> SeekRecord<'domain, 'hp, K, V> {
     fn new(handle: &'hp mut Handle<'domain>) -> Self {
         Self {
@@ -217,7 +214,6 @@ impl<'domain, 'hp, K, V> SeekRecord<'domain, 'hp, K, V> {
     }
 }
 
-// COMMENT(@jeehoonkang): write down the invariant of the tree
 pub struct NMTreeMap<K, V> {
     r: Node<K, V>,
 }
@@ -279,11 +275,7 @@ where
     }
 
     // All `Shared<_>` fields are unmarked.
-    fn seek<'domain, 'hp>(
-        &self,
-        key: &K,
-        record: &mut SeekRecord<'domain, 'hp, K, V>,
-    ) -> Result<(), ()> {
+    fn seek(&self, key: &K, record: &mut SeekRecord<'_, '_, K, V>) -> Result<(), ()> {
         let s = untagged(self.r.left.load(Ordering::Relaxed));
         let s_node = unsafe { &*s };
 
@@ -352,7 +344,7 @@ where
                 curr = curr_node.right.load(Ordering::Acquire);
             }
         }
-        return Ok(());
+        Ok(())
     }
 
     /// Physically removes node.
@@ -411,11 +403,7 @@ where
         is_unlinked
     }
 
-    fn get_inner<'domain, 'hp>(
-        &self,
-        key: &K,
-        handle: &'hp mut Handle<'domain>,
-    ) -> Result<Option<&'hp V>, ()> {
+    fn get_inner<'hp>(&self, key: &K, handle: &'hp mut Handle<'_>) -> Result<Option<&'hp V>, ()> {
         let mut record = SeekRecord::new(handle);
 
         self.seek(key, &mut record)?;
@@ -428,7 +416,7 @@ where
         Ok(Some(leaf_node.value.as_ref().unwrap()))
     }
 
-    pub fn get<'domain, 'hp>(&self, key: &K, handle: &'hp mut Handle<'domain>) -> Option<&'hp V> {
+    pub fn get<'hp>(&self, key: &K, handle: &'hp mut Handle<'_>) -> Option<&'hp V> {
         loop {
             if let Ok(r) = self.get_inner(key, handle.launder()) {
                 return r;
@@ -452,7 +440,7 @@ where
         }));
 
         loop {
-            self.seek(&key, record).map_err(|_| unsafe {
+            self.seek(key, record).map_err(|_| unsafe {
                 let value = (*new_leaf).value.take().unwrap();
                 drop(Box::from_raw(new_leaf));
                 drop(Box::from_raw(new_internal));
@@ -460,7 +448,7 @@ where
             })?;
             let leaf = record.leaf;
 
-            let (new_left, new_right) = match unsafe { &*untagged(leaf) }.key.cmp(&key) {
+            let (new_left, new_right) = match unsafe { &*untagged(leaf) }.key.cmp(key) {
                 cmp::Ordering::Equal => {
                     // Newly created nodes that failed to be inserted are free'd here.
                     let value = unsafe { &mut *new_leaf }.value.take().unwrap();
@@ -498,12 +486,7 @@ where
         }
     }
 
-    pub fn insert<'domain, 'hp>(
-        &self,
-        key: K,
-        mut value: V,
-        handle: &'hp mut Handle<'domain>,
-    ) -> Result<(), (K, V)> {
+    pub fn insert(&self, key: K, mut value: V, handle: &mut Handle<'_>) -> Result<(), (K, V)> {
         loop {
             let mut record = SeekRecord::new(handle);
             match self.insert_inner(&key, value, &mut record) {
@@ -514,10 +497,10 @@ where
         }
     }
 
-    fn remove_inner<'domain, 'hp>(
+    fn remove_inner<'hp>(
         &self,
         key: &K,
-        handle: &'hp mut Handle<'domain>,
+        handle: &'hp mut Handle<'_>,
     ) -> Result<Option<&'hp V>, ()> {
         // `leaf` and `value` are the snapshot of the node to be deleted.
         // NOTE: The paper version uses one big loop for both phases.
@@ -580,11 +563,7 @@ where
         }
     }
 
-    pub fn remove<'domain, 'hp>(
-        &self,
-        key: &K,
-        handle: &'hp mut Handle<'domain>,
-    ) -> Option<&'hp V> {
+    pub fn remove<'hp>(&self, key: &K, handle: &'hp mut Handle<'_>) -> Option<&'hp V> {
         loop {
             if let Ok(r) = self.remove_inner(key, handle.launder()) {
                 return r;
@@ -609,26 +588,17 @@ where
     }
 
     #[inline(always)]
-    fn get<'domain, 'hp>(&self, handle: &'hp mut Self::Handle<'domain>, key: &K) -> Option<&'hp V> {
+    fn get<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
         self.get(key, handle)
     }
 
     #[inline(always)]
-    fn insert<'domain, 'hp>(
-        &self,
-        handle: &'hp mut Self::Handle<'domain>,
-        key: K,
-        value: V,
-    ) -> bool {
+    fn insert(&self, handle: &mut Self::Handle<'_>, key: K, value: V) -> bool {
         self.insert(key, value, handle).is_ok()
     }
 
     #[inline(always)]
-    fn remove<'domain, 'hp>(
-        &self,
-        handle: &'hp mut Self::Handle<'domain>,
-        key: &K,
-    ) -> Option<&'hp V> {
+    fn remove<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
         self.remove(key, handle)
     }
 }

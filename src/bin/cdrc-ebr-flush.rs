@@ -76,7 +76,7 @@ impl PrefillStrategy {
                                 + if t < config.prefill % threads { 1 } else { 0 };
                             for _ in 0..count {
                                 let key = config.key_dist.sample(rng);
-                                let value = key.clone();
+                                let value = key;
                                 map.insert(key, value, output, cs);
                             }
                         });
@@ -94,7 +94,7 @@ impl PrefillStrategy {
                 }
                 keys.sort_by(|a, b| b.cmp(a));
                 for key in keys.drain(..) {
-                    let value = key.clone();
+                    let value = key;
                     map.insert(key, value, output, cs);
                 }
             }
@@ -180,7 +180,7 @@ fn bench_map<M: ConcurrentMap<usize, usize, CsEBR> + Send + Sync>(
                             map.get(&key, output, &cs);
                         }
                         Op::Insert => {
-                            let value = key.clone();
+                            let value = key;
                             map.insert(key, value, output, &cs);
                         }
                         Op::Remove => {

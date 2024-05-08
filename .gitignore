@@ -34,6 +34,12 @@ perf.data*
 jeprof.*
 .idea/
 .mypy_cache/
-*.csv
-*.pdf
+# *.csv
+# *.pdf
 tags
+
+bench-scripts/**/results
+circ-docker.tar.gz
+archive
+
+.python-version

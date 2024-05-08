@@ -160,7 +160,8 @@ where
 
         let l_size = Node::node_size(left);
         let r_size = Node::node_size(right);
-        let res = if r_size > 0
+
+        if r_size > 0
             && ((l_size > 0 && r_size > WEIGHT * l_size) || (l_size == 0 && r_size > WEIGHT))
         {
             self.mk_balanced_left(left, right, key, value)
@@ -170,8 +171,7 @@ where
             self.mk_balanced_right(left, right, key, value)
         } else {
             self.mk_node(left, right, key, value)
-        };
-        res
+        }
     }
 
     #[inline]
@@ -199,7 +199,7 @@ where
         }
 
         // double left rotation
-        return self.double_left(left, right, right_left, right_right, key, value);
+        self.double_left(left, right, right_left, right_right, key, value)
     }
 
     #[inline]
@@ -214,13 +214,13 @@ where
     ) -> Shared<Node<K, V>> {
         let right_ref = unsafe { right.deref() };
         let new_left = self.mk_node(left, right_left, key, value);
-        let res = self.mk_node(
+
+        self.mk_node(
             new_left,
             right_right,
             right_ref.key.clone(),
             right_ref.value.clone(),
-        );
-        return res;
+        )
     }
 
     #[inline]
@@ -252,13 +252,13 @@ where
             right_ref.key.clone(),
             right_ref.value.clone(),
         );
-        let res = self.mk_node(
+
+        self.mk_node(
             new_left,
             new_right,
             right_left_ref.key.clone(),
             right_left_ref.value.clone(),
-        );
-        res
+        )
     }
 
     #[inline]
@@ -285,7 +285,7 @@ where
             return self.single_right(left, right, left_right, left_left, key, value);
         }
         // double right rotation
-        return self.double_right(left, right, left_right, left_left, key, value);
+        self.double_right(left, right, left_right, left_left, key, value)
     }
 
     #[inline]
@@ -300,13 +300,13 @@ where
     ) -> Shared<Node<K, V>> {
         let left_ref = unsafe { left.deref() };
         let new_right = self.mk_node(left_right, right, key, value);
-        let res = self.mk_node(
+
+        self.mk_node(
             left_left,
             new_right,
             left_ref.key.clone(),
             left_ref.value.clone(),
-        );
-        return res;
+        )
     }
 
     #[inline]
@@ -338,13 +338,13 @@ where
             left_ref.value.clone(),
         );
         let new_right = self.mk_node(left_right_right, right, key, value);
-        let res = self.mk_node(
+
+        self.mk_node(
             new_left,
             new_right,
             left_right_ref.key.clone(),
             left_right_ref.value.clone(),
-        );
-        res
+        )
     }
 
     #[inline]
@@ -460,7 +460,7 @@ where
             node_ref.key.clone(),
             node_ref.value.clone(),
         );
-        return (right, succ);
+        (right, succ)
     }
 
     fn pull_rightmost(
@@ -490,7 +490,7 @@ where
             node_ref.key.clone(),
             node_ref.value.clone(),
         );
-        return (left, succ);
+        (left, succ)
     }
 
     pub fn check_root(&self) -> bool {
@@ -500,6 +500,16 @@ where
 
 pub struct BonsaiTreeMap<K, V> {
     root: Atomic<Node<K, V>>,
+}
+
+impl<K, V> Default for BonsaiTreeMap<K, V>
+where
+    K: Ord + Clone + 'static,
+    V: Clone + 'static,
+{
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<K, V> BonsaiTreeMap<K, V>

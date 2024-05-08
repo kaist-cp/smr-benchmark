@@ -131,6 +131,17 @@ pub struct SkipList<K, V, C: Cs> {
     head: AtomicRc<Node<K, V, C>, C>,
 }
 
+impl<K, V, C> Default for SkipList<K, V, C>
+where
+    K: Ord + Clone + Default,
+    V: Clone + Default,
+    C: Cs,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<K, V, C> SkipList<K, V, C>
 where
     K: Ord + Clone + Default,
@@ -179,7 +190,7 @@ where
             }
         }
 
-        return false;
+        false
     }
 
     fn find(&self, key: &K, cursor: &mut Cursor<K, V, C>, cs: &C) -> bool {
@@ -349,41 +360,39 @@ where
     }
 
     pub fn remove(&self, key: &K, cursor: &mut Cursor<K, V, C>, cs: &C) -> bool {
-        loop {
-            let found = self.find(key, cursor, cs);
-            if !found {
-                return false;
-            }
-            let height = unsafe { cursor.found().deref() }.height;
-            cursor.found_value = Some(unsafe { cursor.found().deref() }.value.clone());
+        let found = self.find(key, cursor, cs);
+        if !found {
+            return false;
+        }
+        let height = unsafe { cursor.found().deref() }.height;
+        cursor.found_value = Some(unsafe { cursor.found().deref() }.value.clone());
 
-            // Try removing the node by marking its tower.
-            if unsafe { cursor.found().deref() }.mark_tower(cs) {
-                for level in (0..height).rev() {
-                    cursor
-                        .next
-                        .load(&unsafe { cursor.found().deref() }.next[level], cs);
-                    if (cursor.next.tag() & 2) != 0 {
-                        continue;
-                    }
-                    // Try linking the predecessor and successor at this level.
-                    if unsafe { cursor.pred(level).deref() }.next[level]
-                        .compare_exchange(
-                            cursor.found().as_ptr(),
-                            cursor.next.with_tag(0),
-                            Ordering::SeqCst,
-                            Ordering::SeqCst,
-                            cs,
-                        )
-                        .is_err()
-                    {
-                        self.find(key, cursor, cs);
-                        break;
-                    }
+        // Try removing the node by marking its tower.
+        if unsafe { cursor.found().deref() }.mark_tower(cs) {
+            for level in (0..height).rev() {
+                cursor
+                    .next
+                    .load(&unsafe { cursor.found().deref() }.next[level], cs);
+                if (cursor.next.tag() & 2) != 0 {
+                    continue;
+                }
+                // Try linking the predecessor and successor at this level.
+                if unsafe { cursor.pred(level).deref() }.next[level]
+                    .compare_exchange(
+                        cursor.found().as_ptr(),
+                        cursor.next.with_tag(0),
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                        cs,
+                    )
+                    .is_err()
+                {
+                    self.find(key, cursor, cs);
+                    break;
                 }
             }
-            return true;
         }
+        true
     }
 }
 

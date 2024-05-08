@@ -6,7 +6,7 @@ import os
 RESULTS_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "results")
 BIN_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "target", "release")
 
-mms_queue = ['ebr']
+mms_queue = ['ebr', 'cdrc-ebr', 'circ-ebr']
 runs = 5
 
 if os.path.exists('.git'):

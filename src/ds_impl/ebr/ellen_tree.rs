@@ -14,7 +14,7 @@ bitflags! {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Ord, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Key<K> {
     Fin(K),
     Inf1,
@@ -220,6 +220,16 @@ impl<K, V> Drop for EFRBTree<K, V> {
     }
 }
 
+impl<K, V> Default for EFRBTree<K, V>
+where
+    K: Ord + Clone,
+    V: Clone,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<K, V> EFRBTree<K, V>
 where
     K: Ord + Clone,
@@ -406,13 +416,13 @@ where
                     }
                     // (prev value) = op → pupdate
                     self.help_marked(new_op, guard);
-                    return true;
+                    true
                 }
                 Err(e) => {
                     if e.current == new_op {
                         // (prev value) = <Mark, op>
                         self.help_marked(new_op, guard);
-                        return true;
+                        true
                     } else {
                         self.help(e.current, guard);
                         let _ = unsafe { gp.load(Ordering::Acquire, guard).as_ref().unwrap() }
@@ -424,7 +434,7 @@ where
                                 Ordering::Relaxed,
                                 guard,
                             );
-                        return false;
+                        false
                     }
                 }
             }

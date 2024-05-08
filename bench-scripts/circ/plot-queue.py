@@ -1,9 +1,9 @@
 # type: ignore
 import pandas as pd
-from plotnine import *
 import warnings
-import os
+import os, argparse
 import matplotlib
+import matplotlib.pyplot as plt
 
 RESULTS_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "results")
 
@@ -33,116 +33,140 @@ CIRC_EBR = "circ-ebr"
 
 SMR_ONLYs = [NR, EBR, CDRC_EBR, CDRC_EBR_FLUSH, CIRC_EBR]
 
+t_step, t_end = 0, 0
 cpu_count = os.cpu_count()
-if not cpu_count or cpu_count <= 24:
-    ts = [1] + list(range(4, 33, 4))
+if not cpu_count or cpu_count <= 12:
+    t_step, t_end = 2, 16
+elif cpu_count <= 24:
+    t_step, t_end = 4, 32
 elif cpu_count <= 64:
-    ts = [1] + list(range(8, 129, 8))
+    t_step, t_end = 8, 128
 else:
-    ts = [1] + list(range(10, 151, 10))
+    t_step, t_end = 8, 192
 
-# https://matplotlib.org/stable/api/markers_api.html
+parser = argparse.ArgumentParser()
+parser.add_argument("-e", "--end", dest="end", type=int, default=t_end,
+                    help="the maximum number in a sequence of the number of threads")
+parser.add_argument("-t", "--step", dest="step", type=int, default=t_step,
+                    help="the interval between adjacent pair in a sequence of the number of threads")
+args = parser.parse_args()
+t_end = args.end
+t_step = args.step
+
+ts = [1] + list(range(t_step, t_end + 1, t_step))
+(width, height) = (10, 7) if len(ts) < 18 else (14, 10)
+(label_size, xtick_size, ytick_size, marker_size) = (22, 22, 18, 18)
+
+color_triple = ["#E53629", "#2CD23E", "#4149C3"]
+face_alpha = "DF"
+
 line_shapes = {
-    NR: '.',
-    EBR: 'o',
-    CDRC_EBR: "1",
-    CDRC_EBR_FLUSH: "|",
-    CIRC_EBR: "X",
+    NR: {
+        "marker": ".",
+        "color": "k",
+        "linestyle": "-",
+    },
+    EBR: {
+        "marker": "o",
+        "color": color_triple[0],
+        "markeredgewidth": 0.75,
+        "markerfacecolor": color_triple[0] + face_alpha,
+        "markeredgecolor": "k",
+        "linestyle": "-",
+    },
+    CDRC_EBR: {
+        "marker": "o",
+        "color": color_triple[1],
+        "markeredgewidth": 0.75,
+        "markerfacecolor": color_triple[1] + face_alpha,
+        "markeredgecolor": "k",
+        "linestyle": "dotted",
+    },
+    CIRC_EBR: {
+        "marker": "o",
+        "color": color_triple[2],
+        "markeredgewidth": 0.75,
+        "markerfacecolor": color_triple[2] + face_alpha,
+        "markeredgecolor": "k",
+        "linestyle": "dashed",
+    },
+    CDRC_EBR_FLUSH: {
+        "marker": "s",
+        "color": "#828282",
+        "markeredgewidth": 0.75,
+        "markerfacecolor": "#828282" + face_alpha,
+        "markeredgecolor": "k",
+        "linestyle": "dashed",
+    }
 }
 
-# https://matplotlib.org/stable/gallery/color/named_colors.html
-line_colors = {
-    NR: 'k',
-    EBR: 'c',
-    CDRC_EBR: "green",
-    CDRC_EBR_FLUSH: "gray",
-    CIRC_EBR: "blue",
+mm_order = {
+    NR: 1,
+    EBR: 4,
+    CDRC_EBR: 2,
+    CIRC_EBR: 3,
+    CDRC_EBR_FLUSH: 5
 }
 
-line_types = {
-    NR: '-',
-    EBR: 'dotted',
-    CDRC_EBR: (5, (10, 3)),
-    CDRC_EBR_FLUSH: (5, (10, 3)),
-    CIRC_EBR: (0, (3, 1)),
-}
+def draw(name, data, y_value, y_label, y_max=None, y_min=None, y_log=False):
+    plt.figure(figsize=(width, height))
 
-# line_name: SMR, SMR_I
-def draw(name, data, line_name, y_value, width, height, y_max=None, y_label=None, y_log=False, legend=False):
-    p = ggplot(
-            data,
-            aes(x=THREADS, y=y_value,
-                color=line_name, shape=line_name, linetype=line_name)) + \
-        geom_line() + xlab('Threads') + geom_point(size=7) + \
-        scale_shape_manual(line_shapes, na_value='x') + \
-        scale_color_manual(line_colors, na_value='y') + \
-        scale_linetype_manual(line_types, na_value='-.') + \
-        theme_bw() + scale_x_continuous(breaks=ts) + \
-        theme(plot_title = element_text(size=36))
+    for mm in sorted(list(set(data.mm)), key=lambda mm: mm_order[mm]):
+        d = data[data.mm == mm].sort_values(by=[THREADS], axis=0)
+        plt.plot(d[THREADS], d[y_value],
+                 linewidth=3, markersize=marker_size, **line_shapes[mm], zorder=30)
 
-    p += theme(
-            axis_title_x=element_text(size=15),
-            axis_text_x=element_text(size=14),
-            axis_text_y=element_text(size=14))
-    if y_label:
-        p += ylab(y_label)
-        p += theme(axis_title_y=element_text(size=14))
-    else:
-        p += theme(axis_title_y=element_blank())
+    plt.xlabel("Threads", fontsize=label_size)
+    plt.ylabel(y_label, fontsize=label_size)
+    plt.yticks(fontsize=ytick_size)
+    plt.xticks(ts, fontsize=xtick_size, rotation=90)
+    plt.grid(alpha=0.5)
 
-    if y_max:
-        p += coord_cartesian(ylim=(0, y_max))
-    if legend:
-        # HACK: `\n` at the end of legend title
-        p += theme(legend_title=element_text(size=18, linespacing=1.5))
-        p += theme(legend_key_size=15)
-        p += theme(legend_text=element_text(size=18))
-        p += theme(legend_entry_spacing=15)
-    else:
-        p += theme(legend_position='none')
-    
     if data.threads.max() >= cpu_count:
-        p += annotate(geom="rect", xmin=cpu_count, xmax=float("inf"), ymin=(0 if y_log else -float("inf")), ymax=float("inf"), fill = "#FF00000A")
+        left, right = plt.xlim()
+        plt.axvspan(cpu_count, right, facecolor="#FF00000A")
+        plt.xlim(left, right)
 
     if y_log:
-        p += scale_y_continuous(trans='log10')
+        plt.yscale("log")
+    else:
+        y_max = min(y_max, data[y_value].max()) if y_max else data[y_value].max()
+        y_min = max(y_min, data[y_value].min()) if y_min else data[y_value].min()
+        y_margin = (y_max - y_min) * 0.05
+        plt.ylim(y_min-y_margin, y_max+y_margin)
 
-    p.save(name, width=width, height=height, units="in")
+    plt.savefig(name, bbox_inches='tight')
 
-def draw_throughput(data, max_threads, width, height, legend):
-    data = data[data.threads <= max_threads]
+
+def draw_throughput(data):
     y_label = 'Throughput (M op/s)'
-    name = f'{RESULTS_PATH}/queue/double-link_xmax{max_threads}_throughput.pdf'
-    draw(name, data, SMR_ONLY, THROUGHPUT, width, height, y_label=y_label, legend=legend)
+    name = f'{RESULTS_PATH}/queue/double-link_throughput.pdf'
+    draw(name, data, THROUGHPUT, y_label)
     return name
 
-def draw_throughput_ratio(data, max_threads, width, height, legend):
-    data = data[data.threads <= max_threads]
+def draw_throughput_ratio(data):
     y_label = 'Throughput ratio to RCU'
-    name = f'{RESULTS_PATH}/queue/double-link_xmax{max_threads}_throughput_ratio.pdf'
-    draw(name, data, SMR_ONLY, THROUGHPUT_RATIO, width, height, y_label=y_label, legend=legend)
+    name = f'{RESULTS_PATH}/queue/double-link_throughput_ratio.pdf'
+    draw(name, data, THROUGHPUT_RATIO, y_label)
     return name
 
-def draw_peak_mem(data, max_threads, width, height, legend):
-    data = data[data.threads <= max_threads]
+def draw_peak_mem(data):
     y_label = 'Peak memory usage (GiB)'
-    name = f'{RESULTS_PATH}/queue/double-link_xmax{max_threads}_peak_mem.pdf'
-    y_max = data[data.mm == CDRC_EBR].peak_mem.max() * 1.05
-    draw(name, data, SMR_ONLY, PEAK_MEM, width, height, y_max=y_max, y_label=y_label, legend=legend)
+    name = f'{RESULTS_PATH}/queue/double-link_peak_mem.pdf'
+    y_max = data[data.mm == CDRC_EBR].peak_mem.max()
+    draw(name, data, PEAK_MEM, y_label, y_max=y_max)
     return name
 
-def draw_peak_mem_ratio(data, max_threads, width, height, legend):
-    data = data[data.threads <= max_threads]
+def draw_peak_mem_ratio(data):
     y_label = 'Peak memory usage ratio to RCU'
-    name = f'{RESULTS_PATH}/queue/double-link_xmax{max_threads}_peak_mem_ratio.pdf'
-    draw(name, data, SMR_ONLY, PEAK_MEM_RATIO, width, height, y_label=y_label, legend=legend)
+    name = f'{RESULTS_PATH}/queue/double-link_peak_mem_ratio.pdf'
+    draw(name, data, PEAK_MEM_RATIO, y_label)
     return name
 
-def draw_peak_mem_ratio_log(data, max_threads, width, height, legend):
-    data = data[data.threads <= max_threads]
+def draw_peak_mem_ratio_log(data):
     y_label = 'Peak memory usage ratio to RCU'
-    name = f'{RESULTS_PATH}/queue/double-link_xmax{max_threads}_peak_mem_ratio_log.pdf'
-    draw(name, data, SMR_ONLY, PEAK_MEM_RATIO, width, height, y_label=y_label, y_log=True, legend=legend)
+    name = f'{RESULTS_PATH}/queue/double-link_peak_mem_ratio_log.pdf'
+    draw(name, data, PEAK_MEM_RATIO, y_label, y_log=True)
     return name
 
 if __name__ == '__main__':
@@ -156,6 +180,7 @@ if __name__ == '__main__':
     os.makedirs(f'{RESULTS_PATH}/queue', exist_ok=True)
 
     data = pd.read_csv(f'{RESULTS_PATH}/{DOUBLELINK}.csv')
+    data = data.drop(['bag_size'], axis=1, errors='ignore')
     data = data[data.mm.isin(SMR_ONLYs)]
     data = data[(1 == data.threads) | (8 <= data.threads)]
     data.throughput = data.throughput.map(lambda x: x / 1_000_000)
@@ -175,8 +200,8 @@ if __name__ == '__main__':
 
     avg[SMR_ONLY] = pd.Categorical(avg.mm.map(str), SMR_ONLYs)
     avg['ds'] = 'double-link'
-    draw_throughput(avg, 128, 10, 7, False)
-    draw_throughput_ratio(avg, 128, 10, 7, False)
-    draw_peak_mem(avg, 128, 10, 7, False)
-    draw_peak_mem_ratio(avg, 128, 10, 7, False)
-    draw_peak_mem_ratio_log(avg, 128, 10, 7, False)
+    draw_throughput(avg)
+    draw_throughput_ratio(avg)
+    draw_peak_mem(avg)
+    draw_peak_mem_ratio(avg)
+    draw_peak_mem_ratio_log(avg)

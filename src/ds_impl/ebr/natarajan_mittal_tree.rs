@@ -29,7 +29,7 @@ impl Marks {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Ord, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 enum Key<K> {
     Fin(K),
     Inf,
@@ -88,8 +88,6 @@ where
 #[derive(Debug)]
 struct Node<K, V> {
     key: Key<K>,
-    // TODO(@jeehoonkang): how about having another type that is either (1) value, or (2) left and
-    // right.
     value: Option<V>,
     left: Atomic<Node<K, V>>,
     right: Atomic<Node<K, V>>,
@@ -144,7 +142,6 @@ struct SeekRecord<'g, K, V> {
     leaf_dir: Direction,
 }
 
-// TODO(@jeehoonkang): code duplication...
 impl<'g, K, V> SeekRecord<'g, K, V> {
     fn successor_addr(&'g self) -> &'g Atomic<Node<K, V>> {
         match self.successor_dir {
@@ -168,7 +165,6 @@ impl<'g, K, V> SeekRecord<'g, K, V> {
     }
 }
 
-// COMMENT(@jeehoonkang): write down the invariant of the tree
 pub struct NMTreeMap<K, V> {
     r: Atomic<Node<K, V>>,
 }
@@ -345,7 +341,7 @@ where
                 target_sibling.with_tag(Marks::new(flag, false).bits()),
                 Ordering::AcqRel,
                 Ordering::Acquire,
-                &guard,
+                guard,
             )
             .is_ok();
 
@@ -424,7 +420,7 @@ where
                 new_internal,
                 Ordering::AcqRel,
                 Ordering::Acquire,
-                &guard,
+                guard,
             ) {
                 Ok(_) => return Ok(()),
                 Err(e) => {
@@ -462,7 +458,7 @@ where
                 record.leaf.with_tag(Marks::new(true, false).bits()),
                 Ordering::AcqRel,
                 Ordering::Acquire,
-                &guard,
+                guard,
             ) {
                 Ok(_) => {
                     // Finalize the node to be removed

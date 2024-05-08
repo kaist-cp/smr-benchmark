@@ -77,6 +77,16 @@ pub struct SkipList<K, V> {
     head: Tower<K, V>,
 }
 
+impl<K, V> Default for SkipList<K, V>
+where
+    K: Ord + Clone,
+    V: Clone,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<K, V> SkipList<K, V>
 where
     K: Ord + Clone,
@@ -275,35 +285,33 @@ where
     }
 
     pub fn remove<'g>(&'g self, key: &K) -> Option<&'g V> {
-        loop {
-            let cursor = self.find(key);
-            let node = cursor.found?;
+        let cursor = self.find(key);
+        let node = cursor.found?;
 
-            // Try removing the node by marking its tower.
-            if node.mark_tower() {
-                for level in (0..node.height).rev() {
-                    let succ = node.next[level].load(Ordering::SeqCst);
-                    if (succ.tag() & 2) != 0 {
-                        continue;
-                    }
+        // Try removing the node by marking its tower.
+        if node.mark_tower() {
+            for level in (0..node.height).rev() {
+                let succ = node.next[level].load(Ordering::SeqCst);
+                if (succ.tag() & 2) != 0 {
+                    continue;
+                }
 
-                    // Try linking the predecessor and successor at this level.
-                    if cursor.preds[level][level]
-                        .compare_exchange(
-                            Shared::from(node as *const _ as usize),
-                            succ.with_tag(0),
-                            Ordering::SeqCst,
-                            Ordering::SeqCst,
-                        )
-                        .is_err()
-                    {
-                        self.find(key);
-                        break;
-                    }
+                // Try linking the predecessor and successor at this level.
+                if cursor.preds[level][level]
+                    .compare_exchange(
+                        Shared::from(node as *const _ as usize),
+                        succ.with_tag(0),
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    )
+                    .is_err()
+                {
+                    self.find(key);
+                    break;
                 }
             }
-            return Some(&node.value);
         }
+        Some(&node.value)
     }
 }
 

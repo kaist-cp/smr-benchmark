@@ -20,7 +20,7 @@ pub enum Direction {
     R,
 }
 
-#[derive(Clone, PartialEq, Eq, Ord, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Key<K> {
     Fin(K),
     Inf1,
@@ -311,6 +311,12 @@ pub struct EFRBTree<K, V> {
     root: AtomicRc<Node<K, V>, CsHP>,
 }
 
+impl<K, V> Default for EFRBTree<K, V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<K, V> EFRBTree<K, V> {
     pub fn new() -> Self {
         Self {
@@ -531,13 +537,13 @@ where
             Ok(_) => {
                 // (prev value) = op → pupdate
                 self.help_marked(op, helper, cs);
-                return true;
+                true
             }
             Err(e) => {
                 if e.current == op.as_ptr().with_tag(UpdateTag::MARK.bits()) {
                     // (prev value) = <Mark, op>
                     self.help_marked(op, helper, cs);
-                    return true;
+                    true
                 } else {
                     let _ = gp_ref.update.compare_exchange_tag(
                         op.with_tag(UpdateTag::DFLAG.bits()),
@@ -547,7 +553,7 @@ where
                         cs,
                     );
                     self.help(aux, op, helper, cs);
-                    return false;
+                    false
                 }
             }
         }

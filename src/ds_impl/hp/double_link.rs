@@ -54,6 +54,12 @@ impl Default for Handle<'static> {
     }
 }
 
+impl<T: Sync + Send> Default for DoubleLink<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: Sync + Send> DoubleLink<T> {
     #[inline]
     pub fn new() -> Self {
@@ -137,10 +143,7 @@ impl<T: Sync + Send> Drop for DoubleLink<T> {
     }
 }
 
-fn protect_link<'domain, T>(
-    link: &AtomicPtr<Node<T>>,
-    hazptr: &mut HazardPointer<'domain>,
-) -> *mut Node<T> {
+fn protect_link<T>(link: &AtomicPtr<Node<T>>, hazptr: &mut HazardPointer<'_>) -> *mut Node<T> {
     let mut ptr = link.load(Ordering::Relaxed);
     loop {
         hazptr.protect_raw(ptr);

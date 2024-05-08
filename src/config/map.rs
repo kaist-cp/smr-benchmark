@@ -135,7 +135,7 @@ impl fmt::Display for Perf {
 }
 
 fn readable_bytes(num: usize) -> String {
-    const UNITS: &'static [&'static str] = &["B", "KiB", "MiB", "GiB"];
+    const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
     for (i, unit) in UNITS.iter().enumerate() {
         if num / 2usize.pow(i as u32 * 10) < 1000 {
             return format!("{:.3} {}", num as f64 / 2f64.powf(i as f64 * 10.0), unit);
@@ -303,12 +303,7 @@ pub fn setup(mm: String) -> (Config, BenchWriter) {
         let output_path = Path::new(output_name);
         let dir = output_path.parent().unwrap();
         create_dir_all(dir).unwrap();
-        match OpenOptions::new()
-            .read(true)
-            .write(true)
-            .append(true)
-            .open(output_path)
-        {
+        match OpenOptions::new().read(true).append(true).open(output_path) {
             Ok(f) => csv::Writer::from_writer(f),
             Err(_) => {
                 let f = OpenOptions::new()
@@ -320,7 +315,7 @@ pub fn setup(mm: String) -> (Config, BenchWriter) {
                 let mut output = csv::Writer::from_writer(f);
                 // NOTE: `write_record` on `bench`
                 output
-                    .write_record(&[
+                    .write_record([
                         // "timestamp",
                         "ds",
                         "mm",

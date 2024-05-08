@@ -123,6 +123,16 @@ impl<K, V> Drop for SkipList<K, V> {
     }
 }
 
+impl<K, V> Default for SkipList<K, V>
+where
+    K: Ord + Clone + Default,
+    V: Clone + Default,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<K, V> SkipList<K, V>
 where
     K: Ord + Clone + Default,

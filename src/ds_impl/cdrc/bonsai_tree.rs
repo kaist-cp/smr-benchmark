@@ -156,14 +156,14 @@ where
 
         let left_size = Node::node_size(&left);
         let right_size = Node::node_size(&right);
-        let new_node = Rc::new(Node {
+
+        Rc::new(Node {
             key,
             value,
             size: left_size + right_size + 1,
             left: AtomicRc::from(left.into_rc()),
             right: AtomicRc::from(right.into_rc()),
-        });
-        new_node
+        })
     }
 
     /// Make a new balanced tree from cur (the root of a subtree) and newly constructed left and right subtree
@@ -192,7 +192,8 @@ where
 
         let l_size = Node::node_size(&left);
         let r_size = Node::node_size(&right);
-        let res = if r_size > 0
+
+        if r_size > 0
             && ((l_size > 0 && r_size > WEIGHT * l_size) || (l_size == 0 && r_size > WEIGHT))
         {
             self.mk_balanced_left(left, right, key, value, cs)
@@ -202,8 +203,7 @@ where
             self.mk_balanced_right(left, right, key, value, cs)
         } else {
             self.mk_node(left, right, key, value, cs)
-        };
-        res
+        }
     }
 
     #[inline]
@@ -235,7 +235,7 @@ where
         }
 
         // double left rotation
-        return self.double_left(left, right, right_left, right_right, key, value, cs);
+        self.double_left(left, right, right_left, right_right, key, value, cs)
     }
 
     #[inline]
@@ -257,14 +257,14 @@ where
     {
         let right_ref = unsafe { right.deref() };
         let new_left = self.mk_node(left, right_left, key, value, cs);
-        let res = self.mk_node(
+
+        self.mk_node(
             new_left,
             right_right,
             right_ref.key.clone(),
             right_ref.value.clone(),
             cs,
-        );
-        return res;
+        )
     }
 
     #[inline]
@@ -303,14 +303,14 @@ where
             right_ref.value.clone(),
             cs,
         );
-        let res = self.mk_node(
+
+        self.mk_node(
             new_left,
             new_right,
             right_left_ref.key.clone(),
             right_left_ref.value.clone(),
             cs,
-        );
-        res
+        )
     }
 
     #[inline]
@@ -341,7 +341,7 @@ where
             return self.single_right(left, right, left_right, left_left, key, value, cs);
         }
         // double right rotation
-        return self.double_right(left, right, left_right, left_left, key, value, cs);
+        self.double_right(left, right, left_right, left_left, key, value, cs)
     }
 
     #[inline]
@@ -363,14 +363,14 @@ where
     {
         let left_ref = unsafe { left.deref() };
         let new_right = self.mk_node(left_right, right, key, value, cs);
-        let res = self.mk_node(
+
+        self.mk_node(
             left_left,
             new_right,
             left_ref.key.clone(),
             left_ref.value.clone(),
             cs,
-        );
-        return res;
+        )
     }
 
     #[inline]
@@ -409,14 +409,14 @@ where
             cs,
         );
         let new_right = self.mk_node(left_right_right, right, key, value, cs);
-        let res = self.mk_node(
+
+        self.mk_node(
             new_left,
             new_right,
             left_right_ref.key.clone(),
             left_right_ref.value.clone(),
             cs,
-        );
-        res
+        )
     }
 
     #[inline]
@@ -527,7 +527,7 @@ where
             node_ref.value.clone(),
             cs,
         );
-        return (right.into_rc(), succ);
+        (right.into_rc(), succ)
     }
 
     fn pull_rightmost<P>(&mut self, node: P, cs: &C) -> (Rc<Node<K, V, C>, C>, Rc<Node<K, V, C>, C>)
@@ -557,7 +557,7 @@ where
             node_ref.value.clone(),
             cs,
         );
-        return (left.into_rc(), succ);
+        (left.into_rc(), succ)
     }
 
     pub fn check_root(&self) -> bool {
@@ -567,6 +567,17 @@ where
 
 pub struct BonsaiTreeMap<K, V, C: Cs> {
     root: AtomicRc<Node<K, V, C>, C>,
+}
+
+impl<K, V, C> Default for BonsaiTreeMap<K, V, C>
+where
+    K: Ord + Clone,
+    V: Clone,
+    C: Cs,
+{
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<K, V, C> BonsaiTreeMap<K, V, C>

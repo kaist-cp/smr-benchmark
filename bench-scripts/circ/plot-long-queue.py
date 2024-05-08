@@ -1,9 +1,9 @@
 # type: ignore
 import pandas as pd
-from plotnine import *
 import warnings
 import os
 import matplotlib
+import matplotlib.pyplot as plt
 
 RESULTS_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "results")
 long_running_is = list(range(10, 61, 10))
@@ -30,58 +30,57 @@ CIRC_HP = "circ-hp"
 
 SMR_ONLYs = [EBR, CDRC_EBR, CIRC_EBR]
 
-# https://matplotlib.org/stable/api/markers_api.html
+color_triple = ["#E53629", "#2CD23E", "#4149C3"]
+face_alpha = "DF"
+
 line_shapes = {
-    EBR: 'o',
-    CDRC_EBR: "1",
-    CIRC_EBR: "X",
+    EBR: {
+        "marker": "o",
+        "color": color_triple[0],
+        "markeredgewidth": 0.75,
+        "markerfacecolor": color_triple[0] + face_alpha,
+        "markeredgecolor": "k",
+        "linestyle": "-",
+    },
+    CDRC_EBR: {
+        "marker": "o",
+        "color": color_triple[1],
+        "markeredgewidth": 0.75,
+        "markerfacecolor": color_triple[1] + face_alpha,
+        "markeredgecolor": "k",
+        "linestyle": "dotted",
+    },
+    CIRC_EBR: {
+        "marker": "o",
+        "color": color_triple[2],
+        "markeredgewidth": 0.75,
+        "markerfacecolor": color_triple[2] + face_alpha,
+        "markeredgecolor": "k",
+        "linestyle": "dashed",
+    },
 }
 
-# https://matplotlib.org/stable/gallery/color/named_colors.html
-line_colors = {
-    EBR: 'c',
-    CDRC_EBR: "green",
-    CIRC_EBR: "blue",
+mm_order = {
+    EBR: 1,
+    CDRC_EBR: 2,
+    CIRC_EBR: 4,
 }
 
-line_types = {
-    EBR: 'dotted',
-    CDRC_EBR: (5, (10, 3)),
-    CIRC_EBR: (0, (3, 1)),
-}
+def draw(name, data, y_value, y_label):
+    plt.figure(figsize=(5, 4))
 
+    for mm in sorted(list(set(data.mm)), key=lambda mm: mm_order[mm]):
+        d = data[data.mm == mm].sort_values(by=[INTERVAL], axis=0)
+        plt.plot(d[INTERVAL], d[y_value],
+                 linewidth=3, markersize=15, **line_shapes[mm], zorder=30)
 
-def draw(title, name, data, line_name, y_value, y_label):
-    p = ggplot(
-            data,
-            aes(x=INTERVAL, y=y_value,
-                color=line_name, shape=line_name, linetype=line_name)) + \
-        geom_line() + xlab('Time interval to run (seconds)') + geom_point(size=7) + \
-        scale_shape_manual(line_shapes, na_value='x') + \
-        scale_color_manual(line_colors, na_value='y') + \
-        scale_linetype_manual(line_types, na_value='-.') + \
-        theme_bw() + scale_x_continuous(breaks=long_running_is) + \
-        labs(title = title) + theme(plot_title = element_text(size=36))
-
-    p += theme(
-            axis_title_x=element_text(size=15),
-            axis_text_x=element_text(size=14),
-            axis_text_y=element_text(size=14))
+    plt.xlabel("Time interval to run (seconds)", fontsize=13)
     if y_label:
-        p += ylab(y_label)
-        p += theme(axis_title_y=element_text(size=14))
-    else:
-        p += theme(axis_title_y=element_blank())
-
-    p += theme(legend_position='none')
-    p.save(name, width=5, height=4, units="in")
-
-def draw_peak_mem(data, threads):
-    data = data[data.threads == threads]
-    y_label = 'Avg memory usage (GiB)'
-    name = f'{RESULTS_PATH}/long-running/long-running-queue_avg_mem.pdf'
-    draw(None, name, data, SMR_ONLY, PEAK_MEM, y_label)
-    return name
+        plt.ylabel(y_label, fontsize=13)
+    plt.yticks(fontsize=12)
+    plt.xticks(fontsize=12)
+    plt.grid(alpha=0.5)
+    plt.savefig(name, bbox_inches='tight')
 
 
 if __name__ == '__main__':
@@ -106,4 +105,4 @@ if __name__ == '__main__':
 
     y_label = 'Avg memory usage (GiB)'
     name = f'{RESULTS_PATH}/queue-long-running/long-running-queue_avg_mem.pdf'
-    draw("", name, avg, SMR_ONLY, AVG_MEM, y_label)
+    draw(name, avg, AVG_MEM, y_label)

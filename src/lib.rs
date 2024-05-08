@@ -5,9 +5,7 @@
 // Enabled unsable feature to use
 // unstable functions of AtomicPtr (AtomicPtr::fetch_or)
 #![feature(strict_provenance_atomic_ptr, strict_provenance)]
-#![feature(core_intrinsics)]
 #![feature(cfg_sanitize)]
-#![feature(optimize_attribute)]
 
 #[macro_use]
 extern crate cfg_if;
@@ -23,6 +21,13 @@ cfg_if! {
             epoch_mib: tikv_jemalloc_ctl::epoch_mib,
             allocated_mib: tikv_jemalloc_ctl::stats::allocated_mib,
         }
+
+        impl Default for MemSampler {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
         impl MemSampler {
             pub fn new() -> Self {
                 MemSampler {
@@ -37,6 +42,13 @@ cfg_if! {
         }
     } else {
         pub struct MemSampler {}
+
+        impl Default for MemSampler {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
         impl MemSampler {
             pub fn new() -> Self {
                 println!("NOTE: Memory usage benchmark is supported only for linux.");
@@ -50,7 +62,6 @@ cfg_if! {
 }
 
 extern crate crossbeam_ebr;
-extern crate crossbeam_pebr;
 extern crate crossbeam_utils;
 #[macro_use]
 extern crate bitflags;

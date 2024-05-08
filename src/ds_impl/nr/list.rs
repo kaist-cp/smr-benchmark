@@ -241,7 +241,7 @@ where
     }
 
     #[inline]
-    pub fn pop<'g>(&'g self) -> Option<(&'g K, &'g V)> {
+    pub fn pop(&self) -> Option<(&K, &V)> {
         loop {
             let cursor = Cursor::head(&self.head);
             if cursor.curr.is_null() {
@@ -367,7 +367,7 @@ where
 {
     /// Pop the first element efficiently.
     /// This method is used for only the fine grained benchmark (src/bin/long_running).
-    pub fn pop<'g>(&'g self) -> Option<(&'g K, &'g V)> {
+    pub fn pop(&self) -> Option<(&K, &V)> {
         self.inner.pop()
     }
 }

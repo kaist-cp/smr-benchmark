@@ -30,7 +30,7 @@ impl Marks {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Ord, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 enum Key<K> {
     Fin(K),
     Inf,
@@ -88,8 +88,6 @@ where
 
 struct Node<K, V, C: Cs> {
     key: Key<K>,
-    // TODO(@jeehoonkang): how about having another type that is either (1) value, or (2) left and
-    // right.
     value: Option<V>,
     left: AtomicRc<Node<K, V, C>, C>,
     right: AtomicRc<Node<K, V, C>, C>,
@@ -174,7 +172,6 @@ impl<K, V, C: Cs> OutputHolder<V> for SeekRecord<K, V, C> {
     }
 }
 
-// TODO(@jeehoonkang): code duplication...
 impl<K, V, C: Cs> SeekRecord<K, V, C> {
     fn successor_addr(&self) -> &AtomicRc<Node<K, V, C>, C> {
         match self.successor_dir {
@@ -191,7 +188,6 @@ impl<K, V, C: Cs> SeekRecord<K, V, C> {
     }
 }
 
-// COMMENT(@jeehoonkang): write down the invariant of the tree
 pub struct NMTreeMap<K, V, C: Cs> {
     r: AtomicRc<Node<K, V, C>, C>,
 }

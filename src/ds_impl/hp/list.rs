@@ -61,7 +61,7 @@ impl Default for Handle<'static> {
 impl<'domain> Handle<'domain> {
     // bypass E0499-E0503, etc that are supposed to be fixed by polonius
     #[inline]
-    fn launder<'hp1, 'hp2>(&'hp1 mut self) -> &'hp2 mut Self {
+    fn launder<'hp2>(&mut self) -> &'hp2 mut Self {
         unsafe { core::mem::transmute(self) }
     }
 }
@@ -274,10 +274,7 @@ where
     }
 
     #[inline]
-    fn pop_inner<'domain, 'hp>(
-        &self,
-        handle: &'hp mut Handle<'domain>,
-    ) -> Result<Option<(&'hp K, &'hp V)>, ()> {
+    fn pop_inner<'hp>(&self, handle: &'hp mut Handle<'_>) -> Result<Option<(&'hp K, &'hp V)>, ()> {
         let cursor = Cursor::new(&self.head, handle.launder());
         let prev = unsafe { &(*cursor.prev).next };
 
@@ -311,7 +308,7 @@ where
     }
 
     #[inline]
-    pub fn pop<'domain, 'hp>(&self, handle: &'hp mut Handle<'domain>) -> Option<(&'hp K, &'hp V)> {
+    pub fn pop<'hp>(&self, handle: &'hp mut Handle<'_>) -> Option<(&'hp K, &'hp V)> {
         loop {
             match self.pop_inner(handle.launder()) {
                 Ok(r) => return r,
@@ -320,27 +317,18 @@ where
         }
     }
 
-    pub fn harris_michael_get<'domain, 'hp>(
-        &self,
-        key: &K,
-        handle: &'hp mut Handle<'domain>,
-    ) -> Option<&'hp V> {
+    pub fn harris_michael_get<'hp>(&self, key: &K, handle: &'hp mut Handle<'_>) -> Option<&'hp V> {
         self.get(key, Cursor::find_harris_michael, handle)
     }
 
-    pub fn harris_michael_insert<'domain, 'hp>(
-        &self,
-        key: K,
-        value: V,
-        handle: &'hp mut Handle<'domain>,
-    ) -> bool {
+    pub fn harris_michael_insert(&self, key: K, value: V, handle: &mut Handle<'_>) -> bool {
         self.insert(key, value, Cursor::find_harris_michael, handle)
     }
 
-    pub fn harris_michael_remove<'domain, 'hp>(
+    pub fn harris_michael_remove<'hp>(
         &self,
         key: &K,
-        handle: &'hp mut Handle<'domain>,
+        handle: &'hp mut Handle<'_>,
     ) -> Option<&'hp V> {
         self.remove(key, Cursor::find_harris_michael, handle)
     }
@@ -356,7 +344,7 @@ where
 {
     /// Pop the first element efficiently.
     /// This method is used for only the fine grained benchmark (src/bin/long_running).
-    pub fn pop<'domain, 'hp>(&self, handle: &'hp mut Handle<'domain>) -> Option<(&'hp K, &'hp V)> {
+    pub fn pop<'hp>(&self, handle: &'hp mut Handle<'_>) -> Option<(&'hp K, &'hp V)> {
         self.inner.pop(handle)
     }
 }
@@ -376,24 +364,15 @@ where
     }
 
     #[inline(always)]
-    fn get<'domain, 'hp>(&self, handle: &'hp mut Self::Handle<'domain>, key: &K) -> Option<&'hp V> {
+    fn get<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
         self.inner.harris_michael_get(key, handle)
     }
     #[inline(always)]
-    fn insert<'domain, 'hp>(
-        &self,
-        handle: &'hp mut Self::Handle<'domain>,
-        key: K,
-        value: V,
-    ) -> bool {
+    fn insert(&self, handle: &mut Self::Handle<'_>, key: K, value: V) -> bool {
         self.inner.harris_michael_insert(key, value, handle)
     }
     #[inline(always)]
-    fn remove<'domain, 'hp>(
-        &self,
-        handle: &'hp mut Self::Handle<'domain>,
-        key: &K,
-    ) -> Option<&'hp V> {
+    fn remove<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
         self.inner.harris_michael_remove(key, handle)
     }
 }

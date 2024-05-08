@@ -13,7 +13,7 @@ bitflags! {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Ord, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Key<K> {
     Fin(K),
     Inf1,
@@ -183,6 +183,16 @@ pub struct EFRBTree<K, V> {
     root: Atomic<Node<K, V>>,
 }
 
+impl<K, V> Default for EFRBTree<K, V>
+where
+    K: Ord + Clone + 'static,
+    V: Clone + 'static,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<K, V> EFRBTree<K, V>
 where
     K: Ord + Clone + 'static,
@@ -315,7 +325,6 @@ where
                         }
                     }
                     Err(e) => {
-                        unsafe { drop(new_update.into_owned()) };
                         self.help(e.current);
                     }
                 }
@@ -352,13 +361,13 @@ where
                 Ok(_) => {
                     // (prev value) = op → pupdate
                     self.help_marked(new_op);
-                    return true;
+                    true
                 }
                 Err(e) => {
                     if e.current == new_op {
                         // (prev value) = <Mark, op>
                         self.help_marked(new_op);
-                        return true;
+                        true
                     } else {
                         self.help(e.current);
                         let _ = unsafe { gp.load(Ordering::Acquire).as_ref().unwrap() }
@@ -369,7 +378,7 @@ where
                                 Ordering::Release,
                                 Ordering::Relaxed,
                             );
-                        return false;
+                        false
                     }
                 }
             }
@@ -396,7 +405,7 @@ where
             // Splice the node to which op → p points out of the tree, replacing it by other
             let other_sh = other.load(Ordering::Acquire);
 
-            let _ = self.cas_child(gp, p, other_sh);
+            self.cas_child(gp, p, other_sh);
             let _ = unsafe { gp.as_ref().unwrap() }.update.compare_exchange(
                 op.with_tag(UpdateTag::DFLAG.bits()),
                 op.with_tag(UpdateTag::CLEAN.bits()),
@@ -416,7 +425,7 @@ where
             let new_internal = new_internal.load(Ordering::Relaxed);
             let l = l.load(Ordering::Relaxed);
 
-            let _ = self.cas_child(p, l, new_internal);
+            self.cas_child(p, l, new_internal);
             let p_ref = unsafe { p.as_ref().unwrap() };
             let _ = p_ref.update.compare_exchange(
                 op.with_tag(UpdateTag::IFLAG.bits()),

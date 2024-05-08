@@ -257,7 +257,7 @@ where
             guard,
         );
         self.retire_node(right);
-        return res;
+        res
     }
 
     #[inline]
@@ -352,7 +352,7 @@ where
             guard,
         );
         self.retire_node(left);
-        return res;
+        res
     }
 
     #[inline]
@@ -532,7 +532,7 @@ where
             guard,
         );
         self.retire_node(node);
-        return (right, succ);
+        (right, succ)
     }
 
     fn pull_rightmost(
@@ -568,7 +568,7 @@ where
             guard,
         );
         self.retire_node(node);
-        return (left, succ);
+        (left, succ)
     }
 
     pub fn check_root(&self, guard: &Guard) -> bool {
@@ -578,6 +578,16 @@ where
 
 pub struct BonsaiTreeMap<K, V> {
     root: Atomic<Node<K, V>>,
+}
+
+impl<K, V> Default for BonsaiTreeMap<K, V>
+where
+    K: Ord + Clone,
+    V: Clone,
+{
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<K, V> BonsaiTreeMap<K, V>

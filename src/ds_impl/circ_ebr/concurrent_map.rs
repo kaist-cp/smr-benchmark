@@ -69,7 +69,7 @@ pub mod tests {
                     let cs = &mut CsEBR::new();
                     for i in keys {
                         let result = map.get(&i, cs);
-                        if 0 <= i && i < THREADS / 2 {
+                        if (0..THREADS / 2).contains(&i) {
                             assert!(result.is_none());
                         } else {
                             assert_eq!(i.to_string(), *result.unwrap().output());
