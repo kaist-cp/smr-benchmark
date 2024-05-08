@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 use typenum::{Unsigned, U1};
 
 use smr_benchmark::ds_impl::{cdrc, ebr, vbr};
-use smr_benchmark::ds_impl::{hp, hp_pp, hp_brcu as hp_brcu_bench};
+use smr_benchmark::ds_impl::{hp, hp_brcu as hp_brcu_bench, hp_pp};
 use smr_benchmark::ds_impl::{nbr, pebr};
 
 const NBR_CAP: NBRConfig = NBRConfig {
