@@ -16,6 +16,7 @@ sudo apt install build-essential python3-pip clang
 curl https://sh.rustup.rs -sSf | bash -s -- -y
 pip3 install --user pandas plotnine
 
+git submodule update --init --recursive
 cargo build --release
 
 # To run a single map data structure benchmark (see later sections for details),
@@ -106,6 +107,7 @@ curl https://sh.rustup.rs -sSf | bash -s -- -y
 After installing the necessary dependencies properly, build the benchmark binaries with the following command:
 
 ```bash
+git submodule update --init --recursive
 cargo build --release
 ```
 
