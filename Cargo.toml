@@ -5,14 +5,14 @@ authors = ["authors"]
 edition = "2021"
 
 [dependencies]
-bitflags = "2.3"
+bitflags = "2.5"
 cfg-if = "1.0"
-clap = { version = "4.3.8", features = ["derive", "string"] }
+clap = { version = "4.5.4", features = ["derive", "string"] }
 crossbeam-utils = { path = "./crossbeam-ebr/crossbeam-utils" }
-csv = "1.2.2"
+csv = "1.3.0"
 rand = "0.8"
-typenum = "1.16"
-num = "0.4.1"
+typenum = "1.17"
+num = "0.4.3"
 hp_pp = { path = "./hp_pp" }
 nbr-rs = { path = "./nbr-rs" }
 cdrc-rs = { path = "./cdrc-rs" }
@@ -35,7 +35,6 @@ path = "crossbeam-pebr/crossbeam-epoch"
 [profile.release]
 lto = true
 codegen-units = 1
-panic = "abort"
 
 [profile.release-with-debug]
 inherits = "release"
