@@ -3,4 +3,3 @@
 .gitmodules export-ignore
 .gitlab-ci.yml export-ignore
 archive.sh export-ignore
-circ-docker.tar.gz export-ignore

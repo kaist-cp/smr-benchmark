@@ -39,7 +39,4 @@ jeprof.*
 tags
 
 bench-scripts/**/results
-circ-docker.tar.gz
-archive
-
 .python-version
