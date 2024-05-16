@@ -38,5 +38,6 @@ jeprof.*
 # *.pdf
 tags
 
-bench-scripts/**/results
+*.pdf
+*.csv
 .python-version
