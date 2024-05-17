@@ -243,6 +243,7 @@ checksum = "0b6a852b24ab71dffc585bcb46eaf7959d175cb865a7152e35b348d1b2960422"
 [[package]]
 name = "crossbeam-epoch"
 version = "0.9.13"
+source = "git+https://github.com/kaist-cp/crossbeam?branch=smr-benchmark#ee760604650f37e9bef5ebcd55a1c6403c6dfe0c"
 dependencies = [
  "autocfg",
  "cfg-if 1.0.0",
@@ -254,13 +255,14 @@ dependencies = [
 [[package]]
 name = "crossbeam-pebr-epoch"
 version = "0.7.1"
+source = "git+https://github.com/kaist-cp/crossbeam?branch=pebr#05d55f2e1683e91f2bcbbbf06ff8ae4666ec22e5"
 dependencies = [
  "arrayvec 0.4.12",
  "bitflags 1.3.2",
  "cfg-if 0.1.10",
  "crossbeam-pebr-utils",
  "lazy_static",
- "membarrier 0.2.3",
+ "membarrier 0.2.3 (git+https://github.com/kaist-cp/crossbeam?branch=pebr)",
  "memoffset",
  "murmur3",
  "scopeguard",
@@ -270,6 +272,7 @@ dependencies = [
 [[package]]
 name = "crossbeam-pebr-utils"
 version = "0.6.5"
+source = "git+https://github.com/kaist-cp/crossbeam?branch=pebr#05d55f2e1683e91f2bcbbbf06ff8ae4666ec22e5"
 dependencies = [
  "cfg-if 0.1.10",
  "lazy_static",
@@ -278,6 +281,7 @@ dependencies = [
 [[package]]
 name = "crossbeam-utils"
 version = "0.8.14"
+source = "git+https://github.com/kaist-cp/crossbeam?branch=smr-benchmark#ee760604650f37e9bef5ebcd55a1c6403c6dfe0c"
 dependencies = [
  "cfg-if 1.0.0",
 ]
@@ -374,6 +378,7 @@ dependencies = [
 [[package]]
 name = "hp_pp"
 version = "0.1.0"
+source = "git+https://github.com/kaist-cp/hp-plus#b7af1d50da4deeb3d4d439909b53b89fca7c37e8"
 dependencies = [
  "crossbeam-utils 0.8.19",
  "membarrier 0.2.3 (git+https://github.com/jeehoonkang/membarrier-rs.git?branch=smr-benchmark)",
@@ -444,6 +449,7 @@ checksum = "90ed8c1e510134f979dbc4f070f87d4313098b704861a105fe34231c70a3901c"
 [[package]]
 name = "membarrier"
 version = "0.2.3"
+source = "git+https://github.com/kaist-cp/crossbeam?branch=pebr#05d55f2e1683e91f2bcbbbf06ff8ae4666ec22e5"
 dependencies = [
  "cfg-if 1.0.0",
  "lazy_static",
@@ -486,6 +492,7 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 [[package]]
 name = "murmur3"
 version = "0.4.1"
+source = "git+https://github.com/kaist-cp/crossbeam?branch=pebr#05d55f2e1683e91f2bcbbbf06ff8ae4666ec22e5"
 dependencies = [
  "byteorder",
  "static_assertions 0.3.4",
@@ -801,7 +808,7 @@ dependencies = [
  "clap",
  "crossbeam-epoch",
  "crossbeam-pebr-epoch",
- "crossbeam-utils 0.8.14",
+ "crossbeam-utils 0.8.19",
  "csv",
  "hp-brcu",
  "hp_pp",
