@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use smr_benchmark::config::map::{setup, BagSize, BenchWriter, Config, Op, Perf, DS};
 use smr_benchmark::ds_impl::circ_ebr::{
-    BonsaiTreeMap, ConcurrentMap, EFRBTree, HHSList, HList, HMList, HashMap, NMTreeMap, SkipList,
+    BonsaiTreeMap, ConcurrentMap, HHSList, HList, HMList, HashMap, NMTreeMap, SkipList,
 };
 
 fn main() {
@@ -35,7 +35,7 @@ fn bench(config: &Config, output: BenchWriter) {
         DS::NMTree => bench_map::<NMTreeMap<usize, usize>>(config, PrefillStrategy::Random),
         DS::SkipList => bench_map::<SkipList<usize, usize>>(config, PrefillStrategy::Decreasing),
         DS::BonsaiTree => bench_map::<BonsaiTreeMap<usize, usize>>(config, PrefillStrategy::Random),
-        DS::EFRBTree => bench_map::<EFRBTree<usize, usize>>(config, PrefillStrategy::Random),
+        _ => panic!("Unsupported(or unimplemented) data structure for CIRC"),
     };
     output.write_record(config, &perf);
     println!("{}", perf);
