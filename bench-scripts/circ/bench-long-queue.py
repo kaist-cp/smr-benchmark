@@ -24,7 +24,7 @@ cmds = []
 
 for mm in mms_queue:
     for i in range(10, 61, 10):
-        cmd = [os.path.join(BIN_PATH, "double_link"), '-m', mm, '-i', str(i), '-t', '64', '-o', os.path.join(RESULTS_PATH, 'double-link-long-running.csv')]
+        cmd = [os.path.join(BIN_PATH, "double-link"), '-m', mm, '-i', str(i), '-t', '64', '-o', os.path.join(RESULTS_PATH, 'double-link-long-running.csv')]
         cmds.append(cmd)
 
 print('number of configurations: ', len(cmds))

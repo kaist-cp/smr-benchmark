@@ -203,7 +203,7 @@ For detailed usage information,
 To run a single DoubleLink queue benchmark,
 
 ```sh
-./target/release/double_link -t <threads> -m <reclamation-scheme> -i <time-interval-to-run-seconds>
+./target/release/double-link -t <threads> -m <reclamation-scheme> -i <time-interval-to-run-seconds>
 ```
 
 where
@@ -221,7 +221,7 @@ where
 It runs a single DoubleLink queue benchmark with the given configuration, and measures the throughput (operations per second) and memory usage (bytes).
 
 ```
-$ ./target/release/double_link -t 64 -m circ-ebr -i 10          
+$ ./target/release/double-link -t 64 -m circ-ebr -i 10          
 circ-ebr: 64 threads
 end
 ops/s: 732030, peak mem: 219205664, avg_mem: 110476847
@@ -230,7 +230,7 @@ ops/s: 732030, peak mem: 219205664, avg_mem: 110476847
 For detailed usage information,
 
 ```bash
-./target/release/double_link -h
+./target/release/double-link -h
 ```
 
 ### Running the Entire Benchmark

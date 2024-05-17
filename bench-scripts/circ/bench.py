@@ -71,7 +71,7 @@ for ds in dss:
 
 for mm in mms_queue:
     for t in ts_queue:
-        cmd = [os.path.join(BIN_PATH, "double_link"), '-m', mm, '-i', str(i), '-t', str(t), '-o', os.path.join(RESULTS_PATH, 'double-link.csv')]
+        cmd = [os.path.join(BIN_PATH, "double-link"), '-m', mm, '-i', str(i), '-t', str(t), '-o', os.path.join(RESULTS_PATH, 'double-link.csv')]
         cmds.append(cmd)
         estimated_time += i * 1.1
 

@@ -6,7 +6,7 @@ circ_ebr="cargo run --bin circ-ebr --profile=release-simple --target x86_64-unkn
 circ_hp="cargo run --bin circ-hp --profile=release-simple --target x86_64-unknown-linux-gnu --features sanitize -- "
 cdrc_ebr="cargo run --bin cdrc-ebr --profile=release-simple --target x86_64-unknown-linux-gnu --features sanitize -- "
 cdrc_hp="cargo run --bin cdrc-hp --profile=release-simple --target x86_64-unknown-linux-gnu --features sanitize -- "
-double_link="cargo run --bin double_link --profile=release-simple --target x86_64-unknown-linux-gnu --features sanitize -- "
+double_link="cargo run --bin double-link --profile=release-simple --target x86_64-unknown-linux-gnu --features sanitize -- "
 
 set -e
 for i in {1..200}; do
