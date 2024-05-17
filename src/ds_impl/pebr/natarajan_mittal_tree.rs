@@ -1,4 +1,4 @@
-use crossbeam_pebr::{unprotected, Atomic, Guard, Owned, Shared, Shield, ShieldError};
+use crossbeam_pebr::{unprotected, Atomic, Guard, Owned, Pointer, Shared, Shield, ShieldError};
 
 use super::concurrent_map::ConcurrentMap;
 use std::cmp;
@@ -227,6 +227,12 @@ impl<K, V> Drop for NMTreeMap<K, V> {
     }
 }
 
+enum DeleteResult<V> {
+    NotFound,
+    CleanedUp(V),
+    Injected(V, usize),
+}
+
 impl<K, V> NMTreeMap<K, V>
 where
     K: Ord + Clone,
@@ -259,18 +265,16 @@ where
         unsafe {
             record
                 .ancestor
-                .defend_fake(Shared::from(&self.r as *const _));
-            record.successor.defend_fake(s);
-        }
+                .defend_fake(Shared::from(&self.r as *const _))
+        };
+        record.successor.defend(s, guard)?;
         record.successor_dir = Direction::L;
 
         let leaf = unsafe { s.deref() }
             .left
             .load(Ordering::Relaxed, guard)
             .with_tag(Marks::empty().bits());
-        unsafe {
-            record.parent.defend_fake(s);
-        }
+        record.parent.defend(s, guard)?;
         record.leaf.defend(leaf, guard)?;
         record.leaf_dir = Direction::L;
 
@@ -494,12 +498,12 @@ where
         key: &K,
         record: &mut SeekRecord<K, V>,
         guard: &Guard,
-    ) -> Result<Option<V>, ShieldError> {
+    ) -> Result<DeleteResult<V>, ShieldError> {
         // NOTE: The paper version uses one big loop for both phases.
         // injection phase
         //
         // `leaf` and `value` are the snapshot of the node to be deleted.
-        let (leaf, value) = loop {
+        loop {
             self.seek(key, record, guard)?;
 
             // candidates
@@ -507,7 +511,7 @@ where
             let leaf_node = unsafe { record.leaf.as_ref().unwrap() };
 
             if leaf_node.key.cmp(key) != cmp::Ordering::Equal {
-                return Ok(None);
+                return Ok(DeleteResult::NotFound);
             }
 
             // Copy the value before the physical deletion.
@@ -523,11 +527,11 @@ where
                 Ok(_) => {
                     // Finalize the node to be removed
                     if self.cleanup(&record, guard) {
-                        return Ok(Some(value));
+                        return Ok(DeleteResult::CleanedUp(value));
                     }
 
                     // In-place cleanup failed. Enter the cleanup phase.
-                    break (leaf, value);
+                    return Ok(DeleteResult::Injected(value, leaf.into_usize()));
                 }
                 Err(e) => {
                     // Flagging failed.
@@ -539,32 +543,34 @@ where
                     }
                 }
             }
-        };
-
-        let leaf = Shared::from(leaf.as_raw());
-
-        // cleanup phase
-        loop {
-            self.seek(key, record, guard)?;
-            if record.leaf.shared() != leaf {
-                // The edge to leaf flagged for deletion was removed by a helping thread
-                return Ok(Some(value));
-            }
-
-            // leaf is still present in the tree.
-            if self.cleanup(&record, guard) {
-                return Ok(Some(value));
-            }
         }
     }
 
     pub fn remove(&self, key: &K, record: &mut SeekRecord<K, V>, guard: &mut Guard) -> Option<V> {
         // TODO(@jeehoonkang): we want to use `FindError::retry`, but it requires higher-kinded
         // things...
-        loop {
+        let (value, leaf) = loop {
             match self.remove_inner(key, record, unsafe { &mut *(guard as *mut Guard) }) {
-                Ok(r) => return r,
+                Ok(DeleteResult::NotFound) => return None,
+                Ok(DeleteResult::CleanedUp(value)) => return Some(value),
+                Ok(DeleteResult::Injected(value, leaf)) => break (value, leaf),
                 Err(ShieldError::Ejected) => guard.repin(),
+            }
+        };
+
+        // cleanup phase
+        loop {
+            if self.seek(key, record, guard).is_err() {
+                guard.repin();
+                continue;
+            }
+            if record.leaf.shared().into_usize() != leaf {
+                // The edge to leaf flagged for deletion was removed by a helping thread
+                return Some(value);
+            }
+            // leaf is still present in the tree.
+            if self.cleanup(&record, guard) {
+                return Some(value);
             }
         }
     }
