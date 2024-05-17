@@ -1,4 +1,4 @@
-# `smr-benchmark`: A microbenchmark suite for concurrent memory reclamation schemes
+# `smr-benchmark`: A Microbenchmark Suite for Concurrent Memory Reclamation Schemes
 
 This is the artifact for:
 
@@ -35,7 +35,7 @@ To run the benchmark suite, we recommend using an x86-64 machine with Ubuntu 22.
 * Python: 3.10.12
 * Rustup: 1.26.0
 
-### Project structure
+### Project Structure
 
 * `./crossbeam-pebr`: The fork of [Crossbeam](https://github.com/crossbeam-rs/crossbeam) that implements PEBR [8] of which the main implementation lies under `./crossbeam-pebr/crossbeam-epoch`.
 * `./crossbeam-ebr`: The original Crossbeam source code implementing EBR [1,7].
@@ -49,7 +49,7 @@ To run the benchmark suite, we recommend using an x86-64 machine with Ubuntu 22.
 
 ### Setting up the Environment
 
-The benchmark requires Rust (for building the implementation of reclamation schemes and data structures), Python3 (for generating the figures), and other essential build tools.
+The benchmark requires Rust (for building the implementation of reclamation schemes and data structures), Python (for generating the figures), and other essential build tools.
 
 #### Install Rust and Build Tools
 
@@ -62,16 +62,16 @@ sudo apt install build-essential clang
 curl https://sh.rustup.rs -sSf | bash -s -- -y
 ```
 
-#### Install Python3 Packages
+#### Install Python Packages
 
-Some Python3 packages are necessary to execute end-to-end experiment scripts and generate plots. To install them locally, simply run:
+Some Python packages are necessary to execute end-to-end experiment scripts and generate plots. To install them locally, simply run:
 
 ```bash
 sudo apt install python3-pip
 pip3 install --user pandas plotnine
 ```
 
-However, in some cases, you might encounter an issue due to the conflicts on the versions of Python3 packages. If this is the case, We suggest using `pyenv` to set up the Python3 environment to minimize potential conflicts with the pre-installed system Python3 environment.
+However, in some cases, you might encounter an issue due to the conflicts on the versions of Python packages. If this is the case, We suggest using `pyenv` to set up the Python environment to minimize potential conflicts with the pre-installed system Python environment.
 
 ```bash
 # Install the system Python3 and all dependencies for `pyenv`.
