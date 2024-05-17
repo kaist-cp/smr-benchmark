@@ -2,13 +2,13 @@
 #![feature(cfg_sanitize)]
 mod smr;
 mod smr_common;
-mod strongs;
+mod strong;
 mod utils;
 mod weak;
 
 pub use smr::*;
 pub use smr_common::*;
-pub use strongs::*;
+pub use strong::*;
 pub use utils::*;
 pub use weak::*;
 
