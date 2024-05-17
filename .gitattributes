@@ -1,4 +1,5 @@
 .gitattributes export-ignore
 .gitignore export-ignore
 .gitmodules export-ignore
+.gitlab-ci.yml export-ignore
 archive.sh export-ignore

@@ -1,0 +1,37 @@
+name: Test Benchmark
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        submodules: recursive
+
+    - name: Install clang
+      run: sudo apt-get update && sudo apt-get install -y clang
+
+    - name: Install Rust nightly toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: nightly
+        components: rustfmt, clippy
+
+    - name: Install cargo-audit
+      run: cargo install cargo-audit
+
+    - name: Check code formatting
+      run: cargo fmt -- --check
+
+    - name: Run checks
+      run: |
+        cargo check --verbose
+        cargo audit
+
+    - name: Run tests
+      run: |
+        cargo test -- --nocapture --test-threads 1
+        cargo test --release -- --nocapture --test-threads 1

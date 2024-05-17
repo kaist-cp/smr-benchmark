@@ -1,0 +1,23 @@
+[package]
+name = "hp-brcu"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+nix = "0.26.2"
+atomic = "0.5"
+crossbeam-utils = "0.8"
+static_assertions = "1.1.0"
+setjmp = { git = "https://github.com/powergee/setjmp.rs.git" }
+arrayvec = "0.7.3"
+bitflags = "2.3.3"
+cfg-if = "1.0"
+
+[dev-dependencies]
+rand = "0.8"
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true

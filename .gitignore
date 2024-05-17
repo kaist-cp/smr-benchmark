@@ -34,6 +34,8 @@ perf.data*
 jeprof.*
 .idea/
 .mypy_cache/
-*.csv
-*.pdf
 tags
+
+*.pdf
+*.csv
+.python-version

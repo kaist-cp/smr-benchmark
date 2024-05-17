@@ -5,17 +5,20 @@ authors = ["authors"]
 edition = "2021"
 
 [dependencies]
-bitflags = "1.3"
+bitflags = "2.5"
 cfg-if = "1.0"
-clap = "2.33.0"
-crossbeam-utils = { path = "./crossbeam-ebr/crossbeam-utils" }
-csv = "1.1.6"
+clap = { version = "4.5.4", features = ["derive", "string"] }
+crossbeam-utils = "0.8"
+csv = "1.3.0"
 rand = "0.8"
-typenum = "1.16"
-scopeguard = "1.1.0"
-hp_pp = { path = "./hp_pp" }
+typenum = "1.17"
+num = "0.4.3"
+hp_pp = { git = "https://github.com/kaist-cp/hp-plus" }
 nbr-rs = { path = "./nbr-rs" }
 cdrc-rs = { path = "./cdrc-rs" }
+hp-brcu = { path = "./hp-brcu" }
+vbr-rs = { path = "./vbr-rs" }
+circ = { path = "./circ" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tikv-jemallocator = "0.5"
@@ -23,15 +26,27 @@ tikv-jemalloc-ctl = "0.5"
 
 [dependencies.crossbeam-ebr]
 package = "crossbeam-epoch"
-path = "crossbeam-ebr/crossbeam-epoch"
+git = "https://github.com/kaist-cp/crossbeam"
+branch = "smr-benchmark"
 
 [dependencies.crossbeam-pebr]
 package = "crossbeam-pebr-epoch"
-path = "crossbeam-pebr/crossbeam-epoch"
+git = "https://github.com/kaist-cp/crossbeam"
+branch = "pebr"
 
-# TODO: remove this
 [profile.release]
+lto = true
+codegen-units = 1
+
+[profile.release-with-debug]
+inherits = "release"
 debug = true
+
+[profile.release-simple]
+inherits = "release"
+debug = true
+lto = false
+codegen-units = 16
 
 [features]
 sanitize = ["crossbeam-pebr/sanitize"]
