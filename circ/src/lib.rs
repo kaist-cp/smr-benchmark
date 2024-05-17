@@ -1,4 +1,3 @@
-#![feature(associated_type_bounds)]
 #![feature(cfg_sanitize)]
 mod smr;
 mod smr_common;
