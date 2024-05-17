@@ -20,7 +20,7 @@ git submodule update --init --recursive
 cargo build --release
 
 # To run a single map data structure benchmark (see later sections for details),
-./target/release/<Reclamation scheme> -d <Data structure> -t <Threads> -g <Get rate> -r <Key range> -i <Time interval to run (seconds)>
+./target/release/<reclamation-scheme> -d <data-structure> -t <threads> -g <get-rate> -r <key-range> -i <time-interval-to-run-seconds>
 
 # For dedicated experiment scripts (e.g., `experiment.sh`),
 # see subdirectories in `bench-scripts`.
@@ -150,7 +150,7 @@ Even with the small configuration, the end-to-end benchmark scripts in `bench-sc
 To run a single map data structure benchmark,
 
 ```bash
-./target/release/<Reclamation scheme> -d <Data structure> -t <Threads> -g <Get rate> -r <Key range> -i <Time interval to run (seconds)>
+./target/release/<reclamation-scheme> -d <data-structure> -t <threads> -g <get-rate> -r <key-range> -i <time-interval-to-run-seconds>
 ```
 
 where
@@ -198,7 +198,7 @@ ops/s: 163839786, peak mem: 28.316 MiB, avg_mem: 4.970 MiB, peak garb: 99524, av
 For detailed usage information,
 
 ```sh
-./target/release/<Reclamation scheme> -h
+./target/release/<reclamation-scheme> -h
 ```
 
 #### DoubleLink Queue
@@ -206,7 +206,7 @@ For detailed usage information,
 To run a single DoubleLink queue benchmark,
 
 ```sh
-./target/release/double_link -t <Threads> -m <Reclamation scheme> -i <Time interval to run (seconds)>
+./target/release/double_link -t <threads> -m <reclamation-scheme> -i <time-interval-to-run-seconds>
 ```
 
 where
