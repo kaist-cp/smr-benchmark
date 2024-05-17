@@ -2,10 +2,10 @@
 
 This is the artifact for:
 
-* Jaehwang Jung, Jeonghyeon Kim, Matthew J. Parkinson and Jeehoon Kang, Concurrent Immediate Reference Counting, PLDI 2024.
-* Jeonghyeon Kim, Jaehwang Jung and Jeehoon Kang, Expediting Hazard Pointers with Bounded RCU Critical Sections, SPAA 2024.
-* Jaehwang Jung, Janggun Lee, Jeonghyeon Kim and Jeehoon Kang, Applying Hazard Pointers to More Concurrent Data Structures, SPAA 2023.
-* Jeehoon Kang and Jaehwang Jung, A Marriage of Pointer- and Epoch-Based Reclamation, PLDI 2020.
+* Jaehwang Jung, Jeonghyeon Kim, Matthew J. Parkinson and Jeehoon Kang, Concurrent Immediate Reference Counting, PLDI 2024 [15].
+* Jeonghyeon Kim, Jaehwang Jung and Jeehoon Kang, Expediting Hazard Pointers with Bounded RCU Critical Sections, SPAA 2024 [14].
+* Jaehwang Jung, Janggun Lee, Jeonghyeon Kim and Jeehoon Kang, Applying Hazard Pointers to More Concurrent Data Structures, SPAA 2023 [11].
+* Jeehoon Kang and Jaehwang Jung, A Marriage of Pointer- and Epoch-Based Reclamation, PLDI 2020 [8].
 
 ## Summary
 On Ubuntu 22.04,
@@ -28,27 +28,24 @@ cargo build --release
 
 ## Getting Started Guide
 
-To run the benchmark suite, we recommend using an x86 machine with Ubuntu 22.04 installed. Specifically, we have tested and evaluated the benchmark with the following environment:
+To run the benchmark suite, we recommend using an x86-64 machine with Ubuntu 22.04 installed. Specifically, we have tested and evaluated the benchmark with the following environment:
 
 * OS: Ubuntu 22.04
-* Architecture: x86
+* Architecture: x86-64
 * Python: 3.10.12
 * Rustup: 1.26.0
 
 ### Project structure
 
-* `./crossbeam-pebr` is the fork of
-  [Crossbeam](https://github.com/crossbeam-rs/crossbeam) that implements PEBR [8].
-  The main implementation of PEBR lies under
-  `./crossbeam-pebr/crossbeam-epoch`.
-* `./crossbeam-ebr` is the original Crossbeam source code implementing EBR [1,7].
-* `./hp_pp` is an implementation of the original HP [9,10] and HP++ [11].
-* `./hp-brcu` is an implementation of HP-RCU and HP-BRCU schemes [14].
-* `./nbr-rs` is an implementation of NBR+ [13] with signal optimization.
-* `./vbr-rs` is an implementation of VBR [16].
-* `./cdrc-rs` is an implementation of CDRC [12].
-* `./circ` is an implementation of CIRC [15].
-* `./src` contains the benchmark drivers for each SMR (`./src/bin`) and the implementation of data structures based on each SMR (`./src/ds_impl`).
+* `./crossbeam-pebr`: The fork of [Crossbeam](https://github.com/crossbeam-rs/crossbeam) that implements PEBR [8] of which the main implementation lies under `./crossbeam-pebr/crossbeam-epoch`.
+* `./crossbeam-ebr`: The original Crossbeam source code implementing EBR [1,7].
+* `./hp_pp`: An implementation of the original HP [9,10] and HP++ [11].
+* `./hp-brcu`: An implementation of HP-RCU and HP-BRCU schemes [14].
+* `./nbr-rs`: An implementation of NBR+ [13] with signal optimization.
+* `./vbr-rs`: An implementation of VBR [16].
+* `./cdrc-rs`: An implementation of CDRC [12].
+* `./circ`: An implementation of CIRC [15].
+* `./src`: Benchmark drivers for each SMR (`./src/bin`) and implementations of data structures based on each SMR (`./src/ds_impl`).
 
 ### Setting up the Environment
 
