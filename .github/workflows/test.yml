@@ -32,6 +32,4 @@ jobs:
         cargo audit
 
     - name: Run tests
-      run: |
-        cargo test -- --nocapture --test-threads 1
-        cargo test --release -- --nocapture --test-threads 1
+      run: cargo test --release -- --nocapture --test-threads 1
