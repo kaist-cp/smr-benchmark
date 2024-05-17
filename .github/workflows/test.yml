@@ -19,7 +19,6 @@ jobs:
       with:
         toolchain: nightly
         override: true
-        components: rustfmt, clippy
 
     - name: Install cargo-audit
       run: cargo install cargo-audit
