@@ -1,4 +1,4 @@
-use cdrc_rs::{ebr_impl, set_counts_between_flush_ebr, Cs, CsEBR};
+use cdrc::{ebr_impl, set_counts_between_flush_ebr, Cs, CsEBR};
 use crossbeam_utils::thread::scope;
 use rand::prelude::*;
 use std::cmp::max;

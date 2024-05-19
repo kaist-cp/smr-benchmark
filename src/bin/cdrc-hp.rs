@@ -1,4 +1,4 @@
-use cdrc_rs::{hp_impl, set_counts_between_flush_hp, Cs, CsHP};
+use cdrc::{hp_impl, set_counts_between_flush_hp, Cs, CsHP};
 use crossbeam_utils::thread::scope;
 use rand::prelude::*;
 use std::cmp::max;

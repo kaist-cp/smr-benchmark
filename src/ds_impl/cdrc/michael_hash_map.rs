@@ -1,5 +1,5 @@
 use super::concurrent_map::ConcurrentMap;
-use cdrc_rs::Cs;
+use cdrc::Cs;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -82,7 +82,7 @@ where
 mod tests {
     use super::HashMap;
     use crate::ds_impl::cdrc::concurrent_map;
-    use cdrc_rs::{CsEBR, CsHP};
+    use cdrc::{CsEBR, CsHP};
 
     #[test]
     fn smoke_hashmap_ebr() {

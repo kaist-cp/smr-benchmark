@@ -1,4 +1,4 @@
-use cdrc_rs::{AtomicRc, Cs, Pointer, Rc, Snapshot, StrongPtr, TaggedCnt};
+use cdrc::{AtomicRc, Cs, Pointer, Rc, Snapshot, StrongPtr, TaggedCnt};
 
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 
@@ -705,7 +705,7 @@ where
 mod tests {
     use super::BonsaiTreeMap;
     use crate::ds_impl::cdrc::concurrent_map;
-    use cdrc_rs::{CsEBR, CsHP};
+    use cdrc::{CsEBR, CsHP};
 
     #[test]
     fn smoke_bonsai_tree_ebr() {

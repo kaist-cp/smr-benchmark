@@ -1,4 +1,4 @@
-use nbr_rs::Guard;
+use nbr::Guard;
 
 pub trait ConcurrentMap<K, V> {
     type Handle;
@@ -20,7 +20,7 @@ pub mod tests {
     extern crate rand;
     use super::ConcurrentMap;
     use crossbeam_utils::thread;
-    use nbr_rs::Collector;
+    use nbr::Collector;
     use rand::prelude::*;
     use std::sync::Arc;
 

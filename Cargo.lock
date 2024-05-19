@@ -135,7 +135,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "099a5357d84c4c61eb35fc8eafa9a79a902c2f76911e5747ced4e032edd8d9b4"
 
 [[package]]
-name = "cdrc-rs"
+name = "cdrc"
 version = "0.1.0"
 dependencies = [
  "atomic",
@@ -378,7 +378,6 @@ dependencies = [
 [[package]]
 name = "hp_pp"
 version = "0.1.0"
-source = "git+https://github.com/kaist-cp/hp-plus#b7af1d50da4deeb3d4d439909b53b89fca7c37e8"
 dependencies = [
  "crossbeam-utils 0.8.19",
  "membarrier 0.2.3 (git+https://github.com/jeehoonkang/membarrier-rs.git?branch=smr-benchmark)",
@@ -499,7 +498,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nbr-rs"
+name = "nbr"
 version = "0.1.0"
 dependencies = [
  "atomic",
@@ -802,7 +801,7 @@ name = "smr-benchmark"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.5.0",
- "cdrc-rs",
+ "cdrc",
  "cfg-if 1.0.0",
  "circ",
  "clap",
@@ -812,13 +811,13 @@ dependencies = [
  "csv",
  "hp-brcu",
  "hp_pp",
- "nbr-rs",
+ "nbr",
  "num",
  "rand",
  "tikv-jemalloc-ctl",
  "tikv-jemallocator",
  "typenum",
- "vbr-rs",
+ "vbr",
 ]
 
 [[package]]
@@ -900,7 +899,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "711b9620af191e0cdc7468a8d14e709c3dcdb115b36f838e601583af800a370a"
 
 [[package]]
-name = "vbr-rs"
+name = "vbr"
 version = "0.1.0"
 dependencies = [
  "arrayvec 0.7.4",

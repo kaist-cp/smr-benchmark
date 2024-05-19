@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use cdrc_rs::{AtomicRc, AtomicWeak, Cs, Pointer, Rc, Snapshot, StrongPtr};
+use cdrc::{AtomicRc, AtomicWeak, Cs, Pointer, Rc, Snapshot, StrongPtr};
 use crossbeam_utils::CachePadded;
 
 pub struct Holder<T, C: Cs> {
@@ -151,7 +151,7 @@ mod test {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use super::{DoubleLink, Holder};
-    use cdrc_rs::{Cs, CsEBR, CsHP};
+    use cdrc::{Cs, CsEBR, CsHP};
     use crossbeam_utils::thread::scope;
 
     fn simple<C: Cs>() {

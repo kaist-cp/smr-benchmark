@@ -1,4 +1,4 @@
-use cdrc_rs::{AtomicRc, Cs, Pointer, Rc, Snapshot, StrongPtr};
+use cdrc::{AtomicRc, Cs, Pointer, Rc, Snapshot, StrongPtr};
 
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use std::cmp;
@@ -504,7 +504,7 @@ where
 mod tests {
     use super::NMTreeMap;
     use crate::ds_impl::cdrc::concurrent_map;
-    use cdrc_rs::{CsEBR, CsHP};
+    use cdrc::{CsEBR, CsHP};
 
     #[test]
     fn smoke_nm_tree_ebr() {

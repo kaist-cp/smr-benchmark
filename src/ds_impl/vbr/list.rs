@@ -1,6 +1,6 @@
 use super::concurrent_map::ConcurrentMap;
-use vbr_rs::CompareExchangeError::Success;
-use vbr_rs::{Entry, Global, Guard, ImmAtomic, Local, MutAtomic, Shared};
+use vbr::CompareExchangeError::Success;
+use vbr::{Entry, Global, Guard, ImmAtomic, Local, MutAtomic, Shared};
 
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::sync::atomic::Ordering;

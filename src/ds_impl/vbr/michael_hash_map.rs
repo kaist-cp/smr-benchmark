@@ -1,4 +1,4 @@
-use vbr_rs::{Global, Local};
+use vbr::{Global, Local};
 
 use super::concurrent_map::ConcurrentMap;
 use std::collections::hash_map::DefaultHasher;

@@ -1,8 +1,7 @@
 use super::concurrent_map::ConcurrentMap;
 use hp_pp::tagged;
 use hp_pp::{tag, untagged};
-use nbr_rs::Guard;
-use nbr_rs::{read_phase, Shield};
+use nbr::{read_phase, Guard, Shield};
 use std::cmp;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};

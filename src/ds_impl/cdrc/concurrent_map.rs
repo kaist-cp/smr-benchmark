@@ -20,7 +20,7 @@ pub trait ConcurrentMap<K, V, C> {
 pub mod tests {
     extern crate rand;
     use super::{ConcurrentMap, OutputHolder};
-    use cdrc_rs::Cs;
+    use cdrc::Cs;
     use crossbeam_utils::thread;
     use rand::prelude::*;
 
