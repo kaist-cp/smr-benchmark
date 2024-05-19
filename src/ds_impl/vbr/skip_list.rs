@@ -3,8 +3,8 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use vbr_rs::CompareExchangeError::*;
-use vbr_rs::{Entry, Global, Guard, ImmAtomic, Local, MutAtomic, Shared};
+use vbr::CompareExchangeError::*;
+use vbr::{Entry, Global, Guard, ImmAtomic, Local, MutAtomic, Shared};
 
 use super::concurrent_map::ConcurrentMap;
 

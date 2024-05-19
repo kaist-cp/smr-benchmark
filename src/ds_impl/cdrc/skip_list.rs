@@ -1,6 +1,6 @@
 use std::{fmt::Display, sync::atomic::Ordering};
 
-use cdrc_rs::{AtomicRc, Cs, Pointer, Rc, Snapshot, StrongPtr, TaggedCnt};
+use cdrc::{AtomicRc, Cs, Pointer, Rc, Snapshot, StrongPtr, TaggedCnt};
 
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 
@@ -434,7 +434,7 @@ where
 mod tests {
     use super::SkipList;
     use crate::ds_impl::cdrc::concurrent_map;
-    use cdrc_rs::{CsEBR, CsHP};
+    use cdrc::{CsEBR, CsHP};
 
     #[test]
     fn smoke_skip_list_ebr() {

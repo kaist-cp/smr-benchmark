@@ -7,12 +7,12 @@ extern crate crossbeam_ebr;
 extern crate crossbeam_pebr;
 extern crate smr_benchmark;
 
-use ::hp_pp::DEFAULT_DOMAIN;
 use clap::{value_parser, Arg, ArgMatches, Command, ValueEnum};
 use crossbeam_utils::thread::scope;
 use csv::Writer;
 use rand::distributions::Uniform;
 use rand::prelude::*;
+use smr_benchmark::ds_impl;
 use smr_benchmark::ds_impl::cdrc::OutputHolder;
 use std::cmp::max;
 use std::fmt;
@@ -23,10 +23,6 @@ use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
 use typenum::{Unsigned, U1};
-
-use smr_benchmark::ds_impl::{cdrc, ebr, vbr};
-use smr_benchmark::ds_impl::{hp, hp_brcu as hp_brcu_bench, hp_pp};
-use smr_benchmark::ds_impl::{nbr, pebr};
 
 const NBR_CAP: NBRConfig = NBRConfig {
     bag_cap_pow2: 256,
@@ -271,7 +267,7 @@ fn bench<N: Unsigned>(config: &Config, output: Option<&mut Writer<File>>) {
         MM::PEBR => bench_map_pebr::<N>(config, PrefillStrategy::Decreasing),
         MM::HP => bench_map_hp(config, PrefillStrategy::Decreasing),
         MM::HP_PP => bench_map_hp_pp(config, PrefillStrategy::Decreasing),
-        MM::CDRC_EBR => bench_map_cdrc::<cdrc_rs::CsEBR, N>(config, PrefillStrategy::Decreasing),
+        MM::CDRC_EBR => bench_map_cdrc::<cdrc::CsEBR, N>(config, PrefillStrategy::Decreasing),
         MM::HP_BRCU => bench_map_hp_brcu::<true>(config, PrefillStrategy::Decreasing),
         MM::HP_RCU => bench_map_hp_brcu::<false>(config, PrefillStrategy::Decreasing),
         MM::NBR => bench_map_nbr(config, PrefillStrategy::Decreasing, &NBR_CAP, 2),
@@ -312,7 +308,7 @@ enum PrefillStrategy {
 }
 
 impl PrefillStrategy {
-    fn prefill_ebr<M: ebr::ConcurrentMap<usize, usize> + Send + Sync>(
+    fn prefill_ebr<M: ds_impl::ebr::ConcurrentMap<usize, usize> + Send + Sync>(
         self,
         config: &Config,
         map: &M,
@@ -343,7 +339,7 @@ impl PrefillStrategy {
         stdout().flush().unwrap();
     }
 
-    fn prefill_pebr<M: pebr::ConcurrentMap<usize, usize> + Send + Sync>(
+    fn prefill_pebr<M: ds_impl::pebr::ConcurrentMap<usize, usize> + Send + Sync>(
         self,
         config: &Config,
         map: &M,
@@ -375,7 +371,7 @@ impl PrefillStrategy {
         stdout().flush().unwrap();
     }
 
-    fn prefill_hp<M: hp::ConcurrentMap<usize, usize> + Send + Sync>(
+    fn prefill_hp<M: ds_impl::hp::ConcurrentMap<usize, usize> + Send + Sync>(
         self,
         config: &Config,
         map: &M,
@@ -406,7 +402,7 @@ impl PrefillStrategy {
         stdout().flush().unwrap();
     }
 
-    fn prefill_cdrc<C: cdrc_rs::Cs, M: cdrc::ConcurrentMap<usize, usize, C> + Send + Sync>(
+    fn prefill_cdrc<C: cdrc::Cs, M: ds_impl::cdrc::ConcurrentMap<usize, usize, C> + Send + Sync>(
         self,
         config: &Config,
         map: &M,
@@ -438,7 +434,7 @@ impl PrefillStrategy {
         stdout().flush().unwrap();
     }
 
-    fn prefill_hp_brcu<M: hp_brcu_bench::ConcurrentMap<usize, usize> + Send + Sync>(
+    fn prefill_hp_brcu<M: ds_impl::hp_brcu::ConcurrentMap<usize, usize> + Send + Sync>(
         self,
         config: &Config,
         map: &M,
@@ -472,13 +468,13 @@ impl PrefillStrategy {
         });
     }
 
-    fn prefill_nbr<M: nbr::ConcurrentMap<usize, usize> + Send + Sync>(
+    fn prefill_nbr<M: ds_impl::nbr::ConcurrentMap<usize, usize> + Send + Sync>(
         self,
         config: &Config,
         map: &M,
         max_hazptrs: usize,
     ) {
-        let collector = &nbr_rs::Collector::new(1, 256, 32, max_hazptrs);
+        let collector = &nbr::Collector::new(1, 256, 32, max_hazptrs);
         let mut guard = collector.register();
         let mut handle = M::handle(&mut guard);
         let rng = &mut rand::thread_rng();
@@ -506,7 +502,7 @@ impl PrefillStrategy {
         stdout().flush().unwrap();
     }
 
-    fn prefill_vbr<M: vbr::ConcurrentMap<usize, usize> + Send + Sync>(
+    fn prefill_vbr<M: ds_impl::vbr::ConcurrentMap<usize, usize> + Send + Sync>(
         self,
         config: &Config,
         map: &M,
@@ -539,8 +535,8 @@ impl PrefillStrategy {
 }
 
 fn bench_map_nr(config: &Config, strategy: PrefillStrategy) -> (u64, usize, usize, usize, usize) {
-    use ebr::ConcurrentMap;
-    let map = &ebr::HHSList::new();
+    use ds_impl::ebr::ConcurrentMap;
+    let map = &ds_impl::ebr::HHSList::new();
     strategy.prefill_ebr(config, map);
 
     let barrier = &Arc::new(Barrier::new(
@@ -642,8 +638,8 @@ fn bench_map_ebr<N: Unsigned>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
-    use ebr::ConcurrentMap;
-    let map = &ebr::HHSList::new();
+    use ds_impl::ebr::ConcurrentMap;
+    let map = &ds_impl::ebr::HHSList::new();
     strategy.prefill_ebr(config, map);
 
     let collector = &crossbeam_ebr::Collector::new();
@@ -766,8 +762,8 @@ fn bench_map_pebr<N: Unsigned>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
-    use pebr::ConcurrentMap;
-    let map = &pebr::HHSList::new();
+    use ds_impl::pebr::ConcurrentMap;
+    let map = &ds_impl::pebr::HHSList::new();
     strategy.prefill_pebr(config, map);
 
     let collector = &crossbeam_pebr::Collector::new();
@@ -827,7 +823,7 @@ fn bench_map_pebr<N: Unsigned>(
             s.spawn(move |_| {
                 let mut ops: u64 = 0;
                 let handle = collector.register();
-                let mut map_handle = pebr::HHSList::handle(&handle.pin());
+                let mut map_handle = ds_impl::pebr::HHSList::handle(&handle.pin());
                 barrier.clone().wait();
                 let start = Instant::now();
 
@@ -842,7 +838,7 @@ fn bench_map_pebr<N: Unsigned>(
                     }
                     ops += 1;
                     if ops % N::to_u64() == 0 {
-                        pebr::HHSList::clear(&mut map_handle);
+                        ds_impl::pebr::HHSList::clear(&mut map_handle);
                         guard.repin();
                     }
                 }
@@ -856,7 +852,7 @@ fn bench_map_pebr<N: Unsigned>(
                 let mut ops: u64 = 0;
                 let rng = &mut rand::thread_rng();
                 let handle = collector.register();
-                let mut map_handle = pebr::HHSList::handle(&handle.pin());
+                let mut map_handle = ds_impl::pebr::HHSList::handle(&handle.pin());
                 barrier.clone().wait();
                 let start = Instant::now();
 
@@ -866,7 +862,7 @@ fn bench_map_pebr<N: Unsigned>(
                     let _ = map.get(&mut map_handle, &key, &mut guard);
                     ops += 1;
                     if ops % N::to_u64() == 0 {
-                        pebr::HHSList::clear(&mut map_handle);
+                        ds_impl::pebr::HHSList::clear(&mut map_handle);
                         guard.repin();
                     }
                 }
@@ -889,8 +885,8 @@ fn bench_map_pebr<N: Unsigned>(
 }
 
 fn bench_map_hp(config: &Config, strategy: PrefillStrategy) -> (u64, usize, usize, usize, usize) {
-    use hp::ConcurrentMap;
-    let map = &hp::HMList::new();
+    use ds_impl::hp::ConcurrentMap;
+    let map = &ds_impl::hp::HMList::new();
     strategy.prefill_hp(config, map);
 
     let barrier = &Arc::new(Barrier::new(
@@ -922,7 +918,7 @@ fn bench_map_hp(config: &Config, strategy: PrefillStrategy) -> (u64, usize, usiz
                         acc += allocated;
                         peak = max(peak, allocated);
 
-                        let garbages = DEFAULT_DOMAIN.num_garbages();
+                        let garbages = hp_pp::DEFAULT_DOMAIN.num_garbages();
                         garb_acc += garbages;
                         garb_peak = max(garb_peak, garbages);
 
@@ -946,7 +942,7 @@ fn bench_map_hp(config: &Config, strategy: PrefillStrategy) -> (u64, usize, usiz
         // Spawn writer threads.
         for _ in 0..config.writers {
             s.spawn(move |_| {
-                let mut map_handle = hp::HMList::<usize, usize>::handle();
+                let mut map_handle = ds_impl::hp::HMList::<usize, usize>::handle();
                 barrier.clone().wait();
                 let start = Instant::now();
 
@@ -968,7 +964,7 @@ fn bench_map_hp(config: &Config, strategy: PrefillStrategy) -> (u64, usize, usiz
             s.spawn(move |_| {
                 let mut ops: u64 = 0;
                 let rng = &mut rand::thread_rng();
-                let mut map_handle = hp::HMList::<usize, usize>::handle();
+                let mut map_handle = ds_impl::hp::HMList::<usize, usize>::handle();
                 barrier.clone().wait();
                 let start = Instant::now();
 
@@ -999,8 +995,8 @@ fn bench_map_hp_pp(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
-    use hp::ConcurrentMap;
-    let map = &hp_pp::HHSList::new();
+    use ds_impl::hp::ConcurrentMap;
+    let map = &ds_impl::hp_pp::HHSList::new();
     strategy.prefill_hp(config, map);
 
     let barrier = &Arc::new(Barrier::new(
@@ -1032,7 +1028,7 @@ fn bench_map_hp_pp(
                         acc += allocated;
                         peak = max(peak, allocated);
 
-                        let garbages = DEFAULT_DOMAIN.num_garbages();
+                        let garbages = hp_pp::DEFAULT_DOMAIN.num_garbages();
                         garb_acc += garbages;
                         garb_peak = max(garb_peak, garbages);
 
@@ -1056,7 +1052,7 @@ fn bench_map_hp_pp(
         // Spawn writer threads.
         for _ in 0..config.writers {
             s.spawn(move |_| {
-                let mut map_handle = hp_pp::HHSList::<usize, usize>::handle();
+                let mut map_handle = ds_impl::hp_pp::HHSList::<usize, usize>::handle();
                 barrier.clone().wait();
                 let start = Instant::now();
 
@@ -1078,7 +1074,7 @@ fn bench_map_hp_pp(
             s.spawn(move |_| {
                 let mut ops: u64 = 0;
                 let rng = &mut rand::thread_rng();
-                let mut map_handle = hp_pp::HHSList::<usize, usize>::handle();
+                let mut map_handle = ds_impl::hp_pp::HHSList::<usize, usize>::handle();
                 barrier.clone().wait();
                 let start = Instant::now();
 
@@ -1105,12 +1101,12 @@ fn bench_map_hp_pp(
     (ops_per_sec, peak_mem, avg_mem, garb_peak, garb_avg)
 }
 
-fn bench_map_cdrc<C: cdrc_rs::Cs, N: Unsigned>(
+fn bench_map_cdrc<C: cdrc::Cs, N: Unsigned>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
-    use cdrc::ConcurrentMap;
-    let map = &cdrc::HHSList::new();
+    use ds_impl::cdrc::ConcurrentMap;
+    let map = &ds_impl::cdrc::HHSList::new();
     strategy.prefill_cdrc(config, map);
 
     let barrier = &Arc::new(Barrier::new(
@@ -1169,7 +1165,7 @@ fn bench_map_cdrc<C: cdrc_rs::Cs, N: Unsigned>(
                 barrier.clone().wait();
                 let start = Instant::now();
 
-                let output = &mut cdrc::HHSList::empty_output();
+                let output = &mut ds_impl::cdrc::HHSList::empty_output();
                 let mut cs = C::new();
                 let mut acquired = None;
                 while start.elapsed() < config.duration {
@@ -1196,7 +1192,7 @@ fn bench_map_cdrc<C: cdrc_rs::Cs, N: Unsigned>(
                 barrier.clone().wait();
                 let start = Instant::now();
 
-                let output = &mut cdrc::HHSList::empty_output();
+                let output = &mut ds_impl::cdrc::HHSList::empty_output();
                 let mut cs = C::new();
                 while start.elapsed() < config.duration {
                     let key = config.key_dist.sample(rng);
@@ -1228,11 +1224,11 @@ fn bench_map_hp_brcu<const ROLLBACK: bool>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> (u64, usize, usize, usize, usize) {
-    use hp_brcu_bench::concurrent_map::OutputHolder;
-    use hp_brcu_bench::ConcurrentMap;
+    use ds_impl::hp_brcu::concurrent_map::OutputHolder;
+    use ds_impl::hp_brcu::ConcurrentMap;
 
     unsafe { hp_brcu::set_rollback(ROLLBACK) };
-    let map = &hp_brcu_bench::list_alter::HHSList::new();
+    let map = &ds_impl::hp_brcu::list_alter::HHSList::new();
     strategy.prefill_hp_brcu(config, map);
 
     let barrier = &Arc::new(Barrier::new(
@@ -1291,7 +1287,7 @@ fn bench_map_hp_brcu<const ROLLBACK: bool>(
                 hp_brcu::THREAD.with(|handle| {
                     let handle = &mut **handle.borrow_mut();
                     let output =
-                        &mut hp_brcu_bench::list_alter::HHSList::<usize, usize>::empty_output(
+                        &mut ds_impl::hp_brcu::list_alter::HHSList::<usize, usize>::empty_output(
                             handle,
                         );
                     barrier.clone().wait();
@@ -1317,7 +1313,7 @@ fn bench_map_hp_brcu<const ROLLBACK: bool>(
                 hp_brcu::THREAD.with(|handle| {
                     let handle = &mut **handle.borrow_mut();
                     let output =
-                        &mut hp_brcu_bench::list_alter::HHSList::<usize, usize>::empty_output(
+                        &mut ds_impl::hp_brcu::list_alter::HHSList::<usize, usize>::empty_output(
                             handle,
                         );
                     let mut ops: u64 = 0;
@@ -1355,11 +1351,11 @@ fn bench_map_nbr(
     nbr_config: &NBRConfig,
     max_hazptrs: usize,
 ) -> (u64, usize, usize, usize, usize) {
-    use nbr::ConcurrentMap;
-    let map = &nbr::HHSList::new();
+    use ds_impl::nbr::ConcurrentMap;
+    let map = &ds_impl::nbr::HHSList::new();
     strategy.prefill_nbr(config, map, max_hazptrs);
 
-    let collector = &nbr_rs::Collector::new(
+    let collector = &nbr::Collector::new(
         config.writers + config.readers,
         nbr_config.bag_cap_pow2,
         nbr_config.lowatermark,
@@ -1395,7 +1391,7 @@ fn bench_map_nbr(
                         acc += allocated;
                         peak = max(peak, allocated);
 
-                        let garbages = nbr_rs::count_garbages();
+                        let garbages = nbr::count_garbages();
                         garb_acc += garbages;
                         garb_peak = max(garb_peak, garbages);
 
@@ -1420,7 +1416,7 @@ fn bench_map_nbr(
         for _ in 0..config.writers {
             s.spawn(move |_| {
                 let mut guard = collector.register();
-                let mut handle = nbr::HHSList::<usize, usize>::handle(&mut guard);
+                let mut handle = ds_impl::nbr::HHSList::<usize, usize>::handle(&mut guard);
                 barrier.clone().wait();
                 let start = Instant::now();
 
@@ -1441,7 +1437,7 @@ fn bench_map_nbr(
             let ops_sender = ops_sender.clone();
             s.spawn(move |_| {
                 let mut guard = collector.register();
-                let mut handle = nbr::HHSList::<usize, usize>::handle(&mut guard);
+                let mut handle = ds_impl::nbr::HHSList::<usize, usize>::handle(&mut guard);
                 let mut ops: u64 = 0;
                 let rng = &mut rand::thread_rng();
                 barrier.clone().wait();
@@ -1471,10 +1467,10 @@ fn bench_map_nbr(
 }
 
 fn bench_map_vbr(config: &Config, strategy: PrefillStrategy) -> (u64, usize, usize, usize, usize) {
-    use vbr::ConcurrentMap;
-    let global = &vbr::HHSList::global(config.prefill);
-    let local = &vbr::HHSList::local(global);
-    let map = &vbr::HHSList::new(local);
+    use ds_impl::vbr::ConcurrentMap;
+    let global = &ds_impl::vbr::HHSList::global(config.prefill);
+    let local = &ds_impl::vbr::HHSList::local(global);
+    let map = &ds_impl::vbr::HHSList::new(local);
     strategy.prefill_vbr(config, map, local);
 
     let barrier = &Arc::new(Barrier::new(
@@ -1506,7 +1502,7 @@ fn bench_map_vbr(config: &Config, strategy: PrefillStrategy) -> (u64, usize, usi
                         acc += allocated;
                         peak = max(peak, allocated);
 
-                        let garbages = nbr_rs::count_garbages();
+                        let garbages = nbr::count_garbages();
                         garb_acc += garbages;
                         garb_peak = max(garb_peak, garbages);
 
@@ -1530,7 +1526,7 @@ fn bench_map_vbr(config: &Config, strategy: PrefillStrategy) -> (u64, usize, usi
         // Spawn writer threads.
         for _ in 0..config.writers {
             s.spawn(move |_| {
-                let local = &vbr::HHSList::local(global);
+                let local = &ds_impl::vbr::HHSList::local(global);
                 barrier.clone().wait();
                 let start = Instant::now();
 
@@ -1550,7 +1546,7 @@ fn bench_map_vbr(config: &Config, strategy: PrefillStrategy) -> (u64, usize, usi
         for _ in 0..config.readers {
             let ops_sender = ops_sender.clone();
             s.spawn(move |_| {
-                let local = &vbr::HHSList::local(global);
+                let local = &ds_impl::vbr::HHSList::local(global);
                 let mut ops: u64 = 0;
                 let rng = &mut rand::thread_rng();
                 barrier.clone().wait();

@@ -36,15 +36,21 @@ We recommend the following environment:
 
 ### Project Structure
 
-* `./crossbeam-pebr`: The fork of [Crossbeam](https://github.com/crossbeam-rs/crossbeam) that implements PEBR [8] of which the main implementation lies under `./crossbeam-pebr/crossbeam-epoch`.
-* `./crossbeam-ebr`: The original Crossbeam source code implementing EBR [1,7].
-* `./hp_pp`: An implementation of the original HP [9,10] and HP++ [11].
-* `./hp-brcu`: An implementation of HP-RCU and HP-BRCU schemes [14].
-* `./nbr-rs`: An implementation of NBR+ [13] with signal optimization.
-* `./vbr-rs`: An implementation of VBR [16].
-* `./cdrc-rs`: An implementation of CDRC [12].
-* `./circ`: An implementation of CIRC [15].
-* `./src`: Benchmark drivers for each SMR (`./src/bin`) and implementations of data structures based on each SMR (`./src/ds_impl`).
+* `smrs`: Reclamation schemes except EBR and PEBR.
+  * `hp_pp`: An implementation of the original HP [9,10] and HP++ [11].
+  * `hp-brcu`: An implementation of HP-RCU and HP-BRCU schemes [14].
+  * `nbr-rs`: An implementation of NBR+ [13] with signal optimization.
+  * `vbr-rs`: An implementation of VBR [16].
+  * `cdrc-rs`: An implementation of CDRC [12].
+  * `circ`: An implementation of CIRC [15].
+* `src`: An implementaion of the benchmark suite.
+  * `bin`: Benchmark drivers for each SMR.
+  * `ds_impl`: Implementations of data structures based on each SMR.
+
+For the implementation of EBR and PEBR, please refer to our dedicated repository [kaist-cp/crossbeam](https://github.com/kaist-cp/crossbeam).
+
+* [`crossbeam-ebr`](https://github.com/kaist-cp/crossbeam/tree/smr-benchmark): The original Crossbeam source code implementing EBR [1,7].
+* [`crossbeam-pebr`](https://github.com/kaist-cp/crossbeam/tree/pebr): The fork of [Crossbeam](https://github.com/crossbeam-rs/crossbeam) that implements PEBR [8] of which the main implementation lies under `./crossbeam-pebr/crossbeam-epoch`.
 
 ### Setting up the Environment
 

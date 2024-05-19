@@ -1,5 +1,5 @@
 use super::concurrent_map::ConcurrentMap;
-use nbr_rs::Guard;
+use nbr::Guard;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 

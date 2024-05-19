@@ -1,5 +1,5 @@
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
-use cdrc_rs::{AtomicRc, Cs, Pointer, Rc, Snapshot, StrongPtr};
+use cdrc::{AtomicRc, Cs, Pointer, Rc, Snapshot, StrongPtr};
 
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::sync::atomic::Ordering;
@@ -514,7 +514,7 @@ where
 mod tests {
     use super::{HHSList, HList, HMList};
     use crate::ds_impl::cdrc::concurrent_map;
-    use cdrc_rs::{CsEBR, CsHP};
+    use cdrc::{CsEBR, CsHP};
 
     #[test]
     fn smoke_ebr_h_list_ebr() {
@@ -548,7 +548,7 @@ mod tests {
 
     #[test]
     fn litmus_hhs_pop() {
-        use cdrc_rs::Cs;
+        use cdrc::Cs;
         use concurrent_map::ConcurrentMap;
         let map = HHSList::new();
 

@@ -17,8 +17,7 @@ use std::sync::atomic::{compiler_fence, Ordering};
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
 
-use smr_benchmark::ds_impl::{cdrc, circ_ebr, circ_hp, ebr, hp, nr};
-use smr_benchmark::MemSampler;
+use smr_benchmark::{ds_impl, MemSampler};
 
 #[derive(PartialEq, Debug, ValueEnum, Clone)]
 #[allow(non_camel_case_types)]
@@ -148,10 +147,10 @@ fn bench(config: &Config, output: Option<&mut Writer<File>>) {
         MM::NR => bench_queue_nr(config),
         MM::EBR => bench_queue_ebr(config),
         MM::HP => bench_queue_hp(config),
-        MM::CDRC_EBR => bench_queue_cdrc::<cdrc_rs::CsEBR>(config),
-        MM::CDRC_HP => bench_queue_cdrc::<cdrc_rs::CsHP>(config),
-        MM::CDRC_EBR_FLUSH => bench_queue_cdrc_flush::<cdrc_rs::CsEBR>(config),
-        MM::CDRC_HP_FLUSH => bench_queue_cdrc_flush::<cdrc_rs::CsHP>(config),
+        MM::CDRC_EBR => bench_queue_cdrc::<cdrc::CsEBR>(config),
+        MM::CDRC_HP => bench_queue_cdrc::<cdrc::CsHP>(config),
+        MM::CDRC_EBR_FLUSH => bench_queue_cdrc_flush::<cdrc::CsEBR>(config),
+        MM::CDRC_HP_FLUSH => bench_queue_cdrc_flush::<cdrc::CsHP>(config),
         MM::CIRC_EBR => bench_queue_circ_ebr(config),
         MM::CIRC_HP => bench_queue_circ_hp(config),
     };
@@ -180,7 +179,7 @@ fn bench(config: &Config, output: Option<&mut Writer<File>>) {
 }
 
 fn bench_queue_nr(config: &Config) -> (u64, usize, usize) {
-    let queue = nr::DoubleLink::new();
+    let queue = ds_impl::nr::DoubleLink::new();
 
     let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
     let (ops_sender, ops_receiver) = mpsc::channel();
@@ -258,7 +257,7 @@ fn bench_queue_nr(config: &Config) -> (u64, usize, usize) {
 }
 
 fn bench_queue_ebr(config: &Config) -> (u64, usize, usize) {
-    let queue = ebr::DoubleLink::new();
+    let queue = ds_impl::ebr::DoubleLink::new();
     let collector = &crossbeam_ebr::Collector::new();
 
     let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
@@ -342,7 +341,7 @@ fn bench_queue_ebr(config: &Config) -> (u64, usize, usize) {
 }
 
 fn bench_queue_hp(config: &Config) -> (u64, usize, usize) {
-    let queue = hp::DoubleLink::new();
+    let queue = ds_impl::hp::DoubleLink::new();
 
     let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
     let (ops_sender, ops_receiver) = mpsc::channel();
@@ -391,7 +390,7 @@ fn bench_queue_hp(config: &Config) -> (u64, usize, usize) {
                 let mut ops: u64 = 0;
                 let rng = &mut rand::thread_rng();
                 let dist = Uniform::new(0, 100000);
-                let mut handle = hp::double_link::Handle::default();
+                let mut handle = ds_impl::hp::double_link::Handle::default();
                 barrier.clone().wait();
                 let start = Instant::now();
 
@@ -421,8 +420,8 @@ fn bench_queue_hp(config: &Config) -> (u64, usize, usize) {
     (ops_per_sec, peak_mem, avg_mem)
 }
 
-fn bench_queue_cdrc<C: cdrc_rs::Cs>(config: &Config) -> (u64, usize, usize) {
-    let queue = cdrc::DoubleLink::<_, C>::new();
+fn bench_queue_cdrc<C: cdrc::Cs>(config: &Config) -> (u64, usize, usize) {
+    let queue = ds_impl::cdrc::DoubleLink::<_, C>::new();
 
     let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
     let (ops_sender, ops_receiver) = mpsc::channel();
@@ -471,7 +470,7 @@ fn bench_queue_cdrc<C: cdrc_rs::Cs>(config: &Config) -> (u64, usize, usize) {
                 let mut ops: u64 = 0;
                 let rng = &mut rand::thread_rng();
                 let dist = Uniform::new(0, 100000);
-                let mut holder = cdrc::double_link::Holder::new();
+                let mut holder = ds_impl::cdrc::double_link::Holder::new();
                 barrier.clone().wait();
                 let start = Instant::now();
 
@@ -503,8 +502,8 @@ fn bench_queue_cdrc<C: cdrc_rs::Cs>(config: &Config) -> (u64, usize, usize) {
     (ops_per_sec, peak_mem, avg_mem)
 }
 
-fn bench_queue_cdrc_flush<C: cdrc_rs::Cs>(config: &Config) -> (u64, usize, usize) {
-    let queue = cdrc::DoubleLink::<_, C>::new();
+fn bench_queue_cdrc_flush<C: cdrc::Cs>(config: &Config) -> (u64, usize, usize) {
+    let queue = ds_impl::cdrc::DoubleLink::<_, C>::new();
 
     let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
     let (ops_sender, ops_receiver) = mpsc::channel();
@@ -553,7 +552,7 @@ fn bench_queue_cdrc_flush<C: cdrc_rs::Cs>(config: &Config) -> (u64, usize, usize
                 let mut ops: u64 = 0;
                 let rng = &mut rand::thread_rng();
                 let dist = Uniform::new(0, 100000);
-                let mut holder = cdrc::double_link::Holder::new();
+                let mut holder = ds_impl::cdrc::double_link::Holder::new();
                 barrier.clone().wait();
                 let start = Instant::now();
 
@@ -588,7 +587,7 @@ fn bench_queue_cdrc_flush<C: cdrc_rs::Cs>(config: &Config) -> (u64, usize, usize
 }
 
 fn bench_queue_circ_ebr(config: &Config) -> (u64, usize, usize) {
-    let queue = circ_ebr::DoubleLink::new();
+    let queue = ds_impl::circ_ebr::DoubleLink::new();
 
     let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
     let (ops_sender, ops_receiver) = mpsc::channel();
@@ -669,7 +668,7 @@ fn bench_queue_circ_ebr(config: &Config) -> (u64, usize, usize) {
 }
 
 fn bench_queue_circ_hp(config: &Config) -> (u64, usize, usize) {
-    let queue = circ_hp::DoubleLink::new();
+    let queue = ds_impl::circ_hp::DoubleLink::new();
 
     let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
     let (ops_sender, ops_receiver) = mpsc::channel();
@@ -718,7 +717,7 @@ fn bench_queue_circ_hp(config: &Config) -> (u64, usize, usize) {
                 let mut ops: u64 = 0;
                 let rng = &mut rand::thread_rng();
                 let dist = Uniform::new(0, 100000);
-                let mut holder = circ_hp::double_link::Holder::new();
+                let mut holder = ds_impl::circ_hp::double_link::Holder::new();
                 barrier.clone().wait();
                 let start = Instant::now();
 

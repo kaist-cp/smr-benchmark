@@ -1,5 +1,5 @@
 use super::concurrent_map::ConcurrentMap;
-use nbr_rs::{read_phase, Guard, Shield};
+use nbr::{read_phase, Guard, Shield};
 
 use hp_pp::{tag, untagged};
 use std::cmp::Ordering::{Equal, Greater, Less};
@@ -478,7 +478,7 @@ mod tests {
         use concurrent_map::ConcurrentMap;
         let map = HHSList::new();
 
-        let collector = nbr_rs::Collector::new(1, 256, 32, 2);
+        let collector = nbr::Collector::new(1, 256, 32, 2);
         let guard = &mut collector.register();
         let mut handle = HHSList::<i32, &str>::handle(guard);
         map.insert(1, "1", &mut handle, guard);

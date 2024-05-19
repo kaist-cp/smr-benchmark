@@ -1,10 +1,10 @@
 [package]
-name = "nbr-rs"
+name = "nbr"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
 description = "A concurrent garbage collector based on NBR+ (Neutralization Based Reclamation)"
-repository = "https://github.com/powergee/nbr-rs"
+repository = "https://github.com/kaist-cp/smr-benchmark"
 readme = "README.md"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

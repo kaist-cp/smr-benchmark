@@ -1,6 +1,6 @@
 use num::Bounded;
-use vbr_rs::CompareExchangeError::*;
-use vbr_rs::{ptr_with_tag, Entry, Global, Guard, ImmAtomic, Local, MutAtomic, Shared};
+use vbr::CompareExchangeError::*;
+use vbr::{ptr_with_tag, Entry, Global, Guard, ImmAtomic, Local, MutAtomic, Shared};
 
 use super::concurrent_map::ConcurrentMap;
 use std::cmp;

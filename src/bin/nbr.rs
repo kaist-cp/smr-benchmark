@@ -59,7 +59,7 @@ impl PrefillStrategy {
                 let (bag_cap_pow2, lowatermark) = extract_nbr_params(config);
                 let threads = available_parallelism().map(|v| v.get()).unwrap_or(1);
                 let collector =
-                    &nbr_rs::Collector::new(threads, bag_cap_pow2, lowatermark, max_hazptrs);
+                    &nbr::Collector::new(threads, bag_cap_pow2, lowatermark, max_hazptrs);
                 print!("prefilling with {threads} threads... ");
                 stdout().flush().unwrap();
                 scope(|s| {
@@ -81,7 +81,7 @@ impl PrefillStrategy {
                 .unwrap();
             }
             PrefillStrategy::Decreasing => {
-                let collector = &nbr_rs::Collector::new(1, 256, 32, max_hazptrs);
+                let collector = &nbr::Collector::new(1, 256, 32, max_hazptrs);
                 let mut guard = collector.register();
                 let mut handle = M::handle(&mut guard);
                 let rng = &mut rand::thread_rng();
@@ -110,7 +110,7 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
     let map = &M::new();
     strategy.prefill(config, map, max_hazptrs);
 
-    let collector = &nbr_rs::Collector::new(config.threads, bag_cap_pow2, lowatermark, max_hazptrs);
+    let collector = &nbr::Collector::new(config.threads, bag_cap_pow2, lowatermark, max_hazptrs);
 
     let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
     let (ops_sender, ops_receiver) = mpsc::channel();
@@ -139,7 +139,7 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
                         acc += allocated;
                         peak = max(peak, allocated);
 
-                        let garbages = nbr_rs::count_garbages();
+                        let garbages = nbr::count_garbages();
                         garb_acc += garbages;
                         garb_peak = max(garb_peak, garbages);
 
