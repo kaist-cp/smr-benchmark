@@ -1,5 +1,7 @@
 # SMR Benchmark: A Microbenchmark Suite for Concurrent Safe Memory Reclamation Schemes
 
+[![CI](https://github.com/kaist-cp/smr-benchmark/actions/workflows/test.yml/badge.svg)](https://github.com/kaist-cp/smr-benchmark/actions/workflows/test.yml)
+
 This is the artifact for:
 
 * Jaehwang Jung, Jeonghyeon Kim, Matthew J. Parkinson and Jeehoon Kang, Concurrent Immediate Reference Counting, PLDI 2024 [15].

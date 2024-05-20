@@ -1,9 +1,4 @@
-// TODO
-// #![warn(missing_docs)]
-// #![warn(missing_debug_implementations)]
-
-// Enabled unsable feature to use
-// unstable functions of AtomicPtr (AtomicPtr::fetch_or)
+#![doc = include_str!("../README.md")]
 #![feature(strict_provenance_atomic_ptr, strict_provenance)]
 #![feature(cfg_sanitize)]
 
