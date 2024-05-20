@@ -409,7 +409,7 @@ impl<T: ?Sized + Pointable> Atomic<T> {
     /// value is the same as `current`. The tag is also taken into account, so two pointers to the
     /// same object, but with different tags, will not be considered equal.
     ///
-    /// Unlike [`compare_exchange`], this method is allowed to spuriously fail even when comparison
+    /// Unlike `compare_exchange`, this method is allowed to spuriously fail even when comparison
     /// succeeds, which can result in more efficient code on some platforms.  The return value is a
     /// result indicating whether the new pointer was written. On success the pointer that was
     /// written is returned. On failure the actual current value and `new` are returned.

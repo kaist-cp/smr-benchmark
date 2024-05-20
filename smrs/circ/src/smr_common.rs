@@ -5,7 +5,7 @@ use crate::{GraphNode, RcInner, TaggedCnt};
 /// A SMR-specific acquired pointer trait.
 ///
 /// In most cases such as EBR, IBR and Hyaline, Acquired is equivalent to a simple tagged
-/// pointer pointing a Counted<T>.
+/// pointer pointing a `Counted<T>`.
 ///
 /// However, for some pointer-based SMR, `Acquired` should contain other information like an
 /// index of a hazard slot. For this reason, a type for acquired pointer must be SMR-dependent,
