@@ -29,7 +29,9 @@ jobs:
       - name: Build docs
         run: |
           cargo clean --doc
-          cargo doc --no-deps
+          cargo doc --workspace --no-deps --lib
+          cargo doc -p crossbeam-epoch --no-deps
+          cargo doc -p crossbeam-pebr-epoch --no-deps
 
       # GitHub cannot find the nested index file by default.
       # We need to specify the target manually.
