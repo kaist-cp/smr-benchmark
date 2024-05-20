@@ -28,7 +28,7 @@ This crate provides two major APIs: `try_protect_pp` and `try_unlink`, correspon
 
 ### `try_protect_pp`
 
-```rust
+```ignore
 pub fn try_protect_pp<T, S, F>(
     &mut self,
     ptr: *mut T,
@@ -53,7 +53,7 @@ If `src` is invalidated, `try_protect_pp` returns `false` meaning that it is uns
 
 ### `try_unlink`
 
-```rust
+```ignore
 pub unsafe fn try_unlink<T>(
     unlink: impl Unlink<T>,
     frontier: &[*mut T]

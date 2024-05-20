@@ -1,3 +1,13 @@
+[workspace]
+members = [
+    "./smrs/hp-pp",
+    "./smrs/nbr",
+    "./smrs/cdrc",
+    "./smrs/hp-brcu",
+    "./smrs/vbr",
+    "./smrs/circ",
+]
+
 [package]
 name = "smr-benchmark"
 version = "0.1.0"
