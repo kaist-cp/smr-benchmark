@@ -1,7 +1,7 @@
 # SMR Benchmark: A Microbenchmark Suite for Concurrent Safe Memory Reclamation Schemes
 
 [![CI](https://github.com/kaist-cp/smr-benchmark/actions/workflows/test.yml/badge.svg)](https://github.com/kaist-cp/smr-benchmark/actions/workflows/test.yml)
-[![Docs](https://github.com/kaist-cp/smr-benchmark/actions/workflows/doc.yml/badge.svg)](https://github.com/kaist-cp/smr-benchmark/actions/workflows/doc.yml)
+[![Docs](https://github.com/kaist-cp/smr-benchmark/actions/workflows/doc.yml/badge.svg)](https://kaist-cp.github.io/smr-benchmark)
 
 This is the artifact for:
 
