@@ -34,7 +34,7 @@ jobs:
       # GitHub cannot find the nested index file by default.
       # We need to specify the target manually.
       - name: Add redirect
-        run: echo '<meta http-equiv="refresh" content="0;url=aoc/index.html">' > target/doc/index.html
+        run: echo '<meta http-equiv="refresh" content="0;url=smr_benchmark/index.html">' > target/doc/index.html
 
       - name: Remove lock file
         run: rm target/doc/.lock
