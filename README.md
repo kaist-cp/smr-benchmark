@@ -28,6 +28,8 @@ cargo build --release
 # see subdirectories in `bench-scripts`.
 ```
 
+To add your own implementation of SMR and data structures, please refer to [this guide](./docs/adding-your-smr.md).
+
 ## Getting Started Guide
 
 We recommend the following environment:
