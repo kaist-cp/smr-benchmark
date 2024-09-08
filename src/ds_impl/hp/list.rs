@@ -5,7 +5,7 @@ use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
 use hp_pp::{
-    decompose_ptr, light_membarrier, tag, untagged, HazardPointer, Thread, DEFAULT_DOMAIN,
+    decompose_ptr, light_membarrier, retire, tag, untagged, HazardPointer, Thread, DEFAULT_DOMAIN,
 };
 
 // `#[repr(C)]` is used to ensure the first field
@@ -45,6 +45,9 @@ impl<K, V> Drop for List<K, V> {
 pub struct Handle<'domain> {
     prev_h: HazardPointer<'domain>,
     curr_h: HazardPointer<'domain>,
+    // `anchor_h` and `anchor_next_h` are used for `find_harris`
+    anchor_h: HazardPointer<'domain>,
+    anchor_next_h: HazardPointer<'domain>,
     thread: Thread<'domain>,
 }
 
@@ -53,6 +56,8 @@ impl Default for Handle<'static> {
         Self {
             prev_h: HazardPointer::default(),
             curr_h: HazardPointer::default(),
+            anchor_h: HazardPointer::default(),
+            anchor_next_h: HazardPointer::default(),
             thread: Thread::new(&DEFAULT_DOMAIN),
         }
     }
@@ -68,7 +73,12 @@ impl<'domain> Handle<'domain> {
 
 pub struct Cursor<'domain, 'hp, K, V> {
     prev: *mut Node<K, V>, // not &AtomicPtr because we can't construct the cursor out of thin air
+    // For harris, this keeps the mark bit. Don't mix harris and harris-micheal.
     curr: *mut Node<K, V>,
+    // `anchor` is used for `find_harris`
+    // anchor and anchor_next are non-null iff exist
+    anchor: *mut Node<K, V>,
+    anchor_next: *mut Node<K, V>,
     handle: &'hp mut Handle<'domain>,
 }
 
@@ -77,6 +87,8 @@ impl<'domain, 'hp, K, V> Cursor<'domain, 'hp, K, V> {
         Self {
             prev: head as *const _ as *mut _,
             curr: head.load(Ordering::Acquire),
+            anchor: ptr::null_mut(),
+            anchor_next: ptr::null_mut(),
             handle,
         }
     }
@@ -86,6 +98,106 @@ impl<'domain, 'hp, K, V> Cursor<'domain, 'hp, K, V>
 where
     K: Ord,
 {
+    fn find_harris(&mut self, key: &K) -> Result<bool, ()> {
+        // Finding phase
+        // - cursor.curr: first unmarked node w/ key >= search key (4)
+        // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
+        // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
+
+        let found = loop {
+            if self.curr.is_null() {
+                break false;
+            }
+
+            let prev = unsafe { &(*self.prev).next };
+
+            let (curr_base, curr_tag) = decompose_ptr(self.curr);
+
+            self.handle.curr_h.protect_raw(curr_base);
+            light_membarrier();
+
+            // Validation depending on the state of self.curr.
+            //
+            // - If it is marked, validate on anchor.
+            // - If it is not marked, validate on curr.
+
+            if curr_tag != 0 {
+                debug_assert!(!self.anchor.is_null());
+                debug_assert!(!self.anchor_next.is_null());
+                let (an_base, an_tag) =
+                    decompose_ptr(unsafe { &(*self.anchor).next }.load(Ordering::Acquire));
+                if an_tag != 0 {
+                    return Err(());
+                } else if an_base != self.anchor_next {
+                    // TODO: optimization here, can restart from anchor, but need to setup some protection for prev & curr.
+                    return Err(());
+                }
+            } else {
+                let (curr_new_base, curr_new_tag) = decompose_ptr(prev.load(Ordering::Acquire));
+                // TODO: is this optimization correct?
+                // - The first one is a bit more dicy.
+                // - The second one is for sure correct as original HMList does this.
+                if curr_new_tag != 0 || curr_new_base != self.curr {
+                    // In contrary to what HP04 paper does, it's fine to retry protecting the new node
+                    // without restarting from head as long as prev is not logically deleted.
+                    self.curr = curr_new_base;
+                    continue;
+                }
+            }
+
+            let curr_node = unsafe { &*curr_base };
+            let (next_base, next_tag) = decompose_ptr(curr_node.next.load(Ordering::Acquire));
+            // TODO: REALLY THINK HARD ABOUT THIS SHIELD STUFF.
+            if next_tag == 0 {
+                if curr_node.key < *key {
+                    self.prev = self.curr;
+                    self.curr = next_base;
+                    self.anchor = ptr::null_mut();
+                    HazardPointer::swap(&mut self.handle.curr_h, &mut self.handle.prev_h);
+                } else {
+                    break curr_node.key == *key;
+                }
+            } else {
+                if self.anchor.is_null() {
+                    self.anchor = self.prev;
+                    self.anchor_next = self.curr;
+                    HazardPointer::swap(&mut self.handle.anchor_h, &mut self.handle.prev_h);
+                } else if self.anchor_next == self.prev {
+                    HazardPointer::swap(&mut self.handle.anchor_next_h, &mut self.handle.prev_h);
+                }
+                self.prev = self.curr;
+                self.curr = next_base;
+                HazardPointer::swap(&mut self.handle.prev_h, &mut self.handle.curr_h);
+            }
+        };
+
+        if self.anchor.is_null() {
+            Ok(found)
+        } else {
+            // Should have seen a untagged curr
+            debug_assert_eq!(tag(self.curr), 0);
+            debug_assert_eq!(tag(self.anchor_next), 0);
+            // CAS
+            unsafe { (*self.anchor).next }.compare_exchange(
+                self.anchor_next,
+                self.curr,
+                Ordering::Release,
+                Ordering::Relaxed,
+            )?;
+
+            let mut node = self.anchor_next;
+            while untagged(node) != self.curr {
+                // SAFETY: the fact that node node is tagged means that it cannot be modified, hence we can safety do an non-atomic load.
+                let next = unsafe { *{ *node }.next.as_ptr() };
+                debug_assert!(tag(next) != 0);
+                unsafe { retire(untagged(node)) };
+                node = next;
+            }
+
+            Ok(found)
+        }
+    }
+
     #[inline]
     fn find_harris_michael(&mut self, key: &K) -> Result<bool, ()> {
         loop {
