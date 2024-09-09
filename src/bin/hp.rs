@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use smr_benchmark::config::map::{setup, BagSize, BenchWriter, Config, Op, Perf, DS};
 use smr_benchmark::ds_impl::hp::{
-    BonsaiTreeMap, ConcurrentMap, EFRBTree, HMList, HashMap, SkipList,
+    BonsaiTreeMap, ConcurrentMap, EFRBTree, HList, HMList, HashMap, SkipList,
 };
 
 fn main() {
@@ -28,6 +28,7 @@ fn main() {
 fn bench(config: &Config, output: BenchWriter) {
     println!("{}", config);
     let perf = match config.ds {
+        DS::HList => bench_map::<HList<usize, usize>>(config, PrefillStrategy::Decreasing),
         DS::HMList => bench_map::<HMList<usize, usize>>(config, PrefillStrategy::Decreasing),
         DS::HashMap => bench_map::<HashMap<usize, usize>>(config, PrefillStrategy::Decreasing),
         DS::EFRBTree => bench_map::<EFRBTree<usize, usize>>(config, PrefillStrategy::Random),

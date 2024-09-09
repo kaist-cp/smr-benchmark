@@ -134,10 +134,12 @@ where
                 }
             } else {
                 let (curr_new_base, curr_new_tag) = decompose_ptr(prev.load(Ordering::Acquire));
-                // TODO: is this optimization correct?
-                // - The first one is a bit more dicy.
-                // - The second one is for sure correct as original HMList does this.
-                if curr_new_tag != 0 || curr_new_base != self.curr {
+                if curr_new_tag != 0 {
+                    // TODO: this seems correct, but deadlocks? Might not be dealing with stuff correctly.
+                    // self.curr = curr_new_base;
+                    // continue;
+                    return Err(());
+                } else if curr_new_base != self.curr {
                     // In contrary to what HP04 paper does, it's fine to retry protecting the new node
                     // without restarting from head as long as prev is not logically deleted.
                     self.curr = curr_new_base;
@@ -178,17 +180,19 @@ where
             debug_assert_eq!(tag(self.curr), 0);
             debug_assert_eq!(tag(self.anchor_next), 0);
             // CAS
-            unsafe { (*self.anchor).next }.compare_exchange(
-                self.anchor_next,
-                self.curr,
-                Ordering::Release,
-                Ordering::Relaxed,
-            )?;
+            unsafe { &(*self.anchor).next }
+                .compare_exchange(
+                    self.anchor_next,
+                    self.curr,
+                    Ordering::Release,
+                    Ordering::Relaxed,
+                )
+                .map_err(|_| ())?;
 
             let mut node = self.anchor_next;
             while untagged(node) != self.curr {
-                // SAFETY: the fact that node node is tagged means that it cannot be modified, hence we can safety do an non-atomic load.
-                let next = unsafe { *{ *node }.next.as_ptr() };
+                // SAFETY: the fact that node is tagged means that it cannot be modified, hence we can safety do an non-atomic load.
+                let next = unsafe { *({ &*node }.next.as_ptr()) };
                 debug_assert!(tag(next) != 0);
                 unsafe { retire(untagged(node)) };
                 node = next;
@@ -429,6 +433,18 @@ where
         }
     }
 
+    pub fn harris_get<'hp>(&self, key: &K, handle: &'hp mut Handle<'_>) -> Option<&'hp V> {
+        self.get(key, Cursor::find_harris, handle)
+    }
+
+    pub fn harris_insert(&self, key: K, value: V, handle: &mut Handle<'_>) -> bool {
+        self.insert(key, value, Cursor::find_harris, handle)
+    }
+
+    pub fn harris_remove<'hp>(&self, key: &K, handle: &'hp mut Handle<'_>) -> Option<&'hp V> {
+        self.remove(key, Cursor::find_harris, handle)
+    }
+
     pub fn harris_michael_get<'hp>(&self, key: &K, handle: &'hp mut Handle<'_>) -> Option<&'hp V> {
         self.get(key, Cursor::find_harris_michael, handle)
     }
@@ -443,6 +459,49 @@ where
         handle: &'hp mut Handle<'_>,
     ) -> Option<&'hp V> {
         self.remove(key, Cursor::find_harris_michael, handle)
+    }
+}
+
+pub struct HList<K, V> {
+    inner: List<K, V>,
+}
+
+impl<K, V> HList<K, V>
+where
+    K: Ord,
+{
+    /// Pop the first element efficiently.
+    /// This method is used for only the fine grained benchmark (src/bin/long_running).
+    pub fn pop<'hp>(&self, handle: &'hp mut Handle<'_>) -> Option<(&'hp K, &'hp V)> {
+        self.inner.pop(handle)
+    }
+}
+
+impl<K, V> ConcurrentMap<K, V> for HList<K, V>
+where
+    K: Ord,
+{
+    type Handle<'domain> = Handle<'domain>;
+
+    fn handle() -> Self::Handle<'static> {
+        Handle::default()
+    }
+
+    fn new() -> Self {
+        HList { inner: List::new() }
+    }
+
+    #[inline(always)]
+    fn get<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
+        self.inner.harris_get(key, handle)
+    }
+    #[inline(always)]
+    fn insert(&self, handle: &mut Self::Handle<'_>, key: K, value: V) -> bool {
+        self.inner.harris_insert(key, value, handle)
+    }
+    #[inline(always)]
+    fn remove<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
+        self.inner.harris_remove(key, handle)
     }
 }
 
@@ -505,6 +564,34 @@ mod tests {
         let map = HMList::new();
 
         let handle = &mut HMList::<i32, String>::handle();
+        map.insert(handle, 1, "1".to_string());
+        map.insert(handle, 2, "2".to_string());
+        map.insert(handle, 3, "3".to_string());
+
+        fn assert_eq(a: (&i32, &String), b: (i32, String)) {
+            assert_eq!(*a.0, b.0);
+            assert_eq!(*a.1, b.1);
+        }
+
+        assert_eq(map.pop(handle).unwrap(), (1, "1".to_string()));
+        assert_eq(map.pop(handle).unwrap(), (2, "2".to_string()));
+        assert_eq(map.pop(handle).unwrap(), (3, "3".to_string()));
+        assert_eq!(map.pop(handle), None);
+    }
+
+    use super::HList;
+
+    #[test]
+    fn smoke_h_list() {
+        concurrent_map::tests::smoke::<HList<i32, String>>();
+    }
+
+    #[test]
+    fn litmus_h_pop() {
+        use concurrent_map::ConcurrentMap;
+        let map = HList::new();
+
+        let handle = &mut HList::<i32, String>::handle();
         map.insert(handle, 1, "1".to_string());
         map.insert(handle, 2, "2".to_string());
         map.insert(handle, 3, "3".to_string());
