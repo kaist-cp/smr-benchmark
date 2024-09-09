@@ -98,6 +98,13 @@ impl<'domain, 'hp, K, V> Cursor<'domain, 'hp, K, V>
 where
     K: Ord,
 {
+    // TODO: Deadlocking.
+
+    // Invariants:
+    // anchor, anchor_next: protected if they are not null.
+    // prev: always protected with prev_sh
+    // curr: not protected.
+    // curr: also has tag value when it is obtained from prev.
     fn find_harris(&mut self, key: &K) -> Result<bool, ()> {
         // Finding phase
         // - cursor.curr: first unmarked node w/ key >= search key (4)
@@ -122,13 +129,19 @@ where
             // - If it is not marked, validate on curr.
 
             if curr_tag != 0 {
+                // This means that prev -> curr was marked, hence persistent.
                 debug_assert!(!self.anchor.is_null());
                 debug_assert!(!self.anchor_next.is_null());
                 let (an_base, an_tag) =
                     decompose_ptr(unsafe { &(*self.anchor).next }.load(Ordering::Acquire));
+                // Validate on anchor, which should still be the same and cleared.
                 if an_tag != 0 {
+                    // Anchor dirty -> someone logically deleted it -> progress.
                     return Err(());
                 } else if an_base != self.anchor_next {
+                    // Anchor changed -> someone updated it.
+                    // - Someone else cleared the logically deleted chain -> their find must return -> they must attempt CAS.
+
                     // TODO: optimization here, can restart from anchor, but need to setup some protection for prev & curr.
                     return Err(());
                 }
@@ -140,10 +153,14 @@ where
                     // continue;
                     return Err(());
                 } else if curr_new_base != self.curr {
+                    return Err(());
+
                     // In contrary to what HP04 paper does, it's fine to retry protecting the new node
                     // without restarting from head as long as prev is not logically deleted.
-                    self.curr = curr_new_base;
-                    continue;
+
+                    // TODO: this should be correct.
+                    // self.curr = curr_new_base;
+                    // continue;
                 }
             }
 
@@ -174,6 +191,7 @@ where
         };
 
         if self.anchor.is_null() {
+            self.curr = untagged(self.curr);
             Ok(found)
         } else {
             // Should have seen a untagged curr
@@ -187,7 +205,10 @@ where
                     Ordering::Release,
                     Ordering::Relaxed,
                 )
-                .map_err(|_| ())?;
+                .map_err(|_| {
+                    self.curr = untagged(self.curr);
+                    ()
+                })?;
 
             let mut node = self.anchor_next;
             while untagged(node) != self.curr {
@@ -197,7 +218,7 @@ where
                 unsafe { retire(untagged(node)) };
                 node = next;
             }
-
+            self.curr = untagged(self.curr);
             Ok(found)
         }
     }
@@ -249,6 +270,83 @@ where
             self.curr = next_base;
         }
     }
+
+    // fn find_hhs(&mut self, key: &K) -> Result<bool, ()> {
+    //     // Finding phase
+    //     // - cursor.curr: first unmarked node w/ key >= search key (4)
+    //     // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
+    //     // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
+
+    //     loop {
+    //         if self.curr.is_null() {
+    //             return Ok(false);
+    //         }
+
+    //         let prev = unsafe { &(*self.prev).next };
+
+    //         let (curr_base, curr_tag) = decompose_ptr(self.curr);
+
+    //         self.handle.curr_h.protect_raw(curr_base);
+    //         light_membarrier();
+
+    //         // Validation depending on the state of self.curr.
+    //         //
+    //         // - If it is marked, validate on anchor.
+    //         // - If it is not marked, validate on curr.
+
+    //         if curr_tag != 0 {
+    //             debug_assert!(!self.anchor.is_null());
+    //             debug_assert!(!self.anchor_next.is_null());
+    //             let (an_base, an_tag) =
+    //                 decompose_ptr(unsafe { &(*self.anchor).next }.load(Ordering::Acquire));
+    //             if an_tag != 0 {
+    //                 return Err(());
+    //             } else if an_base != self.anchor_next {
+    //                 // TODO: optimization here, can restart from anchor, but need to setup some protection for prev & curr.
+    //                 return Err(());
+    //             }
+    //         } else {
+    //             let (curr_new_base, curr_new_tag) = decompose_ptr(prev.load(Ordering::Acquire));
+    //             if curr_new_tag != 0 {
+    //                 // TODO: this seems correct, but deadlocks? Might not be dealing with stuff correctly.
+    //                 // self.curr = curr_new_base;
+    //                 // continue;
+    //                 return Err(());
+    //             } else if curr_new_base != self.curr {
+    //                 // In contrary to what HP04 paper does, it's fine to retry protecting the new node
+    //                 // without restarting from head as long as prev is not logically deleted.
+    //                 self.curr = curr_new_base;
+    //                 continue;
+    //             }
+    //         }
+
+    //         let curr_node = unsafe { &*curr_base };
+    //         let (next_base, next_tag) = decompose_ptr(curr_node.next.load(Ordering::Acquire));
+    //         // TODO: REALLY THINK HARD ABOUT THIS SHIELD STUFF.
+    //         // TODO: check key first, then traversal.
+    //         if next_tag == 0 {
+    //             if curr_node.key < *key {
+    //                 self.prev = self.curr;
+    //                 self.curr = next_base;
+    //                 self.anchor = ptr::null_mut();
+    //                 HazardPointer::swap(&mut self.handle.curr_h, &mut self.handle.prev_h);
+    //             } else {
+    //                 return Ok(curr_node.key == *key);
+    //             }
+    //         } else {
+    //             if self.anchor.is_null() {
+    //                 self.anchor = self.prev;
+    //                 self.anchor_next = self.curr;
+    //                 HazardPointer::swap(&mut self.handle.anchor_h, &mut self.handle.prev_h);
+    //             } else if self.anchor_next == self.prev {
+    //                 HazardPointer::swap(&mut self.handle.anchor_next_h, &mut self.handle.prev_h);
+    //             }
+    //             self.prev = self.curr;
+    //             self.curr = next_base;
+    //             HazardPointer::swap(&mut self.handle.prev_h, &mut self.handle.curr_h);
+    //         }
+    //     }
+    // }
 }
 
 impl<K, V> List<K, V>
