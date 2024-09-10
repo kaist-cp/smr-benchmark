@@ -112,11 +112,11 @@ where
         // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
 
         let found = loop {
-            if self.curr.is_null() {
+            if untagged(self.curr).is_null() {
                 break false;
             }
 
-            let prev = unsafe { &(*self.prev).next };
+            let prev = unsafe { &(*untagged(self.prev)).next };
 
             let (curr_base, curr_tag) = decompose_ptr(self.curr);
 
@@ -130,10 +130,10 @@ where
 
             if curr_tag != 0 {
                 // This means that prev -> curr was marked, hence persistent.
-                debug_assert!(!self.anchor.is_null());
-                debug_assert!(!self.anchor_next.is_null());
+                debug_assert!(!untagged(self.anchor).is_null());
+                debug_assert!(!untagged(self.anchor_next).is_null());
                 let (an_base, an_tag) =
-                    decompose_ptr(unsafe { &(*self.anchor).next }.load(Ordering::Acquire));
+                    decompose_ptr(unsafe { &(*untagged(self.anchor)).next }.load(Ordering::Acquire));
                 // Validate on anchor, which should still be the same and cleared.
                 if an_tag != 0 {
                     // Anchor dirty -> someone logically deleted it -> progress.
@@ -146,38 +146,27 @@ where
                     return Err(());
                 }
             } else {
-                let (curr_new_base, curr_new_tag) = decompose_ptr(prev.load(Ordering::Acquire));
-                if curr_new_tag != 0 {
-                    // TODO: this seems correct, but deadlocks? Might not be dealing with stuff correctly.
-                    // self.curr = curr_new_base;
-                    // continue;
+                // TODO: optimize here.
+                if prev.load(Ordering::Acquire) != self.curr {
                     return Err(());
-                } else if curr_new_base != self.curr {
-                    return Err(());
-
-                    // In contrary to what HP04 paper does, it's fine to retry protecting the new node
-                    // without restarting from head as long as prev is not logically deleted.
-
-                    // TODO: this should be correct.
-                    // self.curr = curr_new_base;
-                    // continue;
                 }
             }
 
             let curr_node = unsafe { &*curr_base };
-            let (next_base, next_tag) = decompose_ptr(curr_node.next.load(Ordering::Acquire));
+            let next = curr_node.next.load(Ordering::Acquire);
+            let (_, next_tag) = decompose_ptr(next);
             // TODO: REALLY THINK HARD ABOUT THIS SHIELD STUFF.
             if next_tag == 0 {
                 if curr_node.key < *key {
                     self.prev = self.curr;
-                    self.curr = next_base;
+                    self.curr = next;
                     self.anchor = ptr::null_mut();
                     HazardPointer::swap(&mut self.handle.curr_h, &mut self.handle.prev_h);
                 } else {
                     break curr_node.key == *key;
                 }
             } else {
-                if self.anchor.is_null() {
+                if untagged(self.anchor).is_null() {
                     self.anchor = self.prev;
                     self.anchor_next = self.curr;
                     HazardPointer::swap(&mut self.handle.anchor_h, &mut self.handle.prev_h);
@@ -185,24 +174,23 @@ where
                     HazardPointer::swap(&mut self.handle.anchor_next_h, &mut self.handle.prev_h);
                 }
                 self.prev = self.curr;
-                self.curr = next_base;
+                self.curr = next;
                 HazardPointer::swap(&mut self.handle.prev_h, &mut self.handle.curr_h);
             }
         };
 
-        if self.anchor.is_null() {
+        if untagged(self.anchor).is_null() {
+            self.prev = untagged(self.prev);
             self.curr = untagged(self.curr);
             Ok(found)
         } else {
-            // Should have seen a untagged curr
-            debug_assert_eq!(tag(self.curr), 0);
             debug_assert_eq!(tag(self.anchor_next), 0);
             // CAS
-            unsafe { &(*self.anchor).next }
+            unsafe { &(*untagged(self.anchor)).next }
                 .compare_exchange(
                     self.anchor_next,
-                    self.curr,
-                    Ordering::Release,
+                    untagged(self.curr),
+                    Ordering::AcqRel,
                     Ordering::Relaxed,
                 )
                 .map_err(|_| {
@@ -211,13 +199,14 @@ where
                 })?;
 
             let mut node = self.anchor_next;
-            while untagged(node) != self.curr {
+            while untagged(node) != untagged(self.curr) {
                 // SAFETY: the fact that node is tagged means that it cannot be modified, hence we can safety do an non-atomic load.
-                let next = unsafe { *({ &*node }.next.as_ptr()) };
+                let next = unsafe { *{ &*untagged(node) }.next.as_ptr() };
                 debug_assert!(tag(next) != 0);
                 unsafe { retire(untagged(node)) };
                 node = next;
             }
+            self.prev = untagged(self.anchor);
             self.curr = untagged(self.curr);
             Ok(found)
         }
