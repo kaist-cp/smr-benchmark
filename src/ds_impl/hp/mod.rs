@@ -1,4 +1,5 @@
 pub mod concurrent_map;
+pub mod pointers;
 
 pub mod bonsai_tree;
 pub mod double_link;

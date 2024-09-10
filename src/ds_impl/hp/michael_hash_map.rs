@@ -11,7 +11,7 @@ pub struct HashMap<K, V> {
 
 impl<K, V> HashMap<K, V>
 where
-    K: Ord + Hash,
+    K: Ord + Hash + 'static,
 {
     pub fn with_capacity(n: usize) -> Self {
         let mut buckets = Vec::with_capacity(n);
@@ -52,7 +52,7 @@ where
 
 impl<K, V> ConcurrentMap<K, V> for HashMap<K, V>
 where
-    K: Ord + Hash + Send,
+    K: Ord + Hash + Send + 'static,
     V: Send,
 {
     type Handle<'domain> = Handle<'domain>;
