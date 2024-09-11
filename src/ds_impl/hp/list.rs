@@ -1,6 +1,7 @@
 use super::concurrent_map::ConcurrentMap;
 
 use super::pointers::{Atomic, Pointer, Shared};
+use core::mem;
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::sync::atomic::Ordering;
 
@@ -31,10 +32,10 @@ where
 
 impl<K, V> Drop for List<K, V> {
     fn drop(&mut self) {
-        let mut curr = self.head.as_shared();
+        let mut o_curr = mem::take(&mut self.head);
 
-        while !curr.is_null() {
-            curr = unsafe { curr.into_owned() }.next.as_shared();
+        while let Some(curr) = unsafe { o_curr.try_into_owned() } {
+            o_curr = curr.next;
         }
     }
 }
@@ -95,8 +96,6 @@ impl<'domain, 'hp, K, V> Cursor<'domain, 'hp, K, V>
 where
     K: Ord,
 {
-    // TODO: Deadlocking.
-
     // Invariants:
     // anchor, anchor_next: protected if they are not null.
     // prev: always protected with prev_sh
@@ -363,7 +362,7 @@ where
         loop {
             let mut cursor = Cursor::new(&self.head, handle.launder());
             match find(&mut cursor, key) {
-                Ok(true) => return unsafe { Some(&(cursor.curr.deref().value)) },
+                Ok(true) => return Some(&unsafe { cursor.curr.deref() }.value),
                 Ok(false) => return None,
                 Err(_) => continue,
             }
@@ -372,7 +371,7 @@ where
 
     fn insert_inner<'domain, 'hp, F>(
         &self,
-        node: Shared<Node<K, V>>,
+        mut node: Box<Node<K, V>>,
         find: &F,
         handle: &'hp mut Handle<'domain>,
     ) -> Result<bool, ()>
@@ -381,21 +380,20 @@ where
     {
         loop {
             let mut cursor = Cursor::new(&self.head, handle.launder());
-            let found = find(&mut cursor, unsafe { &node.deref().key })?;
+            let found = find(&mut cursor, &node.key)?;
             if found {
-                drop(unsafe { node.into_owned() });
                 return Ok(false);
             }
 
-            unsafe { node.deref() }
-                .next
-                .store(cursor.curr, Ordering::Relaxed);
-            if unsafe { cursor.prev.deref() }
-                .next
-                .compare_exchange(cursor.curr, node, Ordering::Release, Ordering::Relaxed)
-                .is_ok()
-            {
-                return Ok(true);
+            node.next = cursor.curr.into();
+            match unsafe { cursor.prev.deref() }.next.compare_exchange(
+                cursor.curr,
+                node,
+                Ordering::Release,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Ok(true),
+                Err(e) => node = e.new,
             }
         }
     }
@@ -411,7 +409,7 @@ where
     where
         F: Fn(&mut Cursor<'domain, 'hp, K, V>, &K) -> Result<bool, ()>,
     {
-        let node = Shared::from_owned(Node {
+        let node = Box::new(Node {
             key,
             value,
             next: Atomic::null(),

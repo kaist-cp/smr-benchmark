@@ -70,12 +70,23 @@ impl<T> Atomic<T> {
     }
 
     #[inline]
-    pub unsafe fn into_owned(self) -> Box<T> {
-        Box::from_raw(self.link.into_inner())
+    pub unsafe fn try_into_owned(self) -> Option<Box<T>> {
+        let ptr = base_ptr(self.link.into_inner());
+        if ptr.is_null() {
+            return None;
+        } else {
+            Some(unsafe { Box::from_raw(ptr) })
+        }
     }
 
     #[inline]
-    pub fn as_shared(&self) -> Shared<T> {
+    pub unsafe fn into_owned(self) -> Box<T> {
+        unsafe { Box::from_raw(self.link.into_inner()) }
+    }
+
+    #[inline]
+    // TODO: best API? might be better to just wrap as_ptr, without the deref.
+    pub unsafe fn as_shared(&self) -> Shared<T> {
         Shared {
             ptr: unsafe { *self.link.as_ptr() },
         }
@@ -112,7 +123,7 @@ impl<T> Shared<T> {
 
     #[inline]
     pub unsafe fn into_owned(self) -> T {
-        *Box::from_raw(base_ptr(self.ptr))
+        unsafe { *Box::from_raw(base_ptr(self.ptr)) }
     }
 
     #[inline]
