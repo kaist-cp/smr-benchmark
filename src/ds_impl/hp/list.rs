@@ -374,15 +374,17 @@ where
         mut node: Box<Node<K, V>>,
         find: &F,
         handle: &'hp mut Handle<'domain>,
-    ) -> Result<bool, ()>
+    ) -> bool
     where
         F: Fn(&mut Cursor<'domain, 'hp, K, V>, &K) -> Result<bool, ()>,
     {
         loop {
             let mut cursor = Cursor::new(&self.head, handle.launder());
-            let found = find(&mut cursor, &node.key)?;
+            let Ok(found) = find(&mut cursor, &node.key) else {
+                continue;
+            };
             if found {
-                return Ok(false);
+                return false;
             }
 
             node.next = cursor.curr.into();
@@ -392,7 +394,7 @@ where
                 Ordering::Release,
                 Ordering::Relaxed,
             ) {
-                Ok(_) => return Ok(true),
+                Ok(_) => return true,
                 Err(e) => node = e.new,
             }
         }
@@ -415,12 +417,7 @@ where
             next: Atomic::null(),
         });
 
-        loop {
-            match self.insert_inner(node, &find, handle.launder()) {
-                Ok(r) => return r,
-                Err(()) => continue,
-            }
-        }
+        self.insert_inner(node, &find, handle.launder())
     }
 
     fn remove_inner<'domain, 'hp, F>(
@@ -428,15 +425,17 @@ where
         key: &K,
         find: &F,
         handle: &'hp mut Handle<'domain>,
-    ) -> Result<Option<&'hp V>, ()>
+    ) -> Option<&'hp V>
     where
         F: Fn(&mut Cursor<'domain, 'hp, K, V>, &K) -> Result<bool, ()>,
     {
         loop {
             let mut cursor = Cursor::new(&self.head, handle.launder());
-            let found = find(&mut cursor, key)?;
+            let Ok(found) = find(&mut cursor, key) else {
+                continue;
+            };
             if !found {
-                return Ok(None);
+                return None;
             }
 
             let curr_node = unsafe { cursor.curr.deref() };
@@ -459,7 +458,7 @@ where
                 };
             }
 
-            return Ok(Some(&curr_node.value));
+            return Some(&curr_node.value);
         }
     }
 
@@ -473,12 +472,7 @@ where
     where
         F: Fn(&mut Cursor<'domain, 'hp, K, V>, &K) -> Result<bool, ()>,
     {
-        loop {
-            match self.remove_inner(key, &find, handle.launder()) {
-                Ok(r) => return r,
-                Err(_) => continue,
-            }
-        }
+        self.remove_inner(key, &find, handle.launder())
     }
 
     #[inline]
