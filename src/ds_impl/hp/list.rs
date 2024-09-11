@@ -197,7 +197,7 @@ where
                 // SAFETY: the fact that node is tagged means that it cannot be modified, hence we can safety do an non-atomic load.
                 let next = unsafe { node.deref().next.as_shared() };
                 debug_assert!(next.tag() != 0);
-                unsafe { retire(node.with_tag(0).into_raw()) };
+                unsafe { self.handle.thread.retire(node.with_tag(0).into_raw()) };
                 node = next;
             }
             self.prev = self.anchor.with_tag(0);
