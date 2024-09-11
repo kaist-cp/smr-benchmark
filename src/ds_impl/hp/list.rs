@@ -5,7 +5,7 @@ use core::mem;
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::sync::atomic::Ordering;
 
-use hp_pp::{light_membarrier, retire, HazardPointer, Thread, DEFAULT_DOMAIN};
+use hp_pp::{light_membarrier, HazardPointer, Thread, DEFAULT_DOMAIN};
 
 // `#[repr(C)]` is used to ensure the first field
 // is also the first data in the memory alignment.
