@@ -2,11 +2,11 @@ use super::concurrent_map::ConcurrentMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use super::list::HMList;
+use super::list::HHSList;
 pub use super::list::{Cursor, Handle};
 
 pub struct HashMap<K, V> {
-    buckets: Vec<HMList<K, V>>,
+    buckets: Vec<HHSList<K, V>>,
 }
 
 impl<K, V> HashMap<K, V>
@@ -16,14 +16,14 @@ where
     pub fn with_capacity(n: usize) -> Self {
         let mut buckets = Vec::with_capacity(n);
         for _ in 0..n {
-            buckets.push(HMList::new());
+            buckets.push(HHSList::new());
         }
 
         HashMap { buckets }
     }
 
     #[inline]
-    pub fn get_bucket(&self, index: usize) -> &HMList<K, V> {
+    pub fn get_bucket(&self, index: usize) -> &HHSList<K, V> {
         unsafe { self.buckets.get_unchecked(index % self.buckets.len()) }
     }
 
