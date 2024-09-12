@@ -260,82 +260,83 @@ where
         }
     }
 
-    // fn find_hhs(&mut self, key: &K) -> Result<bool, ()> {
-    //     // Finding phase
-    //     // - cursor.curr: first unmarked node w/ key >= search key (4)
-    //     // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
-    //     // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
+    fn find_harris_herlihy_shavit(&mut self, key: &K) -> Result<bool, ()> {
+        // Finding phase
+        // - cursor.curr: first unmarked node w/ key >= search key (4)
+        // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
+        // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
 
-    //     loop {
-    //         if self.curr.is_null() {
-    //             return Ok(false);
-    //         }
+        let found = loop {
+            if self.curr.is_null() {
+                break false;
+            }
 
-    //         let prev = unsafe { &(*self.prev).next };
+            let prev = unsafe { &self.prev.deref().next };
+            self.handle
+                .curr_h
+                .protect_raw(self.curr.with_tag(0).into_raw());
+            light_membarrier();
 
-    //         let (curr_base, curr_tag) = decompose_ptr(self.curr);
+            // Validation depending on the state of self.curr.
+            //
+            // - If it is marked, validate on anchor.
+            // - If it is not marked, validate on curr.
 
-    //         self.handle.curr_h.protect_raw(curr_base);
-    //         light_membarrier();
+            if self.curr.tag() != 0 {
+                // This means that prev -> curr was marked, hence persistent.
+                debug_assert!(!self.anchor.is_null());
+                debug_assert!(!self.anchor_next.is_null());
+                let an_new = unsafe { &self.anchor.deref().next }.load(Ordering::Acquire);
+                // Validate on anchor, which should still be the same and cleared.
+                if an_new.tag() != 0 {
+                    // Anchor dirty -> someone logically deleted it -> progress.
+                    return Err(());
+                } else if an_new != self.anchor_next {
+                    // Anchor changed -> someone updated it.
+                    // - Someone else cleared the logically deleted chain -> their find must return -> they must attempt CAS.
 
-    //         // Validation depending on the state of self.curr.
-    //         //
-    //         // - If it is marked, validate on anchor.
-    //         // - If it is not marked, validate on curr.
+                    // TODO: optimization here, can restart from anchor, but need to setup some protection for prev & curr.
+                    return Err(());
+                }
+            } else {
+                // TODO: optimize here.
+                if prev.load(Ordering::Acquire) != self.curr {
+                    return Err(());
+                }
+            }
 
-    //         if curr_tag != 0 {
-    //             debug_assert!(!self.anchor.is_null());
-    //             debug_assert!(!self.anchor_next.is_null());
-    //             let (an_base, an_tag) =
-    //                 decompose_ptr(unsafe { &(*self.anchor).next }.load(Ordering::Acquire));
-    //             if an_tag != 0 {
-    //                 return Err(());
-    //             } else if an_base != self.anchor_next {
-    //                 // TODO: optimization here, can restart from anchor, but need to setup some protection for prev & curr.
-    //                 return Err(());
-    //             }
-    //         } else {
-    //             let (curr_new_base, curr_new_tag) = decompose_ptr(prev.load(Ordering::Acquire));
-    //             if curr_new_tag != 0 {
-    //                 // TODO: this seems correct, but deadlocks? Might not be dealing with stuff correctly.
-    //                 // self.curr = curr_new_base;
-    //                 // continue;
-    //                 return Err(());
-    //             } else if curr_new_base != self.curr {
-    //                 // In contrary to what HP04 paper does, it's fine to retry protecting the new node
-    //                 // without restarting from head as long as prev is not logically deleted.
-    //                 self.curr = curr_new_base;
-    //                 continue;
-    //             }
-    //         }
+            let curr_node = unsafe { self.curr.deref() };
+            let next = curr_node.next.load(Ordering::Acquire);
+            // TODO: REALLY THINK HARD ABOUT THIS SHIELD STUFF.
+            if next.tag() == 0 {
+                if curr_node.key < *key {
+                    self.prev = self.curr;
+                    self.curr = next;
+                    self.anchor = Shared::null();
+                    HazardPointer::swap(&mut self.handle.curr_h, &mut self.handle.prev_h);
+                } else {
+                    break curr_node.key == *key;
+                }
+            } else {
+                if self.anchor.is_null() {
+                    self.anchor = self.prev;
+                    self.anchor_next = self.curr;
+                    HazardPointer::swap(&mut self.handle.anchor_h, &mut self.handle.prev_h);
+                } else if self.anchor_next == self.prev {
+                    HazardPointer::swap(&mut self.handle.anchor_next_h, &mut self.handle.prev_h);
+                }
+                self.prev = self.curr;
+                self.curr = next;
+                HazardPointer::swap(&mut self.handle.prev_h, &mut self.handle.curr_h);
+            }
+        };
 
-    //         let curr_node = unsafe { &*curr_base };
-    //         let (next_base, next_tag) = decompose_ptr(curr_node.next.load(Ordering::Acquire));
-    //         // TODO: REALLY THINK HARD ABOUT THIS SHIELD STUFF.
-    //         // TODO: check key first, then traversal.
-    //         if next_tag == 0 {
-    //             if curr_node.key < *key {
-    //                 self.prev = self.curr;
-    //                 self.curr = next_base;
-    //                 self.anchor = ptr::null_mut();
-    //                 HazardPointer::swap(&mut self.handle.curr_h, &mut self.handle.prev_h);
-    //             } else {
-    //                 return Ok(curr_node.key == *key);
-    //             }
-    //         } else {
-    //             if self.anchor.is_null() {
-    //                 self.anchor = self.prev;
-    //                 self.anchor_next = self.curr;
-    //                 HazardPointer::swap(&mut self.handle.anchor_h, &mut self.handle.prev_h);
-    //             } else if self.anchor_next == self.prev {
-    //                 HazardPointer::swap(&mut self.handle.anchor_next_h, &mut self.handle.prev_h);
-    //             }
-    //             self.prev = self.curr;
-    //             self.curr = next_base;
-    //             HazardPointer::swap(&mut self.handle.prev_h, &mut self.handle.curr_h);
-    //         }
-    //     }
-    // }
+        // Return only the found `curr` node.
+        // Others are not necessary because we are not going to do insertion or deletion
+        // with this Harris-Herlihy-Shavit traversal.
+        self.curr = self.curr.with_tag(0);
+        Ok(found)
+    }
 }
 
 impl<K, V> List<K, V>
@@ -547,21 +548,18 @@ where
     ) -> Option<&'hp V> {
         self.remove(key, Cursor::find_harris_michael, handle)
     }
+
+    pub fn harris_herlihy_shavit_get<'hp>(
+        &self,
+        key: &K,
+        handle: &'hp mut Handle<'_>,
+    ) -> Option<&'hp V> {
+        self.get(key, Cursor::find_harris_herlihy_shavit, handle)
+    }
 }
 
 pub struct HList<K, V> {
     inner: List<K, V>,
-}
-
-impl<K, V> HList<K, V>
-where
-    K: Ord + 'static,
-{
-    /// Pop the first element efficiently.
-    /// This method is used for only the fine grained benchmark (src/bin/long_running).
-    pub fn pop<'hp>(&self, handle: &'hp mut Handle<'_>) -> Option<(&'hp K, &'hp V)> {
-        self.inner.pop(handle)
-    }
 }
 
 impl<K, V> ConcurrentMap<K, V> for HList<K, V>
@@ -635,14 +633,56 @@ where
     }
 }
 
+pub struct HHSList<K, V> {
+    inner: List<K, V>,
+}
+
+impl<K, V> ConcurrentMap<K, V> for HHSList<K, V>
+where
+    K: Ord + 'static,
+{
+    type Handle<'domain> = Handle<'domain>;
+
+    fn handle() -> Self::Handle<'static> {
+        Handle::default()
+    }
+
+    fn new() -> Self {
+        HHSList { inner: List::new() }
+    }
+
+    #[inline(always)]
+    fn get<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
+        self.inner.harris_michael_get(key, handle)
+    }
+    #[inline(always)]
+    fn insert(&self, handle: &mut Self::Handle<'_>, key: K, value: V) -> bool {
+        self.inner.harris_michael_insert(key, value, handle)
+    }
+    #[inline(always)]
+    fn remove<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
+        self.inner.harris_michael_remove(key, handle)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::HMList;
+    use super::{HHSList, HList, HMList};
     use crate::ds_impl::hp::concurrent_map;
+
+    #[test]
+    fn smoke_h_list() {
+        concurrent_map::tests::smoke::<HList<i32, String>>();
+    }
 
     #[test]
     fn smoke_hm_list() {
         concurrent_map::tests::smoke::<HMList<i32, String>>();
+    }
+
+    #[test]
+    fn smoke_hhs_list() {
+        concurrent_map::tests::smoke::<HHSList<i32, String>>();
     }
 
     #[test]
@@ -651,34 +691,6 @@ mod tests {
         let map = HMList::new();
 
         let handle = &mut HMList::<i32, String>::handle();
-        map.insert(handle, 1, "1".to_string());
-        map.insert(handle, 2, "2".to_string());
-        map.insert(handle, 3, "3".to_string());
-
-        fn assert_eq(a: (&i32, &String), b: (i32, String)) {
-            assert_eq!(*a.0, b.0);
-            assert_eq!(*a.1, b.1);
-        }
-
-        assert_eq(map.pop(handle).unwrap(), (1, "1".to_string()));
-        assert_eq(map.pop(handle).unwrap(), (2, "2".to_string()));
-        assert_eq(map.pop(handle).unwrap(), (3, "3".to_string()));
-        assert_eq!(map.pop(handle), None);
-    }
-
-    use super::HList;
-
-    #[test]
-    fn smoke_h_list() {
-        concurrent_map::tests::smoke::<HList<i32, String>>();
-    }
-
-    #[test]
-    fn litmus_h_pop() {
-        use concurrent_map::ConcurrentMap;
-        let map = HList::new();
-
-        let handle = &mut HList::<i32, String>::handle();
         map.insert(handle, 1, "1".to_string());
         map.insert(handle, 2, "2".to_string());
         map.insert(handle, 3, "3".to_string());
