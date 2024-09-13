@@ -7,4 +7,5 @@ hps="cargo run --bin hp --profile=release-simple --target x86_64-unknown-linux-g
 set -e
 for i in {1..5000}; do
     $hps -dh-list -i3 -t256 -r10 -g1
+    $hps -dnm-tree -i3 -t256 -r10 -g1
 done
