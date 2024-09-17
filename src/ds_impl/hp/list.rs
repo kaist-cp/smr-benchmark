@@ -119,31 +119,45 @@ where
                 .protect_raw(self.curr.with_tag(0).into_raw());
             light_membarrier();
 
-            // Validation depending on the state of self.curr.
+            // Validation depending on the state of `self.curr`.
             //
             // - If it is marked, validate on anchor.
-            // - If it is not marked, validate on curr.
+            // - If it is not marked, validate on prev.
 
             if self.curr.tag() != 0 {
-                // This means that prev -> curr was marked, hence persistent.
+                // Validate on anchor.
+
                 debug_assert!(!self.anchor.is_null());
                 debug_assert!(!self.anchor_next.is_null());
                 let an_new = unsafe { &self.anchor.deref().next }.load(Ordering::Acquire);
+
                 // Validate on anchor, which should still be the same and cleared.
                 if an_new.tag() != 0 {
-                    // Anchor dirty -> someone logically deleted it -> progress.
                     return Err(());
                 } else if an_new != self.anchor_next {
-                    // Anchor changed -> someone updated it.
-                    // - Someone else cleared the logically deleted chain -> their find must return -> they must attempt CAS.
+                    // Anchor is updated but clear, so can restart from anchor.
 
-                    // TODO: optimization here, can restart from anchor, but need to setup some protection for prev & curr.
-                    return Err(());
+                    self.prev = self.anchor;
+                    self.curr = an_new;
+
+                    // Set prev HP as anchor HP, since prev should always be protected.
+                    HazardPointer::swap(&mut self.handle.prev_h, &mut self.handle.anchor_h);
                 }
             } else {
-                // TODO: optimize here.
-                if prev.load(Ordering::Acquire) != self.curr {
+                // Validate on prev.
+
+                let curr_new = prev.load(Ordering::Acquire);
+
+                if curr_new.tag() != 0 {
+                    // If prev is marked, then restart from head.
                     return Err(());
+                } else if curr_new != self.curr {
+                    // self.curr's tag was 0, so the above comparison ignores tags.
+
+                    // In contrary to what HP04 paper does, it's fine to retry protecting the new node
+                    // without restarting from head as long as prev is not logically deleted.
+                    self.curr = curr_new;
+                    continue;
                 }
             }
 
