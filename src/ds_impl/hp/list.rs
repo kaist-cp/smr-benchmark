@@ -131,7 +131,6 @@ where
                 debug_assert!(!self.anchor_next.is_null());
                 let an_new = unsafe { &self.anchor.deref().next }.load(Ordering::Acquire);
 
-                // Validate on anchor, which should still be the same and cleared.
                 if an_new.tag() != 0 {
                     return Err(());
                 } else if an_new != self.anchor_next {
@@ -163,7 +162,6 @@ where
 
             let curr_node = unsafe { self.curr.deref() };
             let next = curr_node.next.load(Ordering::Acquire);
-            // TODO: REALLY THINK HARD ABOUT THIS SHIELD STUFF.
             if next.tag() == 0 {
                 if curr_node.key < *key {
                     self.prev = self.curr;
@@ -193,7 +191,7 @@ where
             Ok(found)
         } else {
             debug_assert_eq!(self.anchor_next.tag(), 0);
-            // CAS
+            // TODO: on CAS failure, if anchor is not tagged, we can restart from anchor.
             unsafe { &self.anchor.deref().next }
                 .compare_exchange(
                     self.anchor_next,
