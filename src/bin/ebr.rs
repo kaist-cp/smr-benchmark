@@ -102,7 +102,7 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync, N: Unsigned>(
     strategy: PrefillStrategy,
 ) -> Perf {
     match config.bag_size {
-        BagSize::Small => crossbeam_ebr::set_bag_capacity(64),
+        BagSize::Small => crossbeam_ebr::set_bag_capacity(512),
         BagSize::Large => crossbeam_ebr::set_bag_capacity(4096),
     }
     let map = &M::new();

@@ -95,7 +95,7 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
     strategy: PrefillStrategy,
 ) -> Perf {
     match config.bag_size {
-        BagSize::Small => set_counts_between_flush(64),
+        BagSize::Small => set_counts_between_flush(512),
         BagSize::Large => set_counts_between_flush(4096),
     }
     let map = &M::new();
