@@ -138,12 +138,15 @@ where
 
                     self.prev = self.anchor;
                     self.curr = an_new;
+                    self.anchor = Shared::null();
 
                     // Set prev HP as anchor HP, since prev should always be protected.
                     HazardPointer::swap(&mut self.handle.prev_h, &mut self.handle.anchor_h);
+                    continue;
                 }
             } else {
                 // Validate on prev.
+                debug_assert!(self.anchor.is_null());
 
                 let curr_new = prev.load(Ordering::Acquire);
 
