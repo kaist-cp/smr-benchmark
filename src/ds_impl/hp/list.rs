@@ -96,19 +96,16 @@ impl<'domain, 'hp, K, V> Cursor<'domain, 'hp, K, V>
 where
     K: Ord,
 {
-    // Invariants:
-    // anchor, anchor_next: protected if they are not null.
-    // prev: always protected with prev_sh
-    // curr: not protected.
-    // curr: also has tag value when it is obtained from prev.
+    /// Optimistically traverses while maintaining `anchor` and `anchor_next`.
+    /// It is used for both Harris and Harris-Herlihy-Shavit traversals.
     #[inline]
-    fn find_harris(&mut self, key: &K) -> Result<bool, ()> {
-        // Finding phase
-        // - cursor.curr: first unmarked node w/ key >= search key (4)
-        // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
-        // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
-
-        let found = loop {
+    fn traverse_with_anchor(&mut self, key: &K) -> Result<bool, ()> {
+        // Invariants:
+        // anchor, anchor_next: protected if they are not null.
+        // prev: always protected with prev_sh
+        // curr: not protected.
+        // curr: also has tag value when it is obtained from prev.
+        Ok(loop {
             if self.curr.is_null() {
                 break false;
             }
@@ -186,7 +183,17 @@ where
                 self.curr = next;
                 HazardPointer::swap(&mut self.handle.prev_h, &mut self.handle.curr_h);
             }
-        };
+        })
+    }
+
+    #[inline]
+    fn find_harris(&mut self, key: &K) -> Result<bool, ()> {
+        // Finding phase
+        // - cursor.curr: first unmarked node w/ key >= search key (4)
+        // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
+        // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
+
+        let found = self.traverse_with_anchor(key)?;
 
         if self.anchor.is_null() {
             self.prev = self.prev.with_tag(0);
@@ -276,76 +283,7 @@ where
     }
 
     fn find_harris_herlihy_shavit(&mut self, key: &K) -> Result<bool, ()> {
-        // Finding phase
-        // - cursor.curr: first unmarked node w/ key >= search key (4)
-        // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
-        // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
-
-        let found = loop {
-            if self.curr.is_null() {
-                break false;
-            }
-
-            let prev = unsafe { &self.prev.deref().next };
-            self.handle
-                .curr_h
-                .protect_raw(self.curr.with_tag(0).into_raw());
-            light_membarrier();
-
-            // Validation depending on the state of self.curr.
-            //
-            // - If it is marked, validate on anchor.
-            // - If it is not marked, validate on curr.
-
-            if self.curr.tag() != 0 {
-                // This means that prev -> curr was marked, hence persistent.
-                debug_assert!(!self.anchor.is_null());
-                debug_assert!(!self.anchor_next.is_null());
-                let an_new = unsafe { &self.anchor.deref().next }.load(Ordering::Acquire);
-                // Validate on anchor, which should still be the same and cleared.
-                if an_new.tag() != 0 {
-                    // Anchor dirty -> someone logically deleted it -> progress.
-                    return Err(());
-                } else if an_new != self.anchor_next {
-                    // Anchor changed -> someone updated it.
-                    // - Someone else cleared the logically deleted chain -> their find must return -> they must attempt CAS.
-
-                    // TODO: optimization here, can restart from anchor, but need to setup some protection for prev & curr.
-                    return Err(());
-                }
-            } else {
-                // TODO: optimize here.
-                if prev.load(Ordering::Acquire) != self.curr {
-                    return Err(());
-                }
-            }
-
-            let curr_node = unsafe { self.curr.deref() };
-            let next = curr_node.next.load(Ordering::Acquire);
-            // TODO: REALLY THINK HARD ABOUT THIS SHIELD STUFF.
-            if next.tag() == 0 {
-                if curr_node.key < *key {
-                    self.prev = self.curr;
-                    self.curr = next;
-                    self.anchor = Shared::null();
-                    HazardPointer::swap(&mut self.handle.curr_h, &mut self.handle.prev_h);
-                } else {
-                    break curr_node.key == *key;
-                }
-            } else {
-                if self.anchor.is_null() {
-                    self.anchor = self.prev;
-                    self.anchor_next = self.curr;
-                    HazardPointer::swap(&mut self.handle.anchor_h, &mut self.handle.prev_h);
-                } else if self.anchor_next == self.prev {
-                    HazardPointer::swap(&mut self.handle.anchor_next_h, &mut self.handle.prev_h);
-                }
-                self.prev = self.curr;
-                self.curr = next;
-                HazardPointer::swap(&mut self.handle.prev_h, &mut self.handle.curr_h);
-            }
-        };
-
+        let found = self.traverse_with_anchor(key)?;
         // Return only the found `curr` node.
         // Others are not necessary because we are not going to do insertion or deletion
         // with this Harris-Herlihy-Shavit traversal.
