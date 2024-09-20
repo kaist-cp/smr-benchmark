@@ -320,8 +320,8 @@ where
                 //  (parent), ancestor -> O                   (ancestor) -> O
                 //                       / \                               / \
                 // (leaf), successor -> O   O   => (parent), successor -> O   O
-                //                    / \                                / \
-                //                   O   O                    (leaf) -> O   O
+                //                     / \                               / \
+                //                    O   O                   (leaf) -> O   O
                 record.parent = record.leaf;
                 HazardPointer::swap(&mut record.handle.ancestor_h, &mut record.handle.parent_h);
                 HazardPointer::swap(&mut record.handle.parent_h, &mut record.handle.leaf_h);
@@ -392,26 +392,13 @@ where
 
             // update other variables
             prev_tag = Marks::from_bits_truncate(tag(curr)).tag();
-            if Marks::from_bits_truncate(tag(curr)).flag() {
-                std::hint::black_box({
-                    let curr_node = unsafe { &*curr_base };
-                    if curr_node.key.cmp(key) == cmp::Ordering::Greater {
-                        curr_dir = Direction::L;
-                        curr = curr_node.left.load(Ordering::Acquire);
-                    } else {
-                        curr_dir = Direction::R;
-                        curr = curr_node.right.load(Ordering::Acquire);
-                    }
-                })
+            let curr_node = unsafe { &*curr_base };
+            if curr_node.key.cmp(key) == cmp::Ordering::Greater {
+                curr_dir = Direction::L;
+                curr = curr_node.left.load(Ordering::Acquire);
             } else {
-                let curr_node = unsafe { &*curr_base };
-                if curr_node.key.cmp(key) == cmp::Ordering::Greater {
-                    curr_dir = Direction::L;
-                    curr = curr_node.left.load(Ordering::Acquire);
-                } else {
-                    curr_dir = Direction::R;
-                    curr = curr_node.right.load(Ordering::Acquire);
-                }
+                curr_dir = Direction::R;
+                curr = curr_node.right.load(Ordering::Acquire);
             }
         }
         Ok(())
