@@ -36,7 +36,7 @@ fn bench(config: &Config, output: BenchWriter) {
 
 fn extract_nbr_params(config: &Config) -> (usize, usize) {
     match config.bag_size {
-        BagSize::Small => (256, 32),
+        BagSize::Small => (512, 64),
         BagSize::Large => (8192, 1024),
     }
 }

@@ -8,14 +8,28 @@ use std::{
     sync::atomic::AtomicU64,
 };
 
-use arrayvec::ArrayVec;
 use atomic::{Atomic, Ordering};
 use crossbeam_utils::CachePadded;
 use portable_atomic::{compiler_fence, AtomicU128};
 
-pub const ENTRIES_PER_BAG: usize = 128;
+static mut ENTRIES_PER_BAG: usize = 128;
 pub const INIT_BAGS_PER_LOCAL: usize = 32;
 pub const NOT_RETIRED: u64 = u64::MAX;
+
+/// Sets the capacity of thread-local garbage bag.
+///
+/// This value applies to all threads.
+#[inline]
+pub fn set_bag_capacity(cap: usize) {
+    assert!(cap > 1, "capacity must be greater than 1.");
+    unsafe { ENTRIES_PER_BAG = cap };
+}
+
+/// Returns the current capacity of thread-local garbage bag.
+#[inline]
+pub fn bag_capacity() -> usize {
+    unsafe { ENTRIES_PER_BAG }
+}
 
 pub struct Inner<T> {
     birth: AtomicU64,
@@ -34,7 +48,7 @@ unsafe impl<T> Send for Global<T> {}
 impl<T> Global<T> {
     pub fn new(capacity: usize) -> Self {
         let avail = BagStack::new();
-        let count = capacity / ENTRIES_PER_BAG + if capacity % ENTRIES_PER_BAG > 0 { 1 } else { 0 };
+        let count = capacity / bag_capacity() + if capacity % bag_capacity() > 0 { 1 } else { 0 };
         for _ in 0..count {
             avail.push(Box::into_raw(Box::new(Bag::new_with_alloc())));
         }
@@ -153,30 +167,34 @@ impl<T> Drop for BagStack<T> {
 pub struct Bag<T> {
     /// NOTE: A timestamp is necessary to prevent ABA problems.
     next: AtomicU128,
-    entries: ArrayVec<*mut T, ENTRIES_PER_BAG>,
+    entries: Vec<*mut T>,
 }
 
 impl<T> Bag<T> {
     fn new() -> Self {
         Self {
             next: AtomicU128::new(0),
-            entries: ArrayVec::new(),
+            entries: Vec::with_capacity(bag_capacity()),
         }
     }
 
     fn new_with_alloc() -> Self {
-        let mut alloc = [null_mut(); ENTRIES_PER_BAG];
-        for ptr in &mut alloc {
+        let mut entries = vec![null_mut(); bag_capacity()];
+        for ptr in &mut entries {
             *ptr = unsafe { Box::into_raw(Box::new(zeroed())) };
         }
         Self {
             next: AtomicU128::new(0),
-            entries: ArrayVec::from(alloc),
+            entries,
         }
     }
 
     fn push(&mut self, obj: *mut T) -> bool {
-        self.entries.try_push(obj).is_ok()
+        if self.entries.len() < bag_capacity() {
+            self.entries.push(obj);
+            return true;
+        }
+        false
     }
 
     fn pop(&mut self) -> Option<*mut T> {

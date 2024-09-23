@@ -102,8 +102,9 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync, N: Unsigned>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> Perf {
-    if config.bag_size == BagSize::Large {
-        println!("Warning: Large bag size is currently unavailable for PEBR.");
+    match config.bag_size {
+        BagSize::Small => crossbeam_pebr::set_bag_capacity(512),
+        BagSize::Large => crossbeam_pebr::set_bag_capacity(4096),
     }
     let map = &M::new();
     strategy.prefill(config, map);

@@ -1,5 +1,5 @@
 use crossbeam_utils::thread::scope;
-use hp_brcu::{global, THREAD};
+use hp_brcu::{global, set_bag_capacity, THREAD};
 use rand::prelude::*;
 use std::cmp::max;
 use std::io::{stdout, Write};
@@ -99,8 +99,9 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> Perf {
-    if config.bag_size == BagSize::Large {
-        println!("Warning: Large bag size is currently unavailable for HP-BRCU.");
+    match config.bag_size {
+        BagSize::Small => set_bag_capacity(512),
+        BagSize::Large => set_bag_capacity(4096),
     }
     let map = &M::new();
     strategy.prefill(config, map);

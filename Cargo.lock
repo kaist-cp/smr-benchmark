@@ -259,14 +259,14 @@ dependencies = [
 [[package]]
 name = "crossbeam-pebr-epoch"
 version = "0.7.1"
-source = "git+https://github.com/kaist-cp/crossbeam?branch=pebr#05d55f2e1683e91f2bcbbbf06ff8ae4666ec22e5"
+source = "git+https://github.com/kaist-cp/crossbeam?branch=pebr#8c4b969c866a7d1b1c698f6b374e781615efb8c8"
 dependencies = [
  "arrayvec 0.4.12",
  "bitflags 1.3.2",
  "cfg-if 0.1.10",
  "crossbeam-pebr-utils",
  "lazy_static",
- "membarrier 0.2.3 (git+https://github.com/kaist-cp/crossbeam?branch=pebr)",
+ "membarrier 0.2.3 (git+https://github.com/jeehoonkang/membarrier-rs.git?rev=99254da47b6dab382c9860a024cab3ab9bac6504)",
  "memoffset",
  "murmur3",
  "scopeguard",
@@ -276,7 +276,7 @@ dependencies = [
 [[package]]
 name = "crossbeam-pebr-utils"
 version = "0.6.5"
-source = "git+https://github.com/kaist-cp/crossbeam?branch=pebr#05d55f2e1683e91f2bcbbbf06ff8ae4666ec22e5"
+source = "git+https://github.com/kaist-cp/crossbeam?branch=pebr#8c4b969c866a7d1b1c698f6b374e781615efb8c8"
 dependencies = [
  "cfg-if 0.1.10",
  "lazy_static",
@@ -454,7 +454,7 @@ checksum = "90ed8c1e510134f979dbc4f070f87d4313098b704861a105fe34231c70a3901c"
 [[package]]
 name = "membarrier"
 version = "0.2.3"
-source = "git+https://github.com/kaist-cp/crossbeam?branch=pebr#05d55f2e1683e91f2bcbbbf06ff8ae4666ec22e5"
+source = "git+https://github.com/jeehoonkang/membarrier-rs.git?branch=smr-benchmark#bc3cf47144212655ea3daf38b10bf646ba94fbe9"
 dependencies = [
  "cfg-if 1.0.0",
  "lazy_static",
@@ -465,7 +465,7 @@ dependencies = [
 [[package]]
 name = "membarrier"
 version = "0.2.3"
-source = "git+https://github.com/jeehoonkang/membarrier-rs.git?branch=smr-benchmark#bc3cf47144212655ea3daf38b10bf646ba94fbe9"
+source = "git+https://github.com/jeehoonkang/membarrier-rs.git?rev=99254da47b6dab382c9860a024cab3ab9bac6504#99254da47b6dab382c9860a024cab3ab9bac6504"
 dependencies = [
  "cfg-if 1.0.0",
  "lazy_static",
@@ -497,7 +497,7 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 [[package]]
 name = "murmur3"
 version = "0.4.1"
-source = "git+https://github.com/kaist-cp/crossbeam?branch=pebr#05d55f2e1683e91f2bcbbbf06ff8ae4666ec22e5"
+source = "git+https://github.com/kaist-cp/murmur3.git?branch=upgrade#0843ec5d49329d24e7c646d681a55701dbf7cf52"
 dependencies = [
  "byteorder",
  "static_assertions 0.3.4",
@@ -909,7 +909,6 @@ checksum = "711b9620af191e0cdc7468a8d14e709c3dcdb115b36f838e601583af800a370a"
 name = "vbr"
 version = "0.1.0"
 dependencies = [
- "arrayvec 0.7.4",
  "atomic",
  "crossbeam-utils 0.8.20",
  "portable-atomic",

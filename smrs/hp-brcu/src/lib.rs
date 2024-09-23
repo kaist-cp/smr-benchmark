@@ -11,6 +11,7 @@ mod pointers;
 mod queue;
 mod rollback;
 
+pub use deferred::{bag_capacity, set_bag_capacity};
 pub use handle::*;
 pub use internal::*;
 pub use pointers::*;

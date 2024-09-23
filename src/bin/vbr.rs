@@ -96,8 +96,9 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> Perf {
-    if config.bag_size == BagSize::Large {
-        println!("Warning: Large bag size is currently unavailable for VBR.");
+    match config.bag_size {
+        BagSize::Small => vbr::set_bag_capacity(512),
+        BagSize::Large => vbr::set_bag_capacity(4096),
     }
     let global = &M::global(config.prefill);
     let local = &M::local(global);
