@@ -46,17 +46,18 @@ pub struct Handle<'domain> {
     // `anchor_h` and `anchor_next_h` are used for `find_harris`
     anchor_h: HazardPointer<'domain>,
     anchor_next_h: HazardPointer<'domain>,
-    thread: Thread<'domain>,
+    thread: Box<Thread<'domain>>,
 }
 
 impl Default for Handle<'static> {
     fn default() -> Self {
+        let mut thread = Box::new(Thread::new(&DEFAULT_DOMAIN));
         Self {
-            prev_h: HazardPointer::default(),
-            curr_h: HazardPointer::default(),
-            anchor_h: HazardPointer::default(),
-            anchor_next_h: HazardPointer::default(),
-            thread: Thread::new(&DEFAULT_DOMAIN),
+            prev_h: HazardPointer::new(&mut thread),
+            curr_h: HazardPointer::new(&mut thread),
+            anchor_h: HazardPointer::new(&mut thread),
+            anchor_next_h: HazardPointer::new(&mut thread),
+            thread,
         }
     }
 }

@@ -100,16 +100,17 @@ pub struct Handle<'g> {
     preds_h: [HazardPointer<'g>; MAX_HEIGHT],
     succs_h: [HazardPointer<'g>; MAX_HEIGHT],
     removed_h: HazardPointer<'g>,
-    thread: Thread<'g>,
+    thread: Box<Thread<'g>>,
 }
 
 impl Default for Handle<'static> {
     fn default() -> Self {
+        let mut thread = Box::new(Thread::new(&DEFAULT_DOMAIN));
         Self {
-            preds_h: Default::default(),
-            succs_h: Default::default(),
-            removed_h: Default::default(),
-            thread: Thread::new(&DEFAULT_DOMAIN),
+            preds_h: [(); MAX_HEIGHT].map(|_| HazardPointer::new(&mut thread)),
+            succs_h: [(); MAX_HEIGHT].map(|_| HazardPointer::new(&mut thread)),
+            removed_h: HazardPointer::new(&mut thread),
+            thread,
         }
     }
 }

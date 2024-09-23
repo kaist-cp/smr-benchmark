@@ -41,15 +41,16 @@ pub struct DoubleLink<T: Sync + Send> {
 pub struct Handle<'domain> {
     pri: HazardPointer<'domain>,
     sub: HazardPointer<'domain>,
-    thread: Thread<'domain>,
+    thread: Box<Thread<'domain>>,
 }
 
 impl Default for Handle<'static> {
     fn default() -> Self {
+        let mut thread = Box::new(Thread::new(&DEFAULT_DOMAIN));
         Self {
-            pri: HazardPointer::default(),
-            sub: HazardPointer::default(),
-            thread: Thread::new(&DEFAULT_DOMAIN),
+            pri: HazardPointer::new(&mut thread),
+            sub: HazardPointer::new(&mut thread),
+            thread,
         }
     }
 }

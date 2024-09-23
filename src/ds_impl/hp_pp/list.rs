@@ -4,7 +4,9 @@ use std::cmp::Ordering::{Equal, Greater, Less};
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::{mem, ptr, slice};
 
-use hp_pp::{decompose_ptr, light_membarrier, tag, tagged, try_unlink, untagged, HazardPointer};
+use hp_pp::{
+    decompose_ptr, light_membarrier, tag, tagged, untagged, HazardPointer, Thread, DEFAULT_DOMAIN,
+};
 
 // `#[repr(C)]` is used to ensure the first field
 // is also the first data in the memory alignment.
@@ -46,15 +48,18 @@ pub struct Handle<'domain> {
     // `anchor_h` and `anchor_next_h` are used for `find_harris`
     anchor_h: HazardPointer<'domain>,
     anchor_next_h: HazardPointer<'domain>,
+    thread: Box<Thread<'domain>>,
 }
 
 impl Default for Handle<'static> {
     fn default() -> Self {
+        let mut thread = Box::new(Thread::new(&DEFAULT_DOMAIN));
         Self {
-            prev_h: HazardPointer::default(),
-            curr_h: HazardPointer::default(),
-            anchor_h: HazardPointer::default(),
-            anchor_next_h: HazardPointer::default(),
+            prev_h: HazardPointer::new(&mut thread),
+            curr_h: HazardPointer::new(&mut thread),
+            anchor_h: HazardPointer::new(&mut thread),
+            anchor_next_h: HazardPointer::new(&mut thread),
+            thread,
         }
     }
 }
@@ -96,26 +101,28 @@ impl<K, V> hp_pp::Invalidate for Node<K, V> {
     }
 }
 
-struct HarrisUnlink<'c, 'domain, 'hp, K, V> {
-    cursor: &'c Cursor<'domain, 'hp, K, V>,
+struct HarrisUnlink<K, V> {
+    anchor: *mut Node<K, V>,
+    anchor_next: *mut Node<K, V>,
+    curr: *mut Node<K, V>,
 }
 
-impl<'r, 'domain, 'hp, K, V> hp_pp::Unlink<Node<K, V>> for HarrisUnlink<'r, 'domain, 'hp, K, V> {
+impl<K, V> hp_pp::Unlink<Node<K, V>> for HarrisUnlink<K, V> {
     fn do_unlink(&self) -> Result<Vec<*mut Node<K, V>>, ()> {
-        if unsafe { &*self.cursor.anchor }
+        if unsafe { &*self.anchor }
             .next
             .compare_exchange(
-                self.cursor.anchor_next,
-                self.cursor.curr,
+                self.anchor_next,
+                self.curr,
                 Ordering::AcqRel,
                 Ordering::Relaxed,
             )
             .is_ok()
         {
             let mut collected = Vec::with_capacity(16);
-            let mut node = self.cursor.anchor_next;
+            let mut node = self.anchor_next;
             loop {
-                if untagged(node) == self.cursor.curr {
+                if untagged(node) == self.curr {
                     break;
                 }
                 let node_ref = unsafe { node.as_ref() }.unwrap();
@@ -130,24 +137,25 @@ impl<'r, 'domain, 'hp, K, V> hp_pp::Unlink<Node<K, V>> for HarrisUnlink<'r, 'dom
     }
 }
 
-struct Unlink<'c, 'domain, 'hp, K, V> {
-    cursor: &'c Cursor<'domain, 'hp, K, V>,
+struct Unlink<K, V> {
+    prev: *mut Node<K, V>,
+    curr: *mut Node<K, V>,
     next_base: *mut Node<K, V>,
 }
 
-impl<'r, 'domain, 'hp, K, V> hp_pp::Unlink<Node<K, V>> for Unlink<'r, 'domain, 'hp, K, V> {
+impl<K, V> hp_pp::Unlink<Node<K, V>> for Unlink<K, V> {
     fn do_unlink(&self) -> Result<Vec<*mut Node<K, V>>, ()> {
-        let prev = unsafe { &(*self.cursor.prev).next };
+        let prev = unsafe { &(*self.prev).next };
         if prev
             .compare_exchange(
-                self.cursor.curr,
+                self.curr,
                 self.next_base,
                 Ordering::Release,
                 Ordering::Relaxed,
             )
             .is_ok()
         {
-            Ok(vec![self.cursor.curr])
+            Ok(vec![self.curr])
         } else {
             Err(())
         }
@@ -212,8 +220,16 @@ where
         if self.anchor.is_null() {
             Ok(found)
         } else {
-            let unlink = HarrisUnlink { cursor: &self };
-            if unsafe { try_unlink(unlink, slice::from_ref(&self.curr)) } {
+            let unlink = HarrisUnlink {
+                anchor: self.anchor,
+                anchor_next: self.anchor_next,
+                curr: self.curr,
+            };
+            if unsafe {
+                self.handle
+                    .thread
+                    .try_unlink(unlink, slice::from_ref(&self.curr))
+            } {
                 self.prev = self.anchor;
                 Ok(found)
             } else {
@@ -262,10 +278,11 @@ where
             } else {
                 let links = slice::from_ref(&next_base);
                 let unlink = Unlink {
-                    cursor: self,
+                    prev: self.prev,
+                    curr: self.curr,
                     next_base,
                 };
-                if unsafe { !try_unlink(unlink, links) } {
+                if unsafe { !self.handle.thread.try_unlink(unlink, links) } {
                     return Err(());
                 }
             }
@@ -421,10 +438,11 @@ where
 
             let links = slice::from_ref(&next);
             let unlink = Unlink {
-                cursor: &cursor,
+                prev: cursor.prev,
+                curr: cursor.curr,
                 next_base: next,
             };
-            unsafe { try_unlink(unlink, links) };
+            unsafe { handle.thread.try_unlink(unlink, links) };
 
             return Ok(Some(&curr_node.value));
         }
@@ -476,10 +494,11 @@ where
 
             let links = slice::from_ref(&next);
             let unlink = Unlink {
-                cursor: &cursor,
+                prev: cursor.prev,
+                curr: cursor.curr,
                 next_base: next,
             };
-            unsafe { try_unlink(unlink, links) };
+            unsafe { handle.thread.try_unlink(unlink, links) };
 
             return Some((&curr_node.key, &curr_node.value));
         }

@@ -113,20 +113,21 @@ pub struct State<'domain, K, V> {
     retired_nodes: Vec<*mut Node<K, V>>,
     /// Nodes newly constructed by the op. Should be destroyed if CAS fails. (`destroy`)
     new_nodes: Vec<*mut Node<K, V>>,
-    thread: Thread<'domain>,
+    thread: Box<Thread<'domain>>,
 }
 
 impl<K, V> Default for State<'static, K, V> {
     fn default() -> Self {
+        let mut thread = Box::new(Thread::new(&DEFAULT_DOMAIN));
         Self {
             root_link: ptr::null(),
             curr_root: ptr::null_mut(),
-            root_h: Default::default(),
-            succ_h: Default::default(),
-            removed_h: Default::default(),
+            root_h: HazardPointer::new(&mut thread),
+            succ_h: HazardPointer::new(&mut thread),
+            removed_h: HazardPointer::new(&mut thread),
             retired_nodes: vec![],
             new_nodes: vec![],
-            thread: Thread::new(&DEFAULT_DOMAIN),
+            thread,
         }
     }
 }

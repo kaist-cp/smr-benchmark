@@ -230,22 +230,23 @@ pub struct Handle<'domain> {
     new_internal_h: HazardPointer<'domain>,
     // Protect an owner of update which is currently being helped.
     help_src_h: HazardPointer<'domain>,
-    thread: Thread<'domain>,
+    thread: Box<Thread<'domain>>,
 }
 
 impl Default for Handle<'static> {
     fn default() -> Self {
+        let mut thread = Box::new(Thread::new(&DEFAULT_DOMAIN));
         Self {
-            gp_h: HazardPointer::default(),
-            p_h: HazardPointer::default(),
-            l_h: HazardPointer::default(),
-            l_other_h: HazardPointer::default(),
-            pupdate_h: HazardPointer::default(),
-            gpupdate_h: HazardPointer::default(),
-            aux_update_h: HazardPointer::default(),
-            new_internal_h: HazardPointer::default(),
-            help_src_h: HazardPointer::default(),
-            thread: Thread::new(&DEFAULT_DOMAIN),
+            gp_h: HazardPointer::new(&mut thread),
+            p_h: HazardPointer::new(&mut thread),
+            l_h: HazardPointer::new(&mut thread),
+            l_other_h: HazardPointer::new(&mut thread),
+            pupdate_h: HazardPointer::new(&mut thread),
+            gpupdate_h: HazardPointer::new(&mut thread),
+            aux_update_h: HazardPointer::new(&mut thread),
+            new_internal_h: HazardPointer::new(&mut thread),
+            help_src_h: HazardPointer::new(&mut thread),
+            thread,
         }
     }
 }

@@ -139,17 +139,18 @@ pub struct Handle<'domain> {
     successor_h: HazardPointer<'domain>,
     parent_h: HazardPointer<'domain>,
     leaf_h: HazardPointer<'domain>,
-    thread: Thread<'domain>,
+    thread: Box<Thread<'domain>>,
 }
 
 impl Default for Handle<'static> {
     fn default() -> Self {
+        let mut thread = Box::new(Thread::new(&DEFAULT_DOMAIN));
         Self {
-            ancestor_h: HazardPointer::default(),
-            successor_h: HazardPointer::default(),
-            parent_h: HazardPointer::default(),
-            leaf_h: HazardPointer::default(),
-            thread: Thread::new(&DEFAULT_DOMAIN),
+            ancestor_h: HazardPointer::new(&mut thread),
+            successor_h: HazardPointer::new(&mut thread),
+            parent_h: HazardPointer::new(&mut thread),
+            leaf_h: HazardPointer::new(&mut thread),
+            thread,
         }
     }
 }
