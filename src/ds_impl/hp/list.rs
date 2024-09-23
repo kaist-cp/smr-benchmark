@@ -111,7 +111,7 @@ where
                 break false;
             }
 
-            let prev = unsafe { &self.prev.deref().next };
+            let prev_next = unsafe { &self.prev.deref().next };
             self.handle
                 .curr_h
                 .protect_raw(self.curr.with_tag(0).into_raw());
@@ -146,7 +146,7 @@ where
                 // Validate on prev.
                 debug_assert!(self.anchor.is_null());
 
-                let curr_new = prev.load(Ordering::Acquire);
+                let curr_new = prev_next.load(Ordering::Acquire);
 
                 if curr_new.tag() != 0 {
                     // If prev is marked, then restart from head.
