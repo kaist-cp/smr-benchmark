@@ -1,26 +1,26 @@
 use core::ptr;
-use core::sync::atomic::{AtomicPtr, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::cell::{Cell, RefCell};
 
 use super::domain::Domain;
 use super::hazard::ThreadRecord;
 use super::retire::Retired;
 
-pub static mut COUNTS_BETWEEN_FLUSH: usize = 64;
+pub static COUNTS_BETWEEN_FLUSH: AtomicUsize = AtomicUsize::new(64);
 
 #[inline]
 pub fn set_counts_between_flush(counts: usize) {
-    unsafe { COUNTS_BETWEEN_FLUSH = counts };
+    COUNTS_BETWEEN_FLUSH.store(counts, Ordering::Relaxed);
 }
 
 #[inline]
 pub fn counts_between_flush() -> usize {
-    unsafe { COUNTS_BETWEEN_FLUSH }
+    COUNTS_BETWEEN_FLUSH.load(Ordering::Relaxed)
 }
 
 #[inline]
 pub fn counts_between_collect() -> usize {
-    unsafe { COUNTS_BETWEEN_FLUSH * 2 }
+    COUNTS_BETWEEN_FLUSH.load(Ordering::Relaxed) * 2
 }
 
 pub struct Thread {

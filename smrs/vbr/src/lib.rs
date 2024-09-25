@@ -10,9 +10,9 @@ use std::{
 
 use atomic::{Atomic, Ordering};
 use crossbeam_utils::CachePadded;
-use portable_atomic::{compiler_fence, AtomicU128};
+use portable_atomic::{compiler_fence, AtomicU128, AtomicUsize};
 
-static mut ENTRIES_PER_BAG: usize = 128;
+static ENTRIES_PER_BAG: AtomicUsize = AtomicUsize::new(128);
 pub const INIT_BAGS_PER_LOCAL: usize = 32;
 pub const NOT_RETIRED: u64 = u64::MAX;
 
@@ -22,13 +22,13 @@ pub const NOT_RETIRED: u64 = u64::MAX;
 #[inline]
 pub fn set_bag_capacity(cap: usize) {
     assert!(cap > 1, "capacity must be greater than 1.");
-    unsafe { ENTRIES_PER_BAG = cap };
+    ENTRIES_PER_BAG.store(cap, Ordering::Relaxed);
 }
 
 /// Returns the current capacity of thread-local garbage bag.
 #[inline]
 pub fn bag_capacity() -> usize {
-    unsafe { ENTRIES_PER_BAG }
+    ENTRIES_PER_BAG.load(Ordering::Relaxed)
 }
 
 pub struct Inner<T> {

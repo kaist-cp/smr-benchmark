@@ -58,19 +58,19 @@ pub static GLOBAL_GARBAGE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// Maximum number of objects a bag can contain.
 #[cfg(not(any(crossbeam_sanitize, miri)))]
-static mut MAX_OBJECTS: usize = 64;
+static MAX_OBJECTS: AtomicUsize = AtomicUsize::new(64);
 // Makes it more likely to trigger any potential data races.
 #[cfg(any(crossbeam_sanitize, miri))]
-static mut MAX_OBJECTS: usize = 4;
+static MAX_OBJECTS: AtomicUsize = AtomicUsize::new(4);
 
-static mut MANUAL_EVENTS_BETWEEN_COLLECT: usize = 64;
+static MANUAL_EVENTS_BETWEEN_COLLECT: AtomicUsize = AtomicUsize::new(64);
 
 /// Sets the capacity of thread-local deferred bag.
 ///
 /// Note that an update on this capacity may not be reflected immediately to concurrent threads,
 /// because there is no synchronization between reads and writes on the capacity variable.
 pub fn set_bag_capacity(max_objects: usize) {
-    unsafe { MAX_OBJECTS = max_objects };
+    MAX_OBJECTS.store(max_objects, Ordering::Relaxed);
 }
 
 /// A bag of deferred functions.
@@ -115,7 +115,7 @@ impl Bag {
 
 impl Default for Bag {
     fn default() -> Self {
-        Bag(Vec::with_capacity(unsafe { MAX_OBJECTS }))
+        Bag(Vec::with_capacity(MAX_OBJECTS.load(Ordering::Relaxed)))
     }
 }
 
@@ -602,7 +602,7 @@ impl Local {
         let manual_count = self.manual_count.get().wrapping_add(1);
         self.manual_count.set(manual_count);
 
-        if manual_count % unsafe { MANUAL_EVENTS_BETWEEN_COLLECT } == 0 {
+        if manual_count % MANUAL_EVENTS_BETWEEN_COLLECT.load(Ordering::Relaxed) == 0 {
             self.flush(guard);
         }
     }
@@ -659,7 +659,7 @@ mod tests {
         let mut bag = Bag::new();
         assert!(bag.is_empty());
 
-        for _ in 0..unsafe { MAX_OBJECTS } {
+        for _ in 0..MAX_OBJECTS.load(Ordering::Relaxed) {
             assert!(unsafe { bag.try_push(Deferred::new(incr)).is_ok() });
             assert!(!bag.is_empty());
             assert_eq!(FLAG.load(Ordering::Relaxed), 0);
@@ -671,6 +671,9 @@ mod tests {
         assert_eq!(FLAG.load(Ordering::Relaxed), 0);
 
         drop(bag);
-        assert_eq!(FLAG.load(Ordering::Relaxed), unsafe { MAX_OBJECTS });
+        assert_eq!(
+            FLAG.load(Ordering::Relaxed),
+            MAX_OBJECTS.load(Ordering::Relaxed)
+        );
     }
 }

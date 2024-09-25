@@ -1,11 +1,12 @@
 use std::mem::forget;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::epoch::Epoch;
 
 #[cfg(not(feature = "sanitize"))]
-static mut MAX_OBJECTS: usize = 64;
+static MAX_OBJECTS: AtomicUsize = AtomicUsize::new(64);
 #[cfg(feature = "sanitize")]
-static mut MAX_OBJECTS: usize = 4;
+static MAX_OBJECTS: AtomicUsize = AtomicUsize::new(4);
 
 /// Sets the capacity of thread-local garbage bag.
 ///
@@ -13,13 +14,13 @@ static mut MAX_OBJECTS: usize = 4;
 #[inline]
 pub fn set_bag_capacity(cap: usize) {
     assert!(cap > 1, "capacity must be greater than 1.");
-    unsafe { MAX_OBJECTS = cap };
+    MAX_OBJECTS.store(cap, Ordering::Relaxed);
 }
 
 /// Returns the current capacity of thread-local garbage bag.
 #[inline]
 pub fn bag_capacity() -> usize {
-    unsafe { MAX_OBJECTS }
+    MAX_OBJECTS.load(Ordering::Relaxed)
 }
 
 /// A deferred task consisted of data and a callable function.
