@@ -217,8 +217,9 @@ where
 
             let mut node = self.anchor_next;
             while node.with_tag(0) != self.curr.with_tag(0) {
-                // SAFETY: the fact that node is tagged means that it cannot be modified, hence we can safety do an non-atomic load.
-                let next = unsafe { node.deref().next.as_shared() };
+                // NOTE: It may seem like this can be done with a NA load, but we do a `fetch_or` in remove, which always does an write.
+                // This can be a NA load if the `fetch_or` in delete is changed to a CAS, but it is not clear if it is worth it.
+                let next = unsafe { node.deref().next.load(Ordering::Relaxed) };
                 debug_assert!(next.tag() != 0);
                 unsafe { self.handle.thread.retire(node.with_tag(0).into_raw()) };
                 node = next;
