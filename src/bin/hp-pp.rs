@@ -36,7 +36,9 @@ fn bench(config: &Config, output: BenchWriter) {
         DS::NMTree => bench_map::<NMTreeMap<usize, usize>>(config, PrefillStrategy::Random),
         DS::EFRBTree => bench_map::<EFRBTree<usize, usize>>(config, PrefillStrategy::Random),
         DS::SkipList => bench_map::<SkipList<usize, usize>>(config, PrefillStrategy::Decreasing),
-        DS::BonsaiTree => bench_map::<BonsaiTreeMap<usize, usize>>(config, PrefillStrategy::Random),
+        DS::BonsaiTree => {
+            bench_map::<BonsaiTreeMap<usize, usize>>(config, PrefillStrategy::Decreasing)
+        }
     };
     output.write_record(config, &perf);
     println!("{}", perf);
@@ -44,7 +46,9 @@ fn bench(config: &Config, output: BenchWriter) {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrefillStrategy {
+    /// Inserts keys in a random order, with multiple threads.
     Random,
+    /// Inserts keys in an increasing order, with a single thread.
     Decreasing,
 }
 

@@ -40,7 +40,11 @@ fn bench(config: &Config, output: BenchWriter) {
             bench_map::<SkipList<usize, usize, CsHP>>(config, PrefillStrategy::Decreasing)
         }
         DS::BonsaiTree => {
-            bench_map::<BonsaiTreeMap<usize, usize, CsHP>>(config, PrefillStrategy::Random)
+            // Note: Using the `Random` strategy with the Bonsai tree is unsafe
+            // because it involves multiple threads with unprotected guards.
+            // It is safe for many other data structures that don't retire elements
+            // during insertion, but this is not the case for the Bonsai tree.
+            bench_map::<BonsaiTreeMap<usize, usize, CsHP>>(config, PrefillStrategy::Decreasing)
         }
         _ => panic!("Unsupported(or unimplemented) data structure for CDRC"),
     };
@@ -50,7 +54,9 @@ fn bench(config: &Config, output: BenchWriter) {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrefillStrategy {
+    /// Inserts keys in a random order, with multiple threads.
     Random,
+    /// Inserts keys in an increasing order, with a single thread.
     Decreasing,
 }
 
@@ -64,6 +70,9 @@ impl PrefillStrategy {
                 scope(|s| {
                     for t in 0..threads {
                         s.spawn(move |_| {
+                            // Safety: We assume that the insert operation does not retire
+                            // any elements. Note that this assumption may not hold for all
+                            // data structures (e.g., Bonsai tree).
                             let cs = unsafe { &Cs::unprotected() };
                             let output = &mut M::empty_output();
                             let rng = &mut rand::thread_rng();
