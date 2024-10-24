@@ -333,7 +333,7 @@ impl CsGuard {
     }
 
     /// Starts a non-crashable section where we can conduct operations with global side-effects.
-    /// 
+    ///
     /// It issues a `SeqCst` fence at the beginning, so that a protected hazard pointers can be
     /// dereferenced within this section. If you are not going to use such local pointers,
     /// it would be better to use `mask_light` instead, which issues a compiler fence only.
@@ -360,7 +360,7 @@ impl CsGuard {
     }
 
     /// Starts a non-crashable section where we can conduct operations with global side-effects.
-    /// 
+    ///
     /// It issues a compiler fence at the beginning to prevent unexpected instruction reordering
     /// across this region boundary. If you are going to use local pointers that are protected
     /// with hazard pointers, see `mask` instead.
