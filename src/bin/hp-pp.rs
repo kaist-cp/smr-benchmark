@@ -39,6 +39,7 @@ fn bench(config: &Config, output: BenchWriter) {
         DS::BonsaiTree => {
             bench_map::<BonsaiTreeMap<usize, usize>>(config, PrefillStrategy::Decreasing)
         }
+        _ => panic!("Unsupported(or unimplemented) data structure for HP++"),
     };
     output.write_record(config, &perf);
     println!("{}", perf);

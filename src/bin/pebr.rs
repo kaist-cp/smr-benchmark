@@ -46,6 +46,7 @@ fn bench<N: Unsigned>(config: &Config, output: BenchWriter) {
         }
         DS::EFRBTree => bench_map::<EFRBTree<usize, usize>, N>(config, PrefillStrategy::Random),
         DS::SkipList => bench_map::<SkipList<usize, usize>, N>(config, PrefillStrategy::Decreasing),
+        _ => panic!("Unsupported(or unimplemented) data structure for PEBR"),
     };
     output.write_record(config, &perf);
     println!("{}", perf);

@@ -13,6 +13,7 @@ pub use self::concurrent_map::ConcurrentMap;
 
 pub use self::bonsai_tree::BonsaiTreeMap;
 pub use self::double_link::DoubleLink;
+pub use self::elim_ab_tree::ElimABTree;
 pub use self::ellen_tree::EFRBTree;
 pub use self::list::{HHSList, HList, HMList};
 pub use self::michael_hash_map::HashMap;

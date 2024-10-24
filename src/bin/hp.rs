@@ -38,6 +38,7 @@ fn bench(config: &Config, output: BenchWriter) {
             bench_map::<BonsaiTreeMap<usize, usize>>(config, PrefillStrategy::Decreasing)
         }
         DS::NMTree => bench_map::<NMTreeMap<usize, usize>>(config, PrefillStrategy::Random),
+        _ => panic!("Unsupported(or unimplemented) data structure for HP"),
     };
     output.write_record(config, &perf);
     println!("{}", perf);

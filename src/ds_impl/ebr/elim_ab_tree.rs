@@ -336,7 +336,7 @@ struct Cursor<'g, K, V> {
     l_version: usize,
 }
 
-struct ElimABTree<K, V> {
+pub struct ElimABTree<K, V> {
     entry: Node<K, V>,
 }
 
@@ -370,7 +370,7 @@ where
         node.read_value_version(key).1
     }
 
-    pub fn search<'g>(
+    fn search<'g>(
         &self,
         key: &K,
         target: Option<Shared<'g, Node<K, V>>>,
@@ -423,7 +423,7 @@ where
         }
     }
 
-    pub fn insert_inner<'g>(
+    fn insert_inner<'g>(
         &self,
         key: &K,
         value: &V,

@@ -36,6 +36,7 @@ fn bench(config: &Config, output: BenchWriter) {
             bench_map::<BonsaiTreeMap<usize, usize>>(config, PrefillStrategy::Decreasing)
         }
         DS::EFRBTree => bench_map::<EFRBTree<usize, usize>>(config, PrefillStrategy::Random),
+        DS::ElimAbTree => todo!(),
     };
     output.write_record(config, &perf);
     println!("{}", perf);

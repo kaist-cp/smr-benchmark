@@ -17,6 +17,7 @@ pub enum DS {
     BonsaiTree,
     EFRBTree,
     SkipList,
+    ElimAbTree,
 }
 
 pub enum OpsPerCs {
