@@ -333,6 +333,10 @@ impl CsGuard {
     }
 
     /// Starts a non-crashable section where we can conduct operations with global side-effects.
+    /// 
+    /// It issues a `SeqCst` fence at the beginning, so that a protected hazard pointers can be
+    /// dereferenced within this section. If you are not going to use such local pointers,
+    /// it would be better to use `mask_light` instead, which issues a compiler fence only.
     ///
     /// In this section, we do not restart immediately when we receive signals from reclaimers.
     /// The whole critical section restarts after this `mask` section ends, if a reclaimer sent
@@ -350,6 +354,33 @@ impl CsGuard {
         R: Copy,
     {
         fence(Ordering::SeqCst);
+        let result = self.rb.atomic(|_| body(&mut RaGuard { local: self.local }));
+        compiler_fence(Ordering::SeqCst);
+        result
+    }
+
+    /// Starts a non-crashable section where we can conduct operations with global side-effects.
+    /// 
+    /// It issues a compiler fence at the beginning to prevent unexpected instruction reordering
+    /// across this region boundary. If you are going to use local pointers that are protected
+    /// with hazard pointers, see `mask` instead.
+    ///
+    /// In this section, we do not restart immediately when we receive signals from reclaimers.
+    /// The whole critical section restarts after this `mask` section ends, if a reclaimer sent
+    /// a signal, or we advanced our epoch to reclaim a full local garbage bag.
+    ///
+    /// The body may return an arbitrary value, and it will be returned without any modifications.
+    /// However, it is required to return a *rollback-safe* variable from the body. For example,
+    /// [`String`] or [`Box`] is dangerous to return as it will be leaked on a crash! On the other
+    /// hand, [`Copy`] types is likely to be safe as they are totally defined by their bit-wise
+    /// representations, and have no possibilities to be leaked after an unexpected crash.
+    #[inline(always)]
+    pub fn mask_light<F, R>(&self, body: F) -> R
+    where
+        F: FnOnce(&mut RaGuard) -> R,
+        R: Copy,
+    {
+        compiler_fence(Ordering::SeqCst);
         let result = self.rb.atomic(|_| body(&mut RaGuard { local: self.local }));
         compiler_fence(Ordering::SeqCst);
         result
