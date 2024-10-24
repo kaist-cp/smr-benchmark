@@ -2,7 +2,7 @@ use std::sync::atomic::{fence, AtomicUsize, Ordering};
 
 use crossbeam_ebr::{unprotected, Atomic, Guard, Owned, Shared};
 
-use super::concurrent_map::ConcurrentMap;
+use super::concurrent_map::{ConcurrentMap, OutputHolder};
 
 const MAX_HEIGHT: usize = 32;
 
@@ -401,7 +401,7 @@ where
     }
 
     #[inline(always)]
-    fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
+    fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<impl OutputHolder<V>> {
         let cursor = self.find_optimistic(key, guard);
         cursor.found.map(|node| &node.value)
     }
@@ -412,7 +412,7 @@ where
     }
 
     #[inline(always)]
-    fn remove<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
+    fn remove<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<impl OutputHolder<V>> {
         self.remove(key, guard)
     }
 }
@@ -424,6 +424,6 @@ mod tests {
 
     #[test]
     fn smoke_skip_list() {
-        concurrent_map::tests::smoke::<SkipList<i32, String>>();
+        concurrent_map::tests::smoke::<_, SkipList<i32, String>, _>(&i32::to_string);
     }
 }

@@ -1,6 +1,6 @@
 use crossbeam_ebr::{unprotected, Atomic, Guard, Owned, Shared};
 
-use super::concurrent_map::ConcurrentMap;
+use super::concurrent_map::{ConcurrentMap, OutputHolder};
 
 use std::cmp;
 use std::sync::atomic::Ordering;
@@ -720,7 +720,7 @@ where
     }
 
     #[inline(always)]
-    fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
+    fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<impl OutputHolder<V>> {
         self.get(key, guard)
     }
     #[inline(always)]
@@ -728,7 +728,7 @@ where
         self.insert(key, value, guard)
     }
     #[inline(always)]
-    fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+    fn remove<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<impl OutputHolder<V>> {
         self.remove(key, guard)
     }
 }
@@ -740,6 +740,6 @@ mod tests {
 
     #[test]
     fn smoke_bonsai_tree() {
-        concurrent_map::tests::smoke::<BonsaiTreeMap<i32, String>>();
+        concurrent_map::tests::smoke::<_, BonsaiTreeMap<i32, String>, _>(&i32::to_string);
     }
 }

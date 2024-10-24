@@ -1,4 +1,4 @@
-// use super::concurrent_map::ConcurrentMap;
+use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use crossbeam_ebr::{unprotected, Atomic, Guard, Owned, Pointer, Shared};
 
 use std::cell::UnsafeCell;
@@ -1257,64 +1257,38 @@ fn ufcells_clone<T: Copy>(src: &[UnsafeCell<T>], dst: &mut [UnsafeCell<T>], len:
     }
 }
 
-#[cfg(test)]
-pub mod tests {
-    extern crate rand;
-    use super::ElimABTree;
-    use crossbeam_ebr::pin;
-    use crossbeam_utils::thread;
-    use rand::prelude::*;
+impl<K, V> ConcurrentMap<K, V> for ElimABTree<K, V>
+where
+    K: Ord + Eq + Default + Copy,
+    V: Default + Copy,
+{
+    fn new() -> Self {
+        Self::new()
+    }
 
-    const THREADS: i32 = 30;
-    const ELEMENTS_PER_THREADS: i32 = 1000;
+    #[inline(always)]
+    fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<impl OutputHolder<V>> {
+        self.search_basic(key, guard)
+    }
+
+    #[inline(always)]
+    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
+        self.insert(&key, &value, guard).is_ok()
+    }
+
+    #[inline(always)]
+    fn remove<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<impl OutputHolder<V>> {
+        self.remove(key, guard)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ElimABTree;
+    use crate::ds_impl::ebr::concurrent_map;
 
     #[test]
-    pub fn smoke() {
-        let map = &ElimABTree::new();
-
-        thread::scope(|s| {
-            for t in 0..THREADS {
-                s.spawn(move |_| {
-                    let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> =
-                        (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
-                    keys.shuffle(&mut rng);
-                    for i in keys {
-                        assert!(map.insert(&i, &i, &pin()).is_ok());
-                    }
-                });
-            }
-        })
-        .unwrap();
-
-        thread::scope(|s| {
-            for t in 0..(THREADS / 2) {
-                s.spawn(move |_| {
-                    let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> =
-                        (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
-                    keys.shuffle(&mut rng);
-                    for i in keys {
-                        assert_eq!(i, map.remove(&i, &pin()).unwrap());
-                    }
-                });
-            }
-        })
-        .unwrap();
-
-        thread::scope(|s| {
-            for t in (THREADS / 2)..THREADS {
-                s.spawn(move |_| {
-                    let mut rng = rand::thread_rng();
-                    let mut keys: Vec<i32> =
-                        (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
-                    keys.shuffle(&mut rng);
-                    for i in keys {
-                        assert_eq!(i, map.search_basic(&i, &pin()).unwrap());
-                    }
-                });
-            }
-        })
-        .unwrap();
+    fn smoke_nm_tree() {
+        concurrent_map::tests::smoke::<_, ElimABTree<i32, i32>, _>(&|a| *a);
     }
 }

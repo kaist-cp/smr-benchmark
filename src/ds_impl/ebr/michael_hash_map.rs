@@ -1,4 +1,4 @@
-use super::concurrent_map::ConcurrentMap;
+use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use crossbeam_ebr::Guard;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -35,7 +35,7 @@ where
         s.finish() as usize
     }
 
-    pub fn get<'g>(&'g self, k: &'g K, guard: &'g Guard) -> Option<&'g V> {
+    pub fn get<'g>(&'g self, k: &'g K, guard: &'g Guard) -> Option<impl OutputHolder<V> + 'g> {
         let i = Self::hash(k);
         self.get_bucket(i).get(k, guard)
     }
@@ -45,7 +45,7 @@ where
         self.get_bucket(i).insert(k, v, guard)
     }
 
-    pub fn remove<'g>(&'g self, k: &'g K, guard: &'g Guard) -> Option<&'g V> {
+    pub fn remove<'g>(&'g self, k: &'g K, guard: &'g Guard) -> Option<impl OutputHolder<V> + 'g> {
         let i = Self::hash(k);
         self.get_bucket(i).remove(k, guard)
     }
@@ -61,7 +61,7 @@ where
     }
 
     #[inline(always)]
-    fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
+    fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<impl OutputHolder<V>> {
         self.get(key, guard)
     }
     #[inline(always)]
@@ -69,7 +69,7 @@ where
         self.insert(key, value, guard)
     }
     #[inline(always)]
-    fn remove<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
+    fn remove<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<impl OutputHolder<V>> {
         self.remove(key, guard)
     }
 }
@@ -81,6 +81,6 @@ mod tests {
 
     #[test]
     fn smoke_hashmap() {
-        concurrent_map::tests::smoke::<HashMap<i32, String>>();
+        concurrent_map::tests::smoke::<_, HashMap<i32, String>, _>(&i32::to_string);
     }
 }

@@ -1,4 +1,4 @@
-use super::concurrent_map::ConcurrentMap;
+use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use crossbeam_ebr::{unprotected, Atomic, Guard, Owned, Shared};
 
 use std::cmp::Ordering::{Equal, Greater, Less};
@@ -398,7 +398,7 @@ where
     }
 
     #[inline(always)]
-    fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+    fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<impl OutputHolder<V>> {
         self.inner.harris_get(key, guard)
     }
     #[inline(always)]
@@ -406,7 +406,7 @@ where
         self.inner.harris_insert(key, value, guard)
     }
     #[inline(always)]
-    fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+    fn remove<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<impl OutputHolder<V>> {
         self.inner.harris_remove(key, guard)
     }
 }
@@ -425,7 +425,7 @@ where
     }
 
     #[inline(always)]
-    fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+    fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<impl OutputHolder<V>> {
         self.inner.harris_michael_get(key, guard)
     }
     #[inline(always)]
@@ -433,7 +433,7 @@ where
         self.inner.harris_michael_insert(key, value, guard)
     }
     #[inline(always)]
-    fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+    fn remove<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<impl OutputHolder<V>> {
         self.inner.harris_michael_remove(key, guard)
     }
 }
@@ -464,7 +464,7 @@ where
     }
 
     #[inline(always)]
-    fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+    fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<impl OutputHolder<V>> {
         self.inner.harris_herlihy_shavit_get(key, guard)
     }
     #[inline(always)]
@@ -472,7 +472,7 @@ where
         self.inner.harris_insert(key, value, guard)
     }
     #[inline(always)]
-    fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+    fn remove<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<impl OutputHolder<V>> {
         self.inner.harris_remove(key, guard)
     }
 }
@@ -484,17 +484,17 @@ mod tests {
 
     #[test]
     fn smoke_h_list() {
-        concurrent_map::tests::smoke::<HList<i32, String>>();
+        concurrent_map::tests::smoke::<_, HList<i32, String>, _>(&i32::to_string);
     }
 
     #[test]
     fn smoke_hm_list() {
-        concurrent_map::tests::smoke::<HMList<i32, String>>();
+        concurrent_map::tests::smoke::<_, HMList<i32, String>, _>(&i32::to_string);
     }
 
     #[test]
     fn smoke_hhs_list() {
-        concurrent_map::tests::smoke::<HHSList<i32, String>>();
+        concurrent_map::tests::smoke::<_, HHSList<i32, String>, _>(&i32::to_string);
     }
 
     #[test]
