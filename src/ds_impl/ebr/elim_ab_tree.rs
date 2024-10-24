@@ -917,7 +917,7 @@ where
             // So, we first check for any weight violations and fix any that we see.
             if !parent.weight.load(Ordering::Relaxed)
                 || !node.weight.load(Ordering::Relaxed)
-                || !node.weight.load(Ordering::Relaxed)
+                || !sibling.weight.load(Ordering::Relaxed)
             {
                 drop(left_lock);
                 drop(right_lock);
