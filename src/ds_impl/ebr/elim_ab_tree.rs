@@ -206,8 +206,9 @@ where
     }
 
     fn child_index(&self, key: &K) -> usize {
+        let key_count = self.key_count();
         let mut index = 0;
-        while index < self.key_count() && !(key < &self.keys[index].get().unwrap()) {
+        while index < key_count && !(key < &self.keys[index].get().unwrap()) {
             index += 1;
         }
         index
@@ -758,7 +759,10 @@ where
             AcqResult::Acquired(lock) => lock,
             AcqResult::Eliminated(_) => return Err(()),
         };
-        if node.marked.load(Ordering::Acquire) {
+        // Bug Fix: Added a check to ensure the node size is greater than 0.
+        // This prevents underflows caused by decrementing the size value.
+        // This check is not present in the original code.
+        if node.marked.load(Ordering::Acquire) && node.size.load(Ordering::Acquire) > 0 {
             return Err(());
         }
 
