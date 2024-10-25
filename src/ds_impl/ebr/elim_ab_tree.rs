@@ -1066,14 +1066,16 @@ where
                 let left_size = size / 2;
                 let right_size = size - left_size;
 
-                let mut kv_pairs: [(MaybeUninit<K>, MaybeUninit<V>); 2 * DEGREE] =
-                    [(MaybeUninit::uninit(), MaybeUninit::uninit()); 2 * DEGREE];
+                assert!(left.is_leaf() == right.is_leaf());
 
-                // Combine the contents of `l` and `s`
-                // (and one key from `p` if `l` and `s` are internal).
-                let (mut key_count, mut val_count) = (0, 0);
-                if left.is_leaf() {
-                    debug_assert!(right.is_leaf());
+                let (new_left, new_right, pivot) = if left.is_leaf() {
+                    let mut kv_pairs: [(MaybeUninit<K>, MaybeUninit<V>); 2 * DEGREE] =
+                        [(MaybeUninit::uninit(), MaybeUninit::uninit()); 2 * DEGREE];
+
+                    // Combine the contents of `l` and `s`
+                    // (and one key from `p` if `l` and `s` are internal).
+                    let (mut key_count, mut val_count) = (0, 0);
+
                     for i in 0..DEGREE {
                         let key = some_or!(unsafe { *left.keys[i].get() }, continue);
                         let val = unsafe { *left.values()[i].get() };
@@ -1082,30 +1084,7 @@ where
                         key_count += 1;
                         val_count += 1;
                     }
-                } else {
-                    for i in 0..left.key_count() {
-                        kv_pairs[key_count]
-                            .0
-                            .write(unsafe { *left.keys[i].get() }.unwrap());
-                        key_count += 1;
-                    }
-                    for i in 0..lsize {
-                        kv_pairs[val_count]
-                            .1
-                            .write(unsafe { *left.values()[i].get() });
-                        val_count += 1;
-                    }
-                }
 
-                if !left.is_leaf() {
-                    kv_pairs[key_count]
-                        .0
-                        .write(unsafe { *parent.keys[left_idx].get() }.unwrap());
-                    key_count += 1;
-                }
-
-                if right.is_leaf() {
-                    debug_assert!(left.is_leaf());
                     for i in 0..DEGREE {
                         let key = some_or!(unsafe { *right.keys[i].get() }, continue);
                         let val = unsafe { *right.values()[i].get() };
@@ -1114,82 +1093,119 @@ where
                         key_count += 1;
                         val_count += 1;
                     }
+
+                    let kv_pairs =
+                        unsafe { transmute::<_, &mut [(K, V)]>(&mut kv_pairs[0..key_count]) };
+
+                    kv_pairs.sort_by_key(|(k, _)| *k);
+
+                    (key_count, val_count) = (0, 0);
+
+                    let (new_left, pivot) = {
+                        let mut new_leaf =
+                            Owned::new(Node::leaf(true, left_size, kv_pairs[key_count].0));
+                        for i in 0..left_size {
+                            *new_leaf.keys[i].get_mut() = Some(kv_pairs[key_count].0);
+                            *new_leaf.values_mut()[i].get_mut() = kv_pairs[val_count].1;
+                            key_count += 1;
+                            val_count += 1;
+                        }
+                        (new_leaf, kv_pairs[key_count].0)
+                    };
+
+                    // Reserve one key for the parent (to go between `new_left` and `new_right`).
+
+                    let new_right = {
+                        debug_assert!(left.is_leaf());
+                        let mut new_leaf =
+                            Owned::new(Node::leaf(true, right_size, kv_pairs[key_count].0));
+                        for i in 0..right_size - (if left.is_leaf() { 0 } else { 1 }) {
+                            *new_leaf.keys[i].get_mut() = Some(kv_pairs[key_count].0);
+                            key_count += 1;
+                        }
+                        for i in 0..right_size {
+                            *new_leaf.values_mut()[i].get_mut() = kv_pairs[val_count].1;
+                            val_count += 1;
+                        }
+                        new_leaf
+                    };
+
+                    (new_left, new_right, pivot)
                 } else {
+                    let mut kn_pairs: [(MaybeUninit<K>, Shared<'g, Node<K, V>>); 2 * DEGREE] =
+                        [(MaybeUninit::uninit(), Shared::null()); 2 * DEGREE];
+
+                    // Combine the contents of `l` and `s`
+                    // (and one key from `p` if `l` and `s` are internal).
+                    let (mut key_count, mut nxt_count) = (0, 0);
+
+                    for i in 0..left.key_count() {
+                        kn_pairs[key_count]
+                            .0
+                            .write(unsafe { *left.keys[i].get() }.unwrap());
+                        key_count += 1;
+                    }
+                    for i in 0..lsize {
+                        kn_pairs[nxt_count].1 = left.next()[i].load(Ordering::Relaxed, guard);
+                        nxt_count += 1;
+                    }
+
+                    kn_pairs[key_count]
+                        .0
+                        .write(unsafe { *parent.keys[left_idx].get() }.unwrap());
+                    key_count += 1;
+
                     for i in 0..right.key_count() {
-                        kv_pairs[key_count]
+                        kn_pairs[key_count]
                             .0
                             .write(unsafe { *right.keys[i].get() }.unwrap());
                         key_count += 1;
                     }
                     for i in 0..rsize {
-                        kv_pairs[val_count]
-                            .1
-                            .write(unsafe { *right.values()[i].get() });
-                        val_count += 1;
+                        kn_pairs[nxt_count].1 = right.next()[i].load(Ordering::Relaxed, guard);
+                        nxt_count += 1;
                     }
-                }
+                    let kn_pairs = unsafe {
+                        transmute::<_, &mut [(K, Shared<'g, Node<K, V>>)]>(
+                            &mut kn_pairs[0..key_count],
+                        )
+                    };
 
-                let kv_pairs =
-                    unsafe { transmute::<_, &mut [(K, V)]>(&mut kv_pairs[0..key_count]) };
-                if left.is_leaf() {
-                    kv_pairs.sort_by_key(|(k, _)| *k);
-                }
+                    (key_count, nxt_count) = (0, 0);
 
-                (key_count, val_count) = (0, 0);
-
-                let (new_left, pivot) = if left.is_leaf() {
-                    let mut new_leaf =
-                        Owned::new(Node::leaf(true, left_size, kv_pairs[key_count].0));
-                    for i in 0..left_size {
-                        *new_leaf.keys[i].get_mut() = Some(kv_pairs[key_count].0);
-                        *new_leaf.values_mut()[i].get_mut() = kv_pairs[val_count].1;
+                    let (new_left, pivot) = {
+                        let mut new_internal =
+                            Owned::new(Node::internal(true, left_size, kn_pairs[key_count].0));
+                        for i in 0..left_size - 1 {
+                            *new_internal.keys[i].get_mut() = Some(kn_pairs[key_count].0);
+                            key_count += 1;
+                        }
+                        for i in 0..left_size {
+                            new_internal.next_mut()[i] = Atomic::from(kn_pairs[nxt_count].1);
+                            nxt_count += 1;
+                        }
+                        let pivot = kn_pairs[key_count].0;
                         key_count += 1;
-                        val_count += 1;
-                    }
-                    (new_leaf, kv_pairs[key_count].0)
-                } else {
-                    let mut new_internal =
-                        Owned::new(Node::internal(true, left_size, kv_pairs[key_count].0));
-                    for i in 0..left_size - 1 {
-                        *new_internal.keys[i].get_mut() = Some(kv_pairs[key_count].0);
-                        key_count += 1;
-                    }
-                    for i in 0..left_size {
-                        *new_internal.values_mut()[i].get_mut() = kv_pairs[val_count].1;
-                        val_count += 1;
-                    }
-                    let pivot = kv_pairs[key_count].0;
-                    key_count += 1;
-                    (new_internal, pivot)
-                };
+                        (new_internal, pivot)
+                    };
 
-                // Reserve one key for the parent (to go between `new_left` and `new_right`).
+                    // Reserve one key for the parent (to go between `new_left` and `new_right`).
 
-                let new_right = if right.is_leaf() {
-                    debug_assert!(left.is_leaf());
-                    let mut new_leaf =
-                        Owned::new(Node::leaf(true, right_size, kv_pairs[key_count].0));
-                    for i in 0..right_size - (if left.is_leaf() { 0 } else { 1 }) {
-                        *new_leaf.keys[i].get_mut() = Some(kv_pairs[key_count].0);
-                        key_count += 1;
-                    }
-                    for i in 0..right_size {
-                        *new_leaf.values_mut()[i].get_mut() = kv_pairs[val_count].1;
-                        val_count += 1;
-                    }
-                    new_leaf
-                } else {
-                    let mut new_internal =
-                        Owned::new(Node::internal(true, right_size, kv_pairs[key_count].0));
-                    for i in 0..right_size - (if left.is_leaf() { 0 } else { 1 }) {
-                        *new_internal.keys[i].get_mut() = Some(kv_pairs[key_count].0);
-                        key_count += 1;
-                    }
-                    for i in 0..right_size {
-                        *new_internal.values_mut()[i].get_mut() = kv_pairs[val_count].1;
-                        val_count += 1;
-                    }
-                    new_internal
+                    let new_right = {
+                        let mut new_internal =
+                            Owned::new(Node::internal(true, right_size, kn_pairs[key_count].0));
+                        for i in 0..right_size - (if left.is_leaf() { 0 } else { 1 }) {
+                            *new_internal.keys[i].get_mut() = Some(kn_pairs[key_count].0);
+                            key_count += 1;
+                        }
+                        for i in 0..right_size {
+                            new_internal.next_mut()[i] = Atomic::from(kn_pairs[nxt_count].1);
+                            nxt_count += 1;
+                        }
+                        new_internal
+                    };
+
+                    (new_left, new_right, pivot)
                 };
 
                 let mut new_parent = Owned::new(Node::internal(
