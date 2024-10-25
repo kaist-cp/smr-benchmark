@@ -104,7 +104,7 @@ struct Node<K, V> {
     search_key: K,
     lock: AtomicPtr<MCSLockSlot<K, V>>,
     size: AtomicUsize,
-    weight: AtomicBool,
+    weight: bool,
     marked: AtomicBool,
     kind: NodeSpecific<K, V>,
 }
@@ -182,7 +182,7 @@ where
             search_key,
             lock: Default::default(),
             size: AtomicUsize::new(size),
-            weight: AtomicBool::new(weight),
+            weight,
             marked: AtomicBool::new(false),
             kind: NodeSpecific::Internal {
                 next: Default::default(),
@@ -196,7 +196,7 @@ where
             search_key,
             lock: Default::default(),
             size: AtomicUsize::new(size),
-            weight: AtomicBool::new(weight),
+            weight,
             marked: AtomicBool::new(false),
             kind: NodeSpecific::Leaf {
                 values: Default::default(),
@@ -545,7 +545,7 @@ where
     fn fix_tag_violation<'g>(&self, viol: Shared<'g, Node<K, V>>, guard: &'g Guard) {
         loop {
             let viol_node = unsafe { viol.deref() };
-            if viol_node.weight.load(Ordering::Relaxed) {
+            if viol_node.weight {
                 return;
             }
 
@@ -578,7 +578,7 @@ where
 
             // We cannot apply this update if p has a weight violation.
             // So, we check if this is the case, and, if so, try to fix it.
-            if !parent.weight.load(Ordering::Relaxed) {
+            if !parent.weight {
                 self.fix_tag_violation(cursor.p, guard);
                 continue;
             }
@@ -908,9 +908,9 @@ where
             // We can only apply AbsorbSibling or Distribute if there are no
             // weight violations at `parent`, `node`, or `sibling`.
             // So, we first check for any weight violations and fix any that we see.
-            if !parent.weight.load(Ordering::Relaxed)
-                || !node.weight.load(Ordering::Relaxed)
-                || !sibling.weight.load(Ordering::Relaxed)
+            if !parent.weight
+                || !node.weight
+                || !sibling.weight
             {
                 drop(left_lock);
                 drop(right_lock);
@@ -924,9 +924,9 @@ where
 
             // There are no weight violations at `parent`, `node` or `sibling`.
             debug_assert!(
-                parent.weight.load(Ordering::Relaxed)
-                    && node.weight.load(Ordering::Relaxed)
-                    && sibling.weight.load(Ordering::Relaxed)
+                parent.weight
+                    && node.weight
+                    && sibling.weight
             );
             // l and s are either both leaves or both internal nodes,
             // because there are no weight violations at these nodes.
@@ -1202,7 +1202,7 @@ where
                 };
 
                 let mut new_parent = Owned::new(Node::internal(
-                    parent.weight.load(Ordering::Relaxed),
+                    parent.weight,
                     psize,
                     parent.search_key,
                 ));
