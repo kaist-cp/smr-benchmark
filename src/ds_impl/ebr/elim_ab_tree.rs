@@ -1,9 +1,8 @@
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use crossbeam_ebr::{unprotected, Atomic, Guard, Owned, Pointer, Shared};
 
-use std::cell::UnsafeCell;
+use std::cell::{Cell, UnsafeCell};
 use std::hint::spin_loop;
-use std::mem::{transmute, MaybeUninit};
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{compiler_fence, AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 
@@ -18,7 +17,7 @@ struct MCSLockSlot<K, V> {
     next: AtomicPtr<Self>,
     owned: AtomicBool,
     short_circuit: AtomicBool,
-    ret: UnsafeCell<Option<V>>,
+    ret: Cell<Option<V>>,
 }
 
 impl<K, V> MCSLockSlot<K, V>
@@ -34,7 +33,7 @@ where
             next: Default::default(),
             owned: AtomicBool::new(false),
             short_circuit: AtomicBool::new(false),
-            ret: UnsafeCell::new(None),
+            ret: Cell::new(None),
         }
     }
 
@@ -59,7 +58,8 @@ impl<'l, K, V> Drop for MCSLockGuard<'l, K, V> {
     fn drop(&mut self) {
         let slot = unsafe { &*self.slot.get() };
         let node = unsafe { &*slot.node };
-        let next = if let Some(next) = unsafe { slot.next.load(Ordering::Relaxed).as_ref() } {
+        debug_assert!(slot.owned.load(Ordering::Acquire));
+        let next = if let Some(next) = unsafe { slot.next.load(Ordering::Acquire).as_ref() } {
             next
         } else {
             if node
@@ -67,8 +67,8 @@ impl<'l, K, V> Drop for MCSLockGuard<'l, K, V> {
                 .compare_exchange(
                     self.slot.get(),
                     null_mut(),
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
                 )
                 .is_ok()
             {
@@ -100,7 +100,7 @@ enum Operation {
 }
 
 struct Node<K, V> {
-    keys: [UnsafeCell<Option<K>>; DEGREE],
+    keys: [Cell<Option<K>>; DEGREE],
     search_key: K,
     lock: AtomicPtr<MCSLockSlot<K, V>>,
     size: AtomicUsize,
@@ -112,7 +112,7 @@ struct Node<K, V> {
 // Leaf or Internal node specific data.
 enum NodeSpecific<K, V> {
     Leaf {
-        values: [UnsafeCell<V>; DEGREE],
+        values: [Cell<Option<V>>; DEGREE],
         write_version: AtomicUsize,
     },
     Internal {
@@ -142,14 +142,14 @@ impl<K, V> Node<K, V> {
         }
     }
 
-    fn values(&self) -> &[UnsafeCell<V>; DEGREE] {
+    fn values(&self) -> &[Cell<Option<V>>; DEGREE] {
         match &self.kind {
             NodeSpecific::Leaf { values, .. } => values,
             _ => panic!("No values for an internal node."),
         }
     }
 
-    fn values_mut(&mut self) -> &mut [UnsafeCell<V>; DEGREE] {
+    fn values_mut(&mut self) -> &mut [Cell<Option<V>>; DEGREE] {
         match &mut self.kind {
             NodeSpecific::Leaf { values, .. } => values,
             _ => panic!("No values for an internal node."),
@@ -207,16 +207,14 @@ where
 
     fn child_index(&self, key: &K) -> usize {
         let mut index = 0;
-        while index < self.key_count()
-            && !(key < unsafe { &*self.keys[index].get() }.as_ref().unwrap())
-        {
+        while index < self.key_count() && !(key < &self.keys[index].get().unwrap()) {
             index += 1;
         }
         index
     }
 
     // Search a node for a key repeatedly until we successfully read a consistent version.
-    fn read_value_version(&self, key: &K) -> (usize, Option<V>, usize) {
+    fn read_consistent(&self, key: &K) -> (usize, Option<V>) {
         let NodeSpecific::Leaf {
             values,
             write_version,
@@ -230,18 +228,14 @@ where
                 version = write_version.load(Ordering::Acquire);
             }
             let mut key_index = 0;
-            while key_index < DEGREE && unsafe { *self.keys[key_index].get() } != Some(*key) {
+            while key_index < DEGREE && self.keys[key_index].get() != Some(*key) {
                 key_index += 1;
             }
-            let value = if key_index < DEGREE {
-                Some(unsafe { *values[key_index].get() })
-            } else {
-                None
-            };
+            let value = values.get(key_index).and_then(|value| value.get());
             compiler_fence(Ordering::SeqCst);
 
             if version == write_version.load(Ordering::Acquire) {
-                return (key_index, value, version);
+                return (key_index, value);
             }
         }
     }
@@ -253,17 +247,20 @@ where
         slot: &'l UnsafeCell<MCSLockSlot<K, V>>,
     ) -> AcqResult<'l, K, V> {
         unsafe { &mut *slot.get() }.init(self, op, key);
-        let old_tail = self.lock.swap(slot.get(), Ordering::Relaxed);
+        let old_tail = self.lock.swap(slot.get(), Ordering::AcqRel);
         let curr = unsafe { &*slot.get() };
 
         if let Some(old_tail) = unsafe { old_tail.as_ref() } {
-            old_tail.next.store(slot.get(), Ordering::Relaxed);
+            old_tail.next.store(slot.get(), Ordering::Release);
             while !curr.owned.load(Ordering::Acquire) && !curr.short_circuit.load(Ordering::Acquire)
             {
                 spin_loop();
             }
+            debug_assert!(
+                !curr.owned.load(Ordering::Relaxed) || !curr.short_circuit.load(Ordering::Relaxed)
+            );
             if curr.short_circuit.load(Ordering::Relaxed) {
-                return AcqResult::Eliminated(unsafe { *curr.ret.get() }.unwrap());
+                return AcqResult::Eliminated(curr.ret.get().unwrap());
             }
             debug_assert!(curr.owned.load(Ordering::Relaxed));
         } else {
@@ -278,7 +275,7 @@ where
         debug_assert!(self.is_leaf());
         debug_assert!(slot.op != Operation::Balance);
 
-        let stop_node = self.lock.load(Ordering::Relaxed);
+        let stop_node = self.lock.load(Ordering::Acquire);
         self.write_version()
             .store(old_version + 2, Ordering::Release);
 
@@ -304,7 +301,7 @@ where
                 prev_alive = curr;
             } else {
                 // Shortcircuit curr.
-                unsafe { (*curr_node.ret.get()) = Some(value) };
+                curr_node.ret.set(Some(value));
                 curr_node.short_circuit.store(true, Ordering::Release);
             }
             curr = next;
@@ -327,7 +324,6 @@ struct Cursor<'g, K, V> {
     /// Index of the key in `l`.
     l_key_idx: usize,
     val: Option<V>,
-    l_version: usize,
 }
 
 pub struct ElimABTree<K, V> {
@@ -361,7 +357,7 @@ where
             let next = next[node.child_index(key)].load(Ordering::Acquire, guard);
             node = unsafe { next.deref() };
         }
-        node.read_value_version(key).1
+        node.read_consistent(key).1
     }
 
     fn search<'g>(
@@ -378,7 +374,6 @@ where
             p_l_idx: 0,
             l_key_idx: 0,
             val: None,
-            l_version: 0,
         };
 
         while !unsafe { cursor.l.deref() }.is_leaf()
@@ -395,10 +390,9 @@ where
         if let Some(target) = target {
             (cursor.l == target, cursor)
         } else {
-            let (index, value, version) = unsafe { cursor.l.deref() }.read_value_version(key);
+            let (index, value) = unsafe { cursor.l.deref() }.read_consistent(key);
             cursor.val = value;
             cursor.l_key_idx = index;
-            cursor.l_version = version;
             (value.is_some(), cursor)
         }
     }
@@ -438,8 +432,8 @@ where
             return Err(());
         }
         for i in 0..DEGREE {
-            if unsafe { *node.keys[i].get() } == Some(*key) {
-                return Ok(Some(unsafe { *node.values()[i].get() }));
+            if node.keys[i].get() == Some(*key) {
+                return Ok(Some(node.values()[i].get().unwrap()));
             }
         }
         // At this point, we are guaranteed key is not in the node.
@@ -447,7 +441,7 @@ where
         if node.size.load(Ordering::Acquire) < Self::ABSORB_THRESHOLD {
             // We have the capacity to fit this new key. So let's just find an empty slot.
             for i in 0..DEGREE {
-                if unsafe { *node.keys[i].get() }.is_some() {
+                if node.keys[i].get().is_some() {
                     continue;
                 }
                 let old_version = node.write_version().load(Ordering::Relaxed);
@@ -455,16 +449,13 @@ where
                     .store(old_version + 1, Ordering::Relaxed);
                 debug_assert!(old_version % 2 == 0);
                 compiler_fence(Ordering::SeqCst);
-                unsafe {
-                    *node.keys[i].get() = Some(*key);
-                    *node.values()[i].get() = *value;
-                }
+                node.keys[i].set(Some(*key));
+                node.values()[i].set(Some(*value));
                 node.size
                     .store(node.size.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
 
                 node.elim_key_ops(*value, old_version, &node_lock);
 
-                // TODO: do smarter (lifetime)
                 drop(node_lock);
                 return Ok(None);
             }
@@ -480,19 +471,18 @@ where
                 _ => return Err(()),
             };
 
-            let mut kv_pairs: [MaybeUninit<(K, V)>; DEGREE + 1] =
-                [MaybeUninit::uninit(); DEGREE + 1];
+            let mut kv_pairs: [(K, V); DEGREE + 1] = [Default::default(); DEGREE + 1];
             let mut count = 0;
             for i in 0..DEGREE {
-                if let Some(key) = unsafe { *node.keys[i].get() } {
-                    let value = unsafe { *node.values()[i].get() };
-                    kv_pairs[count].write((key, value));
+                if let Some(key) = node.keys[i].get() {
+                    let value = node.values()[i].get().unwrap();
+                    kv_pairs[count] = (key, value);
                     count += 1;
                 }
             }
-            kv_pairs[count].write((*key, *value));
+            kv_pairs[count] = (*key, *value);
             count += 1;
-            let kv_pairs = unsafe { transmute::<_, &mut [(K, V)]>(&mut kv_pairs[0..count]) };
+            let kv_pairs = &mut kv_pairs[0..count];
             kv_pairs.sort_by_key(|(k, _)| *k);
 
             // Create new node(s).
@@ -506,16 +496,15 @@ where
             let mut left = Node::leaf(true, left_size, kv_pairs[0].0);
             for i in 0..left_size {
                 *left.keys[i].get_mut() = Some(kv_pairs[i].0);
-                *left.values_mut()[i].get_mut() = kv_pairs[i].1;
+                *left.values_mut()[i].get_mut() = Some(kv_pairs[i].1);
             }
 
             let mut right = Node::leaf(true, right_size, kv_pairs[left_size].0);
             for i in 0..right_size {
                 *right.keys[i].get_mut() = Some(kv_pairs[i + left_size].0);
-                *right.values_mut()[i].get_mut() = kv_pairs[i + left_size].1;
+                *right.values_mut()[i].get_mut() = Some(kv_pairs[i + left_size].1);
             }
 
-            // TODO: understand this comment...
             // The weight of new internal node `n` will be zero, unless it is the root.
             // This is because we test `p == entry`, above; in doing this, we are actually
             // performing Root-Zero at the same time as this Overflow if `n` will become the root.
@@ -621,8 +610,7 @@ where
                 // Create new node(s).
                 // The new arrays are small enough to fit in a single node,
                 // so we replace p by a new internal node.
-                let mut absorber =
-                    Node::internal(true, size, unsafe { &*parent.keys[0].get() }.unwrap());
+                let mut absorber = Node::internal(true, size, parent.keys[0].get().unwrap());
 
                 ptrs_clone(
                     &parent.next()[0..],
@@ -640,13 +628,13 @@ where
                     psize - (cursor.p_l_idx + 1),
                 );
 
-                ufcells_clone(&parent.keys[0..], &mut absorber.keys[0..], cursor.p_l_idx);
-                ufcells_clone(
+                cells_clone(&parent.keys[0..], &mut absorber.keys[0..], cursor.p_l_idx);
+                cells_clone(
                     &node.keys[0..],
                     &mut absorber.keys[cursor.p_l_idx..],
                     node.key_count(),
                 );
-                ufcells_clone(
+                cells_clone(
                     &parent.keys[cursor.p_l_idx..],
                     &mut absorber.keys[cursor.p_l_idx + node.key_count()..],
                     parent.key_count() - cursor.p_l_idx,
@@ -665,7 +653,7 @@ where
                 // Merge keys of p and l into one big array (and similarly for children).
                 // We essentially replace the pointer to l with the contents of l.
                 let mut next: [Atomic<Node<K, V>>; 2 * DEGREE] = Default::default();
-                let mut keys: [UnsafeCell<Option<K>>; 2 * DEGREE] = Default::default();
+                let mut keys: [Cell<Option<K>>; 2 * DEGREE] = Default::default();
 
                 ptrs_clone(&parent.next()[0..], &mut next[0..], cursor.p_l_idx);
                 ptrs_clone(&node.next()[0..], &mut next[cursor.p_l_idx..], nsize);
@@ -675,13 +663,13 @@ where
                     psize - (cursor.p_l_idx + 1),
                 );
 
-                ufcells_clone(&parent.keys[0..], &mut keys[0..], cursor.p_l_idx);
-                ufcells_clone(
+                cells_clone(&parent.keys[0..], &mut keys[0..], cursor.p_l_idx);
+                cells_clone(
                     &node.keys[0..],
                     &mut keys[cursor.p_l_idx..],
                     node.key_count(),
                 );
-                ufcells_clone(
+                cells_clone(
                     &parent.keys[cursor.p_l_idx..],
                     &mut keys[cursor.p_l_idx + node.key_count()..],
                     parent.key_count() - cursor.p_l_idx,
@@ -697,27 +685,25 @@ where
 
                 // Create new node(s).
                 let left_size = size / 2;
-                let mut left = Node::internal(true, left_size, unsafe { *keys[0].get() }.unwrap());
-                ufcells_clone(&keys[0..], &mut left.keys[0..], left_size - 1);
+                let mut left = Node::internal(true, left_size, keys[0].get().unwrap());
+                cells_clone(&keys[0..], &mut left.keys[0..], left_size - 1);
                 ptrs_clone(&next[0..], &mut left.next_mut()[0..], left_size);
 
                 let right_size = size - left_size;
-                let mut right =
-                    Node::internal(true, right_size, unsafe { *keys[left_size].get() }.unwrap());
-                ufcells_clone(&keys[left_size..], &mut right.keys[0..], right_size - 1);
+                let mut right = Node::internal(true, right_size, keys[left_size].get().unwrap());
+                cells_clone(&keys[left_size..], &mut right.keys[0..], right_size - 1);
                 ptrs_clone(&next[left_size..], &mut right.next_mut()[0..], right_size);
 
                 // Note: keys[left_size - 1] should be the same as new_internal.keys[0].
                 let mut new_internal = Node::internal(
                     std::ptr::eq(gparent, &self.entry),
                     2,
-                    unsafe { *keys[left_size - 1].get() }.unwrap(),
+                    keys[left_size - 1].get().unwrap(),
                 );
-                *new_internal.keys[0].get_mut() = unsafe { *keys[left_size - 1].get() };
+                *new_internal.keys[0].get_mut() = keys[left_size - 1].get();
                 new_internal.next()[0].store(Owned::new(left), Ordering::Relaxed);
                 new_internal.next()[1].store(Owned::new(right), Ordering::Relaxed);
 
-                // TODO: understand this comment...
                 // The weight of new internal node `n` will be zero, unless it is the root.
                 // This is because we test `p == entry`, above; in doing this, we are actually
                 // performing Root-Zero at the same time
@@ -772,19 +758,19 @@ where
             AcqResult::Acquired(lock) => lock,
             AcqResult::Eliminated(_) => return Err(()),
         };
-        if node.marked.load(Ordering::SeqCst) {
+        if node.marked.load(Ordering::Acquire) {
             return Err(());
         }
 
         let new_size = node.size.load(Ordering::Relaxed) - 1;
         for i in 0..DEGREE {
-            if unsafe { *node.keys[i].get() } == Some(*key) {
-                let val = unsafe { *node.values()[i].get() };
+            if node.keys[i].get() == Some(*key) {
+                let val = node.values()[i].get().unwrap();
                 let old_version = node.write_version().load(Ordering::Relaxed);
                 node.write_version()
                     .store(old_version + 1, Ordering::Relaxed);
                 compiler_fence(Ordering::SeqCst);
-                unsafe { *node.keys[i].get() = None };
+                node.keys[i].set(None);
                 node.size.store(new_size, Ordering::Relaxed);
 
                 node.elim_key_ops(val, old_version, &node_lock);
@@ -865,7 +851,6 @@ where
                     )
                 };
 
-            // TODO: maybe we should give a reference to a Pin?
             let left_lock = match left.acquire(Operation::Balance, None, &left_slot) {
                 AcqResult::Acquired(lock) => lock,
                 AcqResult::Eliminated(_) => continue,
@@ -908,10 +893,7 @@ where
             // We can only apply AbsorbSibling or Distribute if there are no
             // weight violations at `parent`, `node`, or `sibling`.
             // So, we first check for any weight violations and fix any that we see.
-            if !parent.weight
-                || !node.weight
-                || !sibling.weight
-            {
+            if !parent.weight || !node.weight || !sibling.weight {
                 drop(left_lock);
                 drop(right_lock);
                 drop(parent_lock);
@@ -923,11 +905,7 @@ where
             }
 
             // There are no weight violations at `parent`, `node` or `sibling`.
-            debug_assert!(
-                parent.weight
-                    && node.weight
-                    && sibling.weight
-            );
+            debug_assert!(parent.weight && node.weight && sibling.weight);
             // l and s are either both leaves or both internal nodes,
             // because there are no weight violations at these nodes.
             debug_assert!(
@@ -945,8 +923,8 @@ where
                 let new_node = if left.is_leaf() {
                     let mut new_leaf = Owned::new(Node::leaf(true, size, node.search_key));
                     for i in 0..DEGREE {
-                        let key = some_or!(unsafe { *left.keys[i].get() }, continue);
-                        let value = unsafe { *left.values()[i].get() };
+                        let key = some_or!(left.keys[i].get(), continue);
+                        let value = left.values()[i].get();
                         *new_leaf.keys[key_count].get_mut() = Some(key);
                         *new_leaf.values_mut()[next_count].get_mut() = value;
                         key_count += 1;
@@ -954,8 +932,8 @@ where
                     }
                     debug_assert!(right.is_leaf());
                     for i in 0..DEGREE {
-                        let key = some_or!(unsafe { *right.keys[i].get() }, continue);
-                        let value = unsafe { *right.values()[i].get() };
+                        let key = some_or!(right.keys[i].get(), continue);
+                        let value = right.values()[i].get();
                         *new_leaf.keys[key_count].get_mut() = Some(key);
                         *new_leaf.values_mut()[next_count].get_mut() = value;
                         key_count += 1;
@@ -965,11 +943,10 @@ where
                 } else {
                     let mut new_internal = Owned::new(Node::internal(true, size, node.search_key));
                     for i in 0..left.key_count() {
-                        *new_internal.keys[key_count].get_mut() = unsafe { *left.keys[i].get() };
+                        *new_internal.keys[key_count].get_mut() = left.keys[i].get();
                         key_count += 1;
                     }
-                    *new_internal.keys[key_count].get_mut() =
-                        unsafe { *parent.keys[left_idx].get() };
+                    *new_internal.keys[key_count].get_mut() = parent.keys[left_idx].get();
                     key_count += 1;
                     for i in 0..lsize {
                         new_internal.next_mut()[next_count] =
@@ -978,7 +955,7 @@ where
                     }
                     debug_assert!(!right.is_leaf());
                     for i in 0..right.key_count() {
-                        *new_internal.keys[key_count].get_mut() = unsafe { *right.keys[i].get() };
+                        *new_internal.keys[key_count].get_mut() = right.keys[i].get();
                         key_count += 1;
                     }
                     for i in 0..rsize {
@@ -1015,14 +992,14 @@ where
                     debug_assert!(!std::ptr::eq(gparent, &self.entry) || psize > 2);
                     let mut new_parent = Node::internal(true, psize - 1, parent.search_key);
                     for i in 0..left_idx {
-                        *new_parent.keys[i].get_mut() = unsafe { *parent.keys[i].get() };
+                        *new_parent.keys[i].get_mut() = parent.keys[i].get();
                     }
                     for i in 0..sibling_idx {
                         new_parent.next_mut()[i] =
                             Atomic::from(parent.next()[i].load(Ordering::Relaxed, guard));
                     }
                     for i in left_idx + 1..parent.key_count() {
-                        *new_parent.keys[i - 1].get_mut() = unsafe { *parent.keys[i].get() };
+                        *new_parent.keys[i - 1].get_mut() = parent.keys[i].get();
                     }
                     for i in cursor.p_l_idx + 1..psize {
                         new_parent.next_mut()[i - 1] =
@@ -1062,33 +1039,31 @@ where
                 assert!(left.is_leaf() == right.is_leaf());
 
                 let (new_left, new_right, pivot) = if left.is_leaf() {
-                    let mut kv_pairs: [(MaybeUninit<K>, MaybeUninit<V>); 2 * DEGREE] =
-                        [(MaybeUninit::uninit(), MaybeUninit::uninit()); 2 * DEGREE];
+                    let mut kv_pairs: [(K, V); 2 * DEGREE] = [Default::default(); 2 * DEGREE];
 
                     // Combine the contents of `l` and `s`
                     // (and one key from `p` if `l` and `s` are internal).
                     let (mut key_count, mut val_count) = (0, 0);
 
                     for i in 0..DEGREE {
-                        let key = some_or!(unsafe { *left.keys[i].get() }, continue);
-                        let val = unsafe { *left.values()[i].get() };
-                        kv_pairs[key_count].0.write(key);
-                        kv_pairs[val_count].1.write(val);
+                        let key = some_or!(left.keys[i].get(), continue);
+                        let val = left.values()[i].get().unwrap();
+                        kv_pairs[key_count].0 = key;
+                        kv_pairs[val_count].1 = val;
                         key_count += 1;
                         val_count += 1;
                     }
 
                     for i in 0..DEGREE {
-                        let key = some_or!(unsafe { *right.keys[i].get() }, continue);
-                        let val = unsafe { *right.values()[i].get() };
-                        kv_pairs[key_count].0.write(key);
-                        kv_pairs[val_count].1.write(val);
+                        let key = some_or!(right.keys[i].get(), continue);
+                        let val = right.values()[i].get().unwrap();
+                        kv_pairs[key_count].0 = key;
+                        kv_pairs[val_count].1 = val;
                         key_count += 1;
                         val_count += 1;
                     }
 
-                    let kv_pairs =
-                        unsafe { transmute::<_, &mut [(K, V)]>(&mut kv_pairs[0..key_count]) };
+                    let kv_pairs = &mut kv_pairs[0..key_count];
 
                     kv_pairs.sort_by_key(|(k, _)| *k);
 
@@ -1099,7 +1074,7 @@ where
                             Owned::new(Node::leaf(true, left_size, kv_pairs[key_count].0));
                         for i in 0..left_size {
                             *new_leaf.keys[i].get_mut() = Some(kv_pairs[key_count].0);
-                            *new_leaf.values_mut()[i].get_mut() = kv_pairs[val_count].1;
+                            *new_leaf.values_mut()[i].get_mut() = Some(kv_pairs[val_count].1);
                             key_count += 1;
                             val_count += 1;
                         }
@@ -1117,7 +1092,7 @@ where
                             key_count += 1;
                         }
                         for i in 0..right_size {
-                            *new_leaf.values_mut()[i].get_mut() = kv_pairs[val_count].1;
+                            *new_leaf.values_mut()[i].get_mut() = Some(kv_pairs[val_count].1);
                             val_count += 1;
                         }
                         new_leaf
@@ -1125,17 +1100,15 @@ where
 
                     (new_left, new_right, pivot)
                 } else {
-                    let mut kn_pairs: [(MaybeUninit<K>, Shared<'g, Node<K, V>>); 2 * DEGREE] =
-                        [(MaybeUninit::uninit(), Shared::null()); 2 * DEGREE];
+                    let mut kn_pairs: [(K, Shared<'g, Node<K, V>>); 2 * DEGREE] =
+                        [Default::default(); 2 * DEGREE];
 
                     // Combine the contents of `l` and `s`
                     // (and one key from `p` if `l` and `s` are internal).
                     let (mut key_count, mut nxt_count) = (0, 0);
 
                     for i in 0..left.key_count() {
-                        kn_pairs[key_count]
-                            .0
-                            .write(unsafe { *left.keys[i].get() }.unwrap());
+                        kn_pairs[key_count].0 = left.keys[i].get().unwrap();
                         key_count += 1;
                     }
                     for i in 0..lsize {
@@ -1143,26 +1116,18 @@ where
                         nxt_count += 1;
                     }
 
-                    kn_pairs[key_count]
-                        .0
-                        .write(unsafe { *parent.keys[left_idx].get() }.unwrap());
+                    kn_pairs[key_count].0 = parent.keys[left_idx].get().unwrap();
                     key_count += 1;
 
                     for i in 0..right.key_count() {
-                        kn_pairs[key_count]
-                            .0
-                            .write(unsafe { *right.keys[i].get() }.unwrap());
+                        kn_pairs[key_count].0 = right.keys[i].get().unwrap();
                         key_count += 1;
                     }
                     for i in 0..rsize {
                         kn_pairs[nxt_count].1 = right.next()[i].load(Ordering::Relaxed, guard);
                         nxt_count += 1;
                     }
-                    let kn_pairs = unsafe {
-                        transmute::<_, &mut [(K, Shared<'g, Node<K, V>>)]>(
-                            &mut kn_pairs[0..key_count],
-                        )
-                    };
+                    let kn_pairs = &mut kn_pairs[0..key_count];
 
                     (key_count, nxt_count) = (0, 0);
 
@@ -1201,12 +1166,9 @@ where
                     (new_left, new_right, pivot)
                 };
 
-                let mut new_parent = Owned::new(Node::internal(
-                    parent.weight,
-                    psize,
-                    parent.search_key,
-                ));
-                ufcells_clone(
+                let mut new_parent =
+                    Owned::new(Node::internal(parent.weight, psize, parent.search_key));
+                cells_clone(
                     &parent.keys[0..],
                     &mut new_parent.keys[0..],
                     parent.key_count(),
@@ -1258,11 +1220,10 @@ fn ptrs_clone<T>(src: &[Atomic<T>], dst: &mut [Atomic<T>], len: usize) {
     dst[0..len].clone_from_slice(&src[0..len]);
 }
 
-/// TODO: unsafe?
 #[inline]
-fn ufcells_clone<T: Copy>(src: &[UnsafeCell<T>], dst: &mut [UnsafeCell<T>], len: usize) {
+fn cells_clone<T: Copy>(src: &[Cell<T>], dst: &mut [Cell<T>], len: usize) {
     for i in 0..len {
-        unsafe { *dst[i].get_mut() = *src[i].get() };
+        *dst[i].get_mut() = src[i].get();
     }
 }
 
@@ -1297,7 +1258,7 @@ mod tests {
     use crate::ds_impl::ebr::concurrent_map;
 
     #[test]
-    fn smoke_nm_tree() {
+    fn smoke_elim_ab_tree() {
         concurrent_map::tests::smoke::<_, ElimABTree<i32, i32>, _>(&|a| *a);
     }
 }
