@@ -316,12 +316,6 @@ where
     }
 }
 
-enum InsertResult<V> {
-    Ok,
-    Retry,
-    Exists(V),
-}
-
 struct Cursor<'g, K, V> {
     l: Shared<'g, Node<K, V>>,
     p: Shared<'g, Node<K, V>>,
@@ -409,16 +403,15 @@ where
         }
     }
 
-    pub fn insert(&self, key: &K, value: &V, guard: &Guard) -> Result<(), V> {
+    pub fn insert(&self, key: &K, value: &V, guard: &Guard) -> Option<V> {
         loop {
             let (_, cursor) = self.search(key, None, guard);
             if let Some(value) = cursor.val {
-                return Err(value);
+                return Some(value);
             }
             match self.insert_inner(key, value, &cursor, guard) {
-                InsertResult::Ok => return Ok(()),
-                InsertResult::Exists(value) => return Err(value),
-                InsertResult::Retry => continue,
+                Ok(result) => return result,
+                Err(_) => continue,
             }
         }
     }
@@ -429,7 +422,7 @@ where
         value: &V,
         cursor: &Cursor<'g, K, V>,
         guard: &'g Guard,
-    ) -> InsertResult<V> {
+    ) -> Result<Option<V>, ()> {
         let node = unsafe { cursor.l.deref() };
         let parent = unsafe { cursor.p.deref() };
 
@@ -439,14 +432,14 @@ where
         let node_lock_slot = UnsafeCell::new(MCSLockSlot::new());
         let node_lock = match node.acquire(Operation::Insert, Some(*key), &node_lock_slot) {
             AcqResult::Acquired(lock) => lock,
-            AcqResult::Eliminated(value) => return InsertResult::Exists(value),
+            AcqResult::Eliminated(value) => return Ok(Some(value)),
         };
         if node.marked.load(Ordering::SeqCst) {
-            return InsertResult::Retry;
+            return Err(());
         }
         for i in 0..DEGREE {
             if unsafe { *node.keys[i].get() } == Some(*key) {
-                return InsertResult::Exists(unsafe { *node.values()[i].get() });
+                return Ok(Some(unsafe { *node.values()[i].get() }));
             }
         }
         // At this point, we are guaranteed key is not in the node.
@@ -473,7 +466,7 @@ where
 
                 // TODO: do smarter (lifetime)
                 drop(node_lock);
-                return InsertResult::Ok;
+                return Ok(None);
             }
             unreachable!("Should never happen");
         } else {
@@ -484,7 +477,7 @@ where
                 parent.marked.load(Ordering::SeqCst),
             ) {
                 (AcqResult::Acquired(lock), false) => lock,
-                _ => return InsertResult::Retry,
+                _ => return Err(()),
             };
 
             let mut kv_pairs: [MaybeUninit<(K, V)>; DEGREE + 1] =
@@ -545,7 +538,7 @@ where
             unsafe { guard.defer_destroy(cursor.l) };
             self.fix_tag_violation(new_internal, guard);
 
-            InsertResult::Ok
+            Ok(None)
         }
     }
 
@@ -1289,7 +1282,7 @@ where
 
     #[inline(always)]
     fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
-        self.insert(&key, &value, guard).is_ok()
+        self.insert(&key, &value, guard).is_none()
     }
 
     #[inline(always)]
