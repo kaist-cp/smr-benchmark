@@ -10,6 +10,19 @@ use std::sync::atomic::{compiler_fence, AtomicBool, AtomicPtr, AtomicUsize, Orde
 // https://gitlab.com/trbot86/setbench/-/blob/f4711af3ace28d8b4fa871559db74fb4e0e62cc0/ds/srivastava_abtree_mcs/adapter.h#L17
 const DEGREE: usize = 11;
 
+macro_rules! try_acq_val_or {
+    ($node:ident, $lock:ident, $op:expr, $key:expr, $acq_val_err:expr) => {
+        let __slot = UnsafeCell::new(MCSLockSlot::new());
+        let $lock = match (
+            $node.acquire($op, $key, &__slot),
+            $node.marked.load(Ordering::Acquire),
+        ) {
+            (AcqResult::Acquired(lock), false) => lock,
+            _ => $acq_val_err,
+        };
+    };
+}
+
 struct MCSLockSlot<K, V> {
     node: *const Node<K, V>,
     op: Operation,
@@ -463,14 +476,7 @@ where
             unreachable!("Should never happen");
         } else {
             // We do not have a room for this key. We need to make new nodes.
-            let parent_lock_slot = UnsafeCell::new(MCSLockSlot::new());
-            let parent_lock = match (
-                parent.acquire(Operation::Insert, None, &parent_lock_slot),
-                parent.marked.load(Ordering::SeqCst),
-            ) {
-                (AcqResult::Acquired(lock), false) => lock,
-                _ => return Err(()),
-            };
+            try_acq_val_or!(parent, parent_lock, Operation::Insert, None, return Err(()));
 
             let mut kv_pairs: [(K, V); DEGREE + 1] = [Default::default(); DEGREE + 1];
             let mut count = 0;
@@ -573,30 +579,9 @@ where
                 continue;
             }
 
-            let node_lock_slot = UnsafeCell::new(MCSLockSlot::new());
-            let node_lock = match (
-                node.acquire(Operation::Balance, None, &node_lock_slot),
-                node.marked.load(Ordering::Relaxed),
-            ) {
-                (AcqResult::Acquired(lock), false) => lock,
-                _ => continue,
-            };
-            let parent_lock_slot = UnsafeCell::new(MCSLockSlot::new());
-            let parent_lock = match (
-                parent.acquire(Operation::Balance, None, &parent_lock_slot),
-                parent.marked.load(Ordering::Relaxed),
-            ) {
-                (AcqResult::Acquired(lock), false) => lock,
-                _ => continue,
-            };
-            let gparent_lock_slot = UnsafeCell::new(MCSLockSlot::new());
-            let gparent_lock = match (
-                gparent.acquire(Operation::Balance, None, &gparent_lock_slot),
-                gparent.marked.load(Ordering::Relaxed),
-            ) {
-                (AcqResult::Acquired(lock), false) => lock,
-                _ => continue,
-            };
+            try_acq_val_or!(node, node_lock, Operation::Balance, None, continue);
+            try_acq_val_or!(parent, parent_lock, Operation::Balance, None, continue);
+            try_acq_val_or!(gparent, gparent_lock, Operation::Balance, None, continue);
 
             let psize = parent.size.load(Ordering::Relaxed);
             let nsize = viol_node.size.load(Ordering::Relaxed);
@@ -754,15 +739,17 @@ where
         debug_assert!(!parent.is_leaf());
         debug_assert!(gparent.map(|gp| !gp.is_leaf()).unwrap_or(true));
 
-        let node_lock_slot = UnsafeCell::new(MCSLockSlot::new());
-        let node_lock = match node.acquire(Operation::Delete, Some(*key), &node_lock_slot) {
-            AcqResult::Acquired(lock) => lock,
-            AcqResult::Eliminated(_) => return Err(()),
-        };
+        try_acq_val_or!(
+            node,
+            node_lock,
+            Operation::Delete,
+            Some(*key),
+            return Err(())
+        );
         // Bug Fix: Added a check to ensure the node size is greater than 0.
         // This prevents underflows caused by decrementing the size value.
         // This check is not present in the original code.
-        if node.marked.load(Ordering::Acquire) && node.size.load(Ordering::Acquire) > 0 {
+        if node.size.load(Ordering::Acquire) == 0 {
             return Err(());
         }
 
@@ -840,35 +827,14 @@ where
             let sibling = unsafe { sibling_sh.deref() };
 
             // Prevent deadlocks by acquiring left node first.
-            let node_lock_slot = UnsafeCell::new(MCSLockSlot::new());
-            let sibling_lock_slot = UnsafeCell::new(MCSLockSlot::new());
-            let ((left, left_idx, left_slot), (right, right_idx, right_slot)) =
-                if sibling_idx < cursor.p_l_idx {
-                    (
-                        (sibling, sibling_idx, sibling_lock_slot),
-                        (node, cursor.p_l_idx, node_lock_slot),
-                    )
-                } else {
-                    (
-                        (node, cursor.p_l_idx, node_lock_slot),
-                        (sibling, sibling_idx, sibling_lock_slot),
-                    )
-                };
+            let ((left, left_idx), (right, right_idx)) = if sibling_idx < cursor.p_l_idx {
+                ((sibling, sibling_idx), (node, cursor.p_l_idx))
+            } else {
+                ((node, cursor.p_l_idx), (sibling, sibling_idx))
+            };
 
-            let left_lock = match left.acquire(Operation::Balance, None, &left_slot) {
-                AcqResult::Acquired(lock) => lock,
-                AcqResult::Eliminated(_) => continue,
-            };
-            if left.marked.load(Ordering::Relaxed) {
-                continue;
-            }
-            let right_lock = match right.acquire(Operation::Balance, None, &right_slot) {
-                AcqResult::Acquired(lock) => lock,
-                AcqResult::Eliminated(_) => continue,
-            };
-            if right.marked.load(Ordering::Relaxed) {
-                continue;
-            }
+            try_acq_val_or!(left, left_lock, Operation::Balance, None, continue);
+            try_acq_val_or!(right, right_lock, Operation::Balance, None, continue);
 
             // Repeat this check, this might have changed while we locked `viol`.
             if viol_node.size.load(Ordering::Relaxed) >= Self::UNDERFULL_THRESHOLD {
@@ -876,23 +842,8 @@ where
                 return;
             }
 
-            let parent_lock_slot = UnsafeCell::new(MCSLockSlot::new());
-            let parent_lock = match parent.acquire(Operation::Balance, None, &parent_lock_slot) {
-                AcqResult::Acquired(lock) => lock,
-                AcqResult::Eliminated(_) => continue,
-            };
-            if parent.marked.load(Ordering::Relaxed) {
-                continue;
-            }
-
-            let gparent_lock_slot = UnsafeCell::new(MCSLockSlot::new());
-            let gparent_lock = match gparent.acquire(Operation::Balance, None, &gparent_lock_slot) {
-                AcqResult::Acquired(lock) => lock,
-                AcqResult::Eliminated(_) => continue,
-            };
-            if gparent.marked.load(Ordering::Relaxed) {
-                continue;
-            }
+            try_acq_val_or!(parent, parent_lock, Operation::Balance, None, continue);
+            try_acq_val_or!(gparent, gparent_lock, Operation::Balance, None, continue);
 
             // We can only apply AbsorbSibling or Distribute if there are no
             // weight violations at `parent`, `node`, or `sibling`.
