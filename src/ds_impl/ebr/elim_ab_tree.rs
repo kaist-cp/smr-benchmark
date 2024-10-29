@@ -1,8 +1,10 @@
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
+use arrayvec::ArrayVec;
 use crossbeam_ebr::{unprotected, Atomic, Guard, Owned, Pointer, Shared};
 
 use std::cell::{Cell, UnsafeCell};
 use std::hint::spin_loop;
+use std::iter::once;
 use std::ptr::{eq, null, null_mut};
 use std::sync::atomic::{compiler_fence, AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 
@@ -123,6 +125,9 @@ struct Node<K, V> {
     keys: [Cell<Option<K>>; DEGREE],
     search_key: K,
     lock: AtomicPtr<MCSLockSlot<K, V>>,
+    /// The number of next pointers (for an internal node) or values (for a leaf node).
+    /// Note that it may not be equal to the number of keys, because the last next pointer
+    /// is mapped by a bottom key (i.e., `None`).
     size: AtomicUsize,
     weight: bool,
     marked: AtomicBool,
@@ -418,6 +423,42 @@ where
 
         (next, keys)
     }
+
+    /// It requires a lock to guarantee the consistency.
+    /// Its length is equal to `key_count`.
+    fn enumerate_key<'g>(
+        &'g self,
+        _: &MCSLockGuard<'g, K, V>,
+    ) -> impl Iterator<Item = (usize, K)> + 'g {
+        self.keys
+            .iter()
+            .enumerate()
+            .filter_map(|(i, k)| k.get().map(|k| (i, k)))
+    }
+
+    /// Iterates key-value pairs in this **leaf** node.
+    /// It requires a lock to guarantee the consistency.
+    /// Its length is equal to the size of this node.
+    fn iter_key_value<'g>(
+        &'g self,
+        lock: &MCSLockGuard<'g, K, V>,
+    ) -> impl Iterator<Item = (K, V)> + 'g {
+        self.enumerate_key(lock)
+            .map(|(i, k)| (k, self.get_value(i).unwrap()))
+    }
+
+    /// Iterates key-next pairs in this **internal** node.
+    /// It requires a lock to guarantee the consistency.
+    /// Its length is equal to the size of this node, and only the last key is `None`.
+    fn iter_key_next<'g>(
+        &'g self,
+        lock: &MCSLockGuard<'g, K, V>,
+        guard: &'g Guard,
+    ) -> impl Iterator<Item = (Option<K>, Shared<'g, Self>)> + 'g {
+        self.enumerate_key(lock)
+            .map(|(i, k)| (Some(k), self.load_next(i, guard)))
+            .chain(once((None, self.load_next(self.key_count(), guard))))
+    }
 }
 
 struct WriteGuard<'g, K, V> {
@@ -578,15 +619,10 @@ where
             // We do not have a room for this key. We need to make new nodes.
             try_acq_val_or!(parent, parent_lock, Operation::Insert, None, return Err(()));
 
-            let mut kv_pairs: [(K, V); DEGREE + 1] = [Default::default(); DEGREE + 1];
-            let count = &mut 0;
-            for i in 0..DEGREE {
-                let key = some_or!(node.get_key(i), continue);
-                let value = node.get_value(i).unwrap();
-                kv_pairs[tick(count)] = (key, value);
-            }
-            kv_pairs[tick(count)] = (*key, *value);
-            let kv_pairs = &mut kv_pairs[0..*count];
+            let mut kv_pairs = node
+                .iter_key_value(&node_lock)
+                .chain(once((*key, *value)))
+                .collect::<ArrayVec<(K, V), { DEGREE + 1 }>>();
             kv_pairs.sort_by_key(|(k, _)| *k);
 
             // Create new node(s).
@@ -594,7 +630,7 @@ where
             // we replace `l` by a new subtree containing three new nodes: a parent, and two leaves.
             // The array contents are then split between the two new leaves.
 
-            let left_size = *count / 2;
+            let left_size = kv_pairs.len() / 2;
             let right_size = DEGREE + 1 - left_size;
 
             let mut left = Node::leaf(true, left_size, kv_pairs[0].0);
@@ -908,38 +944,30 @@ where
 
             if size < 2 * Self::UNDERFULL_THRESHOLD {
                 // AbsorbSibling
-                let (key_count, next_count) = (&mut 0, &mut 0);
                 let new_node = if left.is_leaf() {
-                    let mut new_leaf = Owned::new(Node::leaf(true, size, node.search_key));
-                    for i in 0..DEGREE {
-                        let key = some_or!(left.get_key(i), continue);
-                        let value = left.get_value(i).unwrap();
-                        new_leaf.init_key(tick(key_count), Some(key));
-                        new_leaf.init_value(tick(next_count), value);
-                    }
                     debug_assert!(right.is_leaf());
-                    for i in 0..DEGREE {
-                        let key = some_or!(right.get_key(i), continue);
-                        let value = right.get_value(i).unwrap();
-                        new_leaf.init_key(tick(key_count), Some(key));
-                        new_leaf.init_value(tick(next_count), value);
+                    let mut new_leaf = Owned::new(Node::leaf(true, size, node.search_key));
+                    let kv_iter = left
+                        .iter_key_value(&left_lock)
+                        .chain(right.iter_key_value(&right_lock))
+                        .enumerate();
+                    for (i, (key, value)) in kv_iter {
+                        new_leaf.init_key(i, Some(key));
+                        new_leaf.init_value(i, value);
                     }
                     new_leaf
                 } else {
-                    let mut new_internal = Owned::new(Node::internal(true, size, node.search_key));
-                    for i in 0..left.key_count() {
-                        new_internal.init_key(tick(key_count), left.get_key(i));
-                    }
-                    new_internal.init_key(tick(key_count), parent.get_key(left_idx));
-                    for i in 0..lsize {
-                        new_internal.init_next(tick(next_count), left.load_next(i, guard));
-                    }
                     debug_assert!(!right.is_leaf());
-                    for i in 0..right.key_count() {
-                        new_internal.init_key(tick(key_count), right.get_key(i));
-                    }
-                    for i in 0..rsize {
-                        new_internal.init_next(tick(next_count), right.load_next(i, guard));
+                    let mut new_internal = Owned::new(Node::internal(true, size, node.search_key));
+                    let key_btw = parent.get_key(left_idx).unwrap();
+                    let kn_iter = left
+                        .iter_key_next(&left_lock, guard)
+                        .map(|(k, n)| (Some(k.unwrap_or(key_btw)), n))
+                        .chain(right.iter_key_next(&right_lock, guard))
+                        .enumerate();
+                    for (i, (key, next)) in kn_iter {
+                        new_internal.init_key(i, key);
+                        new_internal.init_next(i, next);
                     }
                     new_internal
                 }
@@ -1008,111 +1036,80 @@ where
 
                 assert!(left.is_leaf() == right.is_leaf());
 
+                // `pivot`: Reserve one key for the parent
+                //          (to go between `new_left` and `new_right`).
                 let (new_left, new_right, pivot) = if left.is_leaf() {
-                    let mut kv_pairs: [(K, V); 2 * DEGREE] = [Default::default(); 2 * DEGREE];
-
-                    // Combine the contents of `l` and `s`
-                    // (and one key from `p` if `l` and `s` are internal).
-                    let (key_count, val_count) = (&mut 0, &mut 0);
-
-                    for i in 0..DEGREE {
-                        let key = some_or!(left.get_key(i), continue);
-                        let val = left.get_value(i).unwrap();
-                        kv_pairs[tick(key_count)].0 = key;
-                        kv_pairs[tick(val_count)].1 = val;
-                    }
-
-                    for i in 0..DEGREE {
-                        let key = some_or!(right.get_key(i), continue);
-                        let val = right.get_value(i).unwrap();
-                        kv_pairs[tick(key_count)].0 = key;
-                        kv_pairs[tick(val_count)].1 = val;
-                    }
-
-                    let kv_pairs = &mut kv_pairs[0..*key_count];
+                    // Combine the contents of `l` and `s`.
+                    let mut kv_pairs = left
+                        .iter_key_value(&left_lock)
+                        .chain(right.iter_key_value(&right_lock))
+                        .collect::<ArrayVec<(K, V), { 2 * DEGREE }>>();
                     kv_pairs.sort_by_key(|(k, _)| *k);
-                    (*key_count, *val_count) = (0, 0);
+                    let mut kv_iter = kv_pairs.iter().copied();
 
-                    let (new_left, pivot) = {
+                    let new_left = {
                         let mut new_leaf =
-                            Owned::new(Node::leaf(true, left_size, kv_pairs[*key_count].0));
+                            Owned::new(Node::leaf(true, left_size, Default::default()));
                         for i in 0..left_size {
-                            new_leaf.init_key(i, Some(kv_pairs[tick(key_count)].0));
-                            new_leaf.init_value(i, kv_pairs[tick(val_count)].1);
+                            let (k, v) = kv_iter.next().unwrap();
+                            new_leaf.init_key(i, Some(k));
+                            new_leaf.init_value(i, v);
                         }
-                        (new_leaf, kv_pairs[*key_count].0)
-                    };
-
-                    // Reserve one key for the parent (to go between `new_left` and `new_right`).
-
-                    let new_right = {
-                        debug_assert!(left.is_leaf());
-                        let mut new_leaf =
-                            Owned::new(Node::leaf(true, right_size, kv_pairs[*key_count].0));
-                        for i in 0..right_size - (if left.is_leaf() { 0 } else { 1 }) {
-                            new_leaf.init_key(i, Some(kv_pairs[tick(key_count)].0));
-                        }
-                        for i in 0..right_size {
-                            new_leaf.init_value(i, kv_pairs[tick(val_count)].1);
-                        }
+                        new_leaf.search_key = new_leaf.get_key(0).unwrap();
                         new_leaf
                     };
 
+                    let (new_right, pivot) = {
+                        debug_assert!(left.is_leaf());
+                        let mut new_leaf =
+                            Owned::new(Node::leaf(true, right_size, Default::default()));
+                        for i in 0..right_size {
+                            let (k, v) = kv_iter.next().unwrap();
+                            new_leaf.init_key(i, Some(k));
+                            new_leaf.init_value(i, v);
+                        }
+                        let pivot = new_leaf.get_key(0).unwrap();
+                        new_leaf.search_key = pivot;
+                        (new_leaf, pivot)
+                    };
+
+                    debug_assert!(kv_iter.next().is_none());
                     (new_left, new_right, pivot)
                 } else {
-                    let mut kn_pairs: [(K, Shared<'g, Node<K, V>>); 2 * DEGREE] =
-                        [Default::default(); 2 * DEGREE];
-
                     // Combine the contents of `l` and `s`
                     // (and one key from `p` if `l` and `s` are internal).
-                    let (key_count, nxt_count) = (&mut 0, &mut 0);
-
-                    for i in 0..left.key_count() {
-                        kn_pairs[tick(key_count)].0 = left.get_key(i).unwrap();
-                    }
-                    for i in 0..lsize {
-                        kn_pairs[tick(nxt_count)].1 = left.load_next(i, guard);
-                    }
-
-                    kn_pairs[tick(key_count)].0 = parent.get_key(left_idx).unwrap();
-
-                    for i in 0..right.key_count() {
-                        kn_pairs[tick(key_count)].0 = right.get_key(i).unwrap();
-                    }
-                    for i in 0..rsize {
-                        kn_pairs[tick(nxt_count)].1 = right.load_next(i, guard);
-                    }
-                    let kn_pairs = &mut kn_pairs[0..*key_count];
-
-                    (*key_count, *nxt_count) = (0, 0);
+                    let key_btw = parent.get_key(left_idx).unwrap();
+                    let mut kn_iter = left
+                        .iter_key_next(&left_lock, guard)
+                        .map(|(k, n)| (Some(k.unwrap_or(key_btw)), n))
+                        .chain(right.iter_key_next(&right_lock, guard));
 
                     let (new_left, pivot) = {
                         let mut new_internal =
-                            Owned::new(Node::internal(true, left_size, kn_pairs[*key_count].0));
-                        for i in 0..left_size - 1 {
-                            new_internal.init_key(i, Some(kn_pairs[tick(key_count)].0));
-                        }
+                            Owned::new(Node::internal(true, left_size, Default::default()));
                         for i in 0..left_size {
-                            new_internal.init_next(i, kn_pairs[tick(nxt_count)].1);
+                            let (k, n) = kn_iter.next().unwrap();
+                            new_internal.init_key(i, k);
+                            new_internal.init_next(i, n);
                         }
-                        let pivot = kn_pairs[tick(key_count)].0;
+                        let pivot = new_internal.keys[left_size - 1].take().unwrap();
+                        new_internal.search_key = new_internal.get_key(0).unwrap();
                         (new_internal, pivot)
                     };
 
-                    // Reserve one key for the parent (to go between `new_left` and `new_right`).
-
                     let new_right = {
                         let mut new_internal =
-                            Owned::new(Node::internal(true, right_size, kn_pairs[*key_count].0));
-                        for i in 0..right_size - (if left.is_leaf() { 0 } else { 1 }) {
-                            new_internal.init_key(i, Some(kn_pairs[tick(key_count)].0));
-                        }
+                            Owned::new(Node::internal(true, right_size, Default::default()));
                         for i in 0..right_size {
-                            new_internal.init_next(i, kn_pairs[tick(nxt_count)].1);
+                            let (k, n) = kn_iter.next().unwrap();
+                            new_internal.init_key(i, k);
+                            new_internal.init_next(i, n);
                         }
+                        new_internal.search_key = new_internal.get_key(0).unwrap();
                         new_internal
                     };
 
+                    debug_assert!(kn_iter.next().is_none());
                     (new_left, new_right, pivot)
                 };
 
@@ -1165,14 +1162,7 @@ impl<K, V> Drop for ElimABTree<K, V> {
     }
 }
 
-/// Equivalent to `x++`.
-#[inline]
-fn tick(counter: &mut usize) -> usize {
-    let val = *counter;
-    *counter += 1;
-    return val;
-}
-
+/// Similar to `memcpy`, but for `Clone` types.
 #[inline]
 fn slice_clone<T: Clone>(src: &[T], dst: &mut [T], len: usize) {
     dst[0..len].clone_from_slice(&src[0..len]);

@@ -26,6 +26,7 @@ csv = "1.3.0"
 rand = "0.8"
 typenum = "1.17"
 num = "0.4.3"
+arrayvec = "0.7.6"
 hp_pp = { path = "./smrs/hp-pp" }
 nbr = { path = "./smrs/nbr" }
 cdrc = { path = "./smrs/cdrc" }
