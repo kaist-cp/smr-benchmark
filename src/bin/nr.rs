@@ -9,7 +9,8 @@ use std::time::Instant;
 
 use smr_benchmark::config::map::{setup, BenchWriter, Config, Op, Perf, DS};
 use smr_benchmark::ds_impl::nr::{
-    BonsaiTreeMap, ConcurrentMap, EFRBTree, HHSList, HList, HMList, HashMap, NMTreeMap, SkipList,
+    BonsaiTreeMap, ConcurrentMap, EFRBTree, ElimABTree, HHSList, HList, HMList, HashMap, NMTreeMap,
+    SkipList,
 };
 
 fn main() {
@@ -36,7 +37,7 @@ fn bench(config: &Config, output: BenchWriter) {
             bench_map::<BonsaiTreeMap<usize, usize>>(config, PrefillStrategy::Decreasing)
         }
         DS::EFRBTree => bench_map::<EFRBTree<usize, usize>>(config, PrefillStrategy::Random),
-        DS::ElimAbTree => todo!(),
+        DS::ElimAbTree => bench_map::<ElimABTree<usize, usize>>(config, PrefillStrategy::Random),
     };
     output.write_record(config, &perf);
     println!("{}", perf);
