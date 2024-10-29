@@ -36,7 +36,7 @@ impl<T> Atomic<T> {
     }
 
     #[inline]
-    pub fn store(&self, ptr: Shared<T>, order: Ordering) {
+    pub fn store<P: Pointer<T>>(&self, ptr: P, order: Ordering) {
         self.link.store(ptr.into_raw(), order)
     }
 
@@ -107,6 +107,22 @@ impl<T> From<Shared<T>> for Atomic<T> {
     fn from(value: Shared<T>) -> Self {
         let link = AtomicPtr::new(value.into_raw());
         Self { link }
+    }
+}
+
+impl<T> From<*mut T> for Atomic<T> {
+    #[inline]
+    fn from(value: *mut T) -> Self {
+        let link = AtomicPtr::new(value);
+        Self { link }
+    }
+}
+
+impl<T> Clone for Atomic<T> {
+    fn clone(&self) -> Self {
+        Self {
+            link: AtomicPtr::new(self.link.load(Ordering::Relaxed)),
+        }
     }
 }
 
