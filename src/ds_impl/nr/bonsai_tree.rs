@@ -630,6 +630,6 @@ mod tests {
 
     #[test]
     fn smoke_bonsai_tree() {
-        concurrent_map::tests::smoke::<BonsaiTreeMap<i32, String>>();
+        concurrent_map::tests::smoke::<_, BonsaiTreeMap<i32, String>, _>(&i32::to_string);
     }
 }

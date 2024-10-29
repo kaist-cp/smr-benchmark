@@ -3,6 +3,7 @@ pub mod pointers;
 
 pub mod bonsai_tree;
 pub mod double_link;
+pub mod elim_ab_tree;
 pub mod ellen_tree;
 pub mod list;
 pub mod michael_hash_map;

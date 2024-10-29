@@ -354,6 +354,6 @@ mod tests {
 
     #[test]
     fn smoke_skip_list() {
-        concurrent_map::tests::smoke::<SkipList<i32, String>>();
+        concurrent_map::tests::smoke::<_, SkipList<i32, String>, _>(&i32::to_string);
     }
 }

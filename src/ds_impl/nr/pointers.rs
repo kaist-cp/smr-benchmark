@@ -83,6 +83,14 @@ impl<T> From<Shared<T>> for Atomic<T> {
     }
 }
 
+impl<T> Clone for Atomic<T> {
+    fn clone(&self) -> Self {
+        Self {
+            link: AtomicPtr::new(self.link.load(Ordering::Relaxed)),
+        }
+    }
+}
+
 pub struct Shared<T> {
     ptr: *mut T,
 }

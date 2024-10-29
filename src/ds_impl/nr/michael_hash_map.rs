@@ -68,6 +68,6 @@ mod tests {
 
     #[test]
     fn smoke_hashmap() {
-        concurrent_map::tests::smoke::<HashMap<i32, String>>();
+        concurrent_map::tests::smoke::<_, HashMap<i32, String>, _>(&i32::to_string);
     }
 }

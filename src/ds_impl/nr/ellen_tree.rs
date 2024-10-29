@@ -493,6 +493,6 @@ mod tests {
 
     #[test]
     fn smoke_efrb_tree() {
-        concurrent_map::tests::smoke::<EFRBTree<i32, String>>();
+        concurrent_map::tests::smoke::<_, EFRBTree<i32, String>, _>(&i32::to_string);
     }
 }

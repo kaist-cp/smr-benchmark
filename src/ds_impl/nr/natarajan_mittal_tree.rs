@@ -465,6 +465,6 @@ mod tests {
 
     #[test]
     fn smoke_nm_tree() {
-        concurrent_map::tests::smoke::<NMTreeMap<i32, String>>();
+        concurrent_map::tests::smoke::<_, NMTreeMap<i32, String>, _>(&i32::to_string);
     }
 }
