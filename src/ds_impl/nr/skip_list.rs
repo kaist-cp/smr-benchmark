@@ -1,7 +1,7 @@
 use std::mem::transmute;
 use std::sync::atomic::Ordering;
 
-use super::concurrent_map::ConcurrentMap;
+use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use super::pointers::{Atomic, Shared};
 
 const MAX_HEIGHT: usize = 32;
@@ -331,9 +331,9 @@ where
     }
 
     #[inline(always)]
-    fn get(&self, key: &K) -> Option<&'static V> {
+    fn get(&self, key: &K) -> Option<impl OutputHolder<V>> {
         let cursor = self.find_optimistic(key);
-        unsafe { transmute(cursor.found.map(|node| &node.value)) }
+        unsafe { transmute::<_, Option<&'static V>>(cursor.found.map(|node| &node.value)) }
     }
 
     #[inline(always)]
@@ -342,8 +342,8 @@ where
     }
 
     #[inline(always)]
-    fn remove(&self, key: &K) -> Option<&'static V> {
-        unsafe { transmute(self.remove(key)) }
+    fn remove(&self, key: &K) -> Option<impl OutputHolder<V>> {
+        unsafe { transmute::<_, Option<&'static V>>(self.remove(key)) }
     }
 }
 

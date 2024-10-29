@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use super::concurrent_map::ConcurrentMap;
+use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use super::pointers::{Atomic, Shared};
 
 bitflags! {
@@ -468,7 +468,7 @@ where
     }
 
     #[inline(always)]
-    fn get(&self, key: &K) -> Option<&'static V> {
+    fn get(&self, key: &K) -> Option<impl OutputHolder<V>> {
         match self.find(key) {
             Some(node) => Some(node.value.as_ref().unwrap()),
             None => None,
@@ -481,7 +481,7 @@ where
     }
 
     #[inline(always)]
-    fn remove(&self, key: &K) -> Option<&'static V> {
+    fn remove(&self, key: &K) -> Option<impl OutputHolder<V>> {
         self.delete(key)
     }
 }
