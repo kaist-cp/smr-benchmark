@@ -525,15 +525,15 @@ where
 
 #[test]
 fn smoke_h_list() {
-    super::concurrent_map::tests::smoke::<HList<i32, String>>();
+    super::concurrent_map::tests::smoke::<_, HList<i32, String>, _>(&i32::to_string);
 }
 
 #[test]
 fn smoke_hm_list() {
-    super::concurrent_map::tests::smoke::<HMList<i32, String>>();
+    super::concurrent_map::tests::smoke::<_, HMList<i32, String>, _>(&i32::to_string);
 }
 
 #[test]
 fn smoke_hhs_list() {
-    super::concurrent_map::tests::smoke::<HHSList<i32, String>>();
+    super::concurrent_map::tests::smoke::<_, HHSList<i32, String>, _>(&i32::to_string);
 }
