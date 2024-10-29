@@ -1,7 +1,7 @@
 use hp_pp::{light_membarrier, Thread};
 use hp_pp::{tag, tagged, untagged, HazardPointer, DEFAULT_DOMAIN};
 
-use super::concurrent_map::ConcurrentMap;
+use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use std::cmp;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
@@ -646,7 +646,11 @@ where
     }
 
     #[inline(always)]
-    fn get<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
+    fn get<'hp>(
+        &'hp self,
+        handle: &'hp mut Self::Handle<'_>,
+        key: &'hp K,
+    ) -> Option<impl OutputHolder<V>> {
         self.get(key, handle)
     }
 
@@ -656,7 +660,11 @@ where
     }
 
     #[inline(always)]
-    fn remove<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
+    fn remove<'hp>(
+        &'hp self,
+        handle: &'hp mut Self::Handle<'_>,
+        key: &'hp K,
+    ) -> Option<impl OutputHolder<V>> {
         self.remove(key, handle)
     }
 }
@@ -668,6 +676,6 @@ mod tests {
 
     #[test]
     fn smoke_nm_tree() {
-        concurrent_map::tests::smoke::<NMTreeMap<i32, String>>();
+        concurrent_map::tests::smoke::<_, NMTreeMap<i32, String>, _>(&i32::to_string);
     }
 }

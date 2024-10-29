@@ -27,7 +27,7 @@ use hp_pp::{
     decompose_ptr, light_membarrier, tag, tagged, untagged, HazardPointer, Thread, DEFAULT_DOMAIN,
 };
 
-use super::concurrent_map::ConcurrentMap;
+use super::concurrent_map::{ConcurrentMap, OutputHolder};
 
 bitflags! {
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -849,11 +849,12 @@ where
     }
 
     #[inline(always)]
-    fn get<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
-        match self.find(key, handle) {
-            Some(value) => Some(value),
-            None => None,
-        }
+    fn get<'hp>(
+        &'hp self,
+        handle: &'hp mut Self::Handle<'_>,
+        key: &'hp K,
+    ) -> Option<impl OutputHolder<V>> {
+        self.find(key, handle)
     }
 
     #[inline(always)]
@@ -862,7 +863,11 @@ where
     }
 
     #[inline(always)]
-    fn remove<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
+    fn remove<'hp>(
+        &'hp self,
+        handle: &'hp mut Self::Handle<'_>,
+        key: &'hp K,
+    ) -> Option<impl OutputHolder<V>> {
         self.delete(key, handle)
     }
 }
@@ -874,6 +879,6 @@ mod tests {
 
     #[test]
     fn smoke_efrb_tree() {
-        concurrent_map::tests::smoke::<EFRBTree<i32, String>>();
+        concurrent_map::tests::smoke::<_, EFRBTree<i32, String>, _>(&i32::to_string);
     }
 }

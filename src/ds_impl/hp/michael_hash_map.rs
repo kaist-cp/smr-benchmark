@@ -1,4 +1,4 @@
-use super::concurrent_map::ConcurrentMap;
+use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -33,21 +33,6 @@ where
         k.hash(&mut s);
         s.finish() as usize
     }
-
-    pub fn get<'hp>(&self, handle: &'hp mut Handle<'_>, k: &K) -> Option<&'hp V> {
-        let i = Self::hash(k);
-        self.get_bucket(i).get(handle, k)
-    }
-
-    pub fn insert(&self, handle: &mut Handle<'_>, k: K, v: V) -> bool {
-        let i = Self::hash(&k);
-        self.get_bucket(i).insert(handle, k, v)
-    }
-
-    pub fn remove<'hp>(&self, handle: &'hp mut Handle<'_>, k: &K) -> Option<&'hp V> {
-        let i = Self::hash(k);
-        self.get_bucket(i).remove(handle, k)
-    }
 }
 
 impl<K, V> ConcurrentMap<K, V> for HashMap<K, V>
@@ -66,16 +51,27 @@ where
     }
 
     #[inline(always)]
-    fn get<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
-        self.get(handle, key)
+    fn get<'hp>(
+        &'hp self,
+        handle: &'hp mut Self::Handle<'_>,
+        key: &'hp K,
+    ) -> Option<impl OutputHolder<V>> {
+        let i = Self::hash(key);
+        self.get_bucket(i).get(handle, key)
     }
     #[inline(always)]
     fn insert(&self, handle: &mut Self::Handle<'_>, key: K, value: V) -> bool {
-        self.insert(handle, key, value)
+        let i = Self::hash(&key);
+        self.get_bucket(i).insert(handle, key, value)
     }
     #[inline(always)]
-    fn remove<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
-        self.remove(handle, key)
+    fn remove<'hp>(
+        &'hp self,
+        handle: &'hp mut Self::Handle<'_>,
+        key: &'hp K,
+    ) -> Option<impl OutputHolder<V>> {
+        let i = Self::hash(key);
+        self.get_bucket(i).remove(handle, key)
     }
 }
 
@@ -86,6 +82,6 @@ mod tests {
 
     #[test]
     fn smoke_hashmap() {
-        concurrent_map::tests::smoke::<HashMap<i32, String>>();
+        concurrent_map::tests::smoke::<_, HashMap<i32, String>, _>(&i32::to_string);
     }
 }

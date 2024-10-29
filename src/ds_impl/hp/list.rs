@@ -1,4 +1,4 @@
-use super::concurrent_map::ConcurrentMap;
+use super::concurrent_map::{ConcurrentMap, OutputHolder};
 
 use super::pointers::{Atomic, Pointer, Shared};
 use core::mem;
@@ -532,7 +532,11 @@ where
     }
 
     #[inline(always)]
-    fn get<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
+    fn get<'hp>(
+        &'hp self,
+        handle: &'hp mut Self::Handle<'_>,
+        key: &'hp K,
+    ) -> Option<impl OutputHolder<V>> {
         self.inner.harris_get(key, handle)
     }
     #[inline(always)]
@@ -540,7 +544,11 @@ where
         self.inner.harris_insert(key, value, handle)
     }
     #[inline(always)]
-    fn remove<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
+    fn remove<'hp>(
+        &'hp self,
+        handle: &'hp mut Self::Handle<'_>,
+        key: &'hp K,
+    ) -> Option<impl OutputHolder<V>> {
         self.inner.harris_remove(key, handle)
     }
 }
@@ -575,7 +583,11 @@ where
     }
 
     #[inline(always)]
-    fn get<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
+    fn get<'hp>(
+        &'hp self,
+        handle: &'hp mut Self::Handle<'_>,
+        key: &'hp K,
+    ) -> Option<impl OutputHolder<V>> {
         self.inner.harris_michael_get(key, handle)
     }
     #[inline(always)]
@@ -583,7 +595,11 @@ where
         self.inner.harris_michael_insert(key, value, handle)
     }
     #[inline(always)]
-    fn remove<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
+    fn remove<'hp>(
+        &'hp self,
+        handle: &'hp mut Self::Handle<'_>,
+        key: &'hp K,
+    ) -> Option<impl OutputHolder<V>> {
         self.inner.harris_michael_remove(key, handle)
     }
 }
@@ -607,7 +623,11 @@ where
     }
 
     #[inline(always)]
-    fn get<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
+    fn get<'hp>(
+        &'hp self,
+        handle: &'hp mut Self::Handle<'_>,
+        key: &'hp K,
+    ) -> Option<impl OutputHolder<V>> {
         self.inner.harris_michael_get(key, handle)
     }
     #[inline(always)]
@@ -615,7 +635,11 @@ where
         self.inner.harris_michael_insert(key, value, handle)
     }
     #[inline(always)]
-    fn remove<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
+    fn remove<'hp>(
+        &'hp self,
+        handle: &'hp mut Self::Handle<'_>,
+        key: &'hp K,
+    ) -> Option<impl OutputHolder<V>> {
         self.inner.harris_michael_remove(key, handle)
     }
 }
@@ -627,17 +651,17 @@ mod tests {
 
     #[test]
     fn smoke_h_list() {
-        concurrent_map::tests::smoke::<HList<i32, String>>();
+        concurrent_map::tests::smoke::<_, HList<i32, String>, _>(&i32::to_string);
     }
 
     #[test]
     fn smoke_hm_list() {
-        concurrent_map::tests::smoke::<HMList<i32, String>>();
+        concurrent_map::tests::smoke::<_, HMList<i32, String>, _>(&i32::to_string);
     }
 
     #[test]
     fn smoke_hhs_list() {
-        concurrent_map::tests::smoke::<HHSList<i32, String>>();
+        concurrent_map::tests::smoke::<_, HHSList<i32, String>, _>(&i32::to_string);
     }
 
     #[test]

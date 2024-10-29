@@ -4,7 +4,7 @@ use std::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering};
 
 use hp_pp::{light_membarrier, tag, tagged, untagged, HazardPointer, Thread, DEFAULT_DOMAIN};
 
-use super::concurrent_map::ConcurrentMap;
+use super::concurrent_map::{ConcurrentMap, OutputHolder};
 
 const MAX_HEIGHT: usize = 32;
 
@@ -506,7 +506,11 @@ where
     }
 
     #[inline(always)]
-    fn get<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
+    fn get<'hp>(
+        &'hp self,
+        handle: &'hp mut Self::Handle<'_>,
+        key: &'hp K,
+    ) -> Option<impl OutputHolder<V>> {
         let node = unsafe { &*self.find_optimistic(key, handle)? };
         if node.key.eq(&key) {
             Some(&node.value)
@@ -521,7 +525,11 @@ where
     }
 
     #[inline(always)]
-    fn remove<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
+    fn remove<'hp>(
+        &'hp self,
+        handle: &'hp mut Self::Handle<'_>,
+        key: &'hp K,
+    ) -> Option<impl OutputHolder<V>> {
         self.remove(key, handle)
     }
 }
@@ -533,6 +541,6 @@ mod tests {
 
     #[test]
     fn smoke_skip_list() {
-        concurrent_map::tests::smoke::<SkipList<i32, String>>();
+        concurrent_map::tests::smoke::<_, SkipList<i32, String>, _>(&i32::to_string);
     }
 }
