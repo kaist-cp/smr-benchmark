@@ -6,9 +6,9 @@ import os
 RESULTS_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "results")
 BIN_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "target", "release")
 
-dss = ['h-list', 'hm-list', 'hhs-list', 'hash-map', 'nm-tree', 'skip-list']
+dss = ['h-list', 'hhs-list', 'hash-map', 'nm-tree', 'skip-list', 'elim-ab-tree']
 # "-large" suffix if it uses a large garbage bag.
-mms = ['nr', 'ebr', 'pebr', 'hp', 'hp-pp', 'nbr', 'hp-brcu', 'vbr']
+mms = ['nr', 'ebr', 'pebr', 'hp', 'hp-pp', 'hp-brcu', 'vbr']
 i = 10
 cpu_count = os.cpu_count()
 if not cpu_count or cpu_count <= 24:
@@ -54,6 +54,8 @@ def invalid(mm, ds, g):
         is_invalid |= g == 0  # HHSList is just HList with faster get()
     if mm == 'nbr':
         is_invalid |= ds in ["hm-list", "skip-list"]
+    if ds == 'elim-ab-tree':
+        is_invalid |= mm in ["pebr", "hp-pp", "vbr"]
     return is_invalid
 
 cmds = []
