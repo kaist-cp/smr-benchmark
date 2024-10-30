@@ -855,8 +855,8 @@ where
             slice_clone(&keys, &mut absorber.keys, DEGREE);
 
             gparent.store_next(cursor.gp_p_idx, Shared::from_owned(absorber), &gparent_lock);
-            node.marked.store(true, Ordering::Relaxed);
-            parent.marked.store(true, Ordering::Relaxed);
+            node.marked.store(true, Ordering::Release);
+            parent.marked.store(true, Ordering::Release);
 
             unsafe { handle.thread.retire(cursor.l.with_tag(0).into_raw()) };
             unsafe { handle.thread.retire(cursor.p.with_tag(0).into_raw()) };
@@ -900,8 +900,8 @@ where
 
             let new_internal = Shared::from_owned(new_internal);
             gparent.store_next(cursor.gp_p_idx, new_internal, &gparent_lock);
-            node.marked.store(true, Ordering::Relaxed);
-            parent.marked.store(true, Ordering::Relaxed);
+            node.marked.store(true, Ordering::Release);
+            parent.marked.store(true, Ordering::Release);
 
             unsafe { handle.thread.retire(cursor.l.with_tag(0).into_raw()) };
             unsafe { handle.thread.retire(cursor.p.with_tag(0).into_raw()) };
@@ -1151,9 +1151,9 @@ where
             if eq(gparent, &self.entry) && psize == 2 {
                 debug_assert!(cursor.gp_p_idx == 0);
                 gparent.store_next(cursor.gp_p_idx, new_node, &gparent_lock);
-                node.marked.store(true, Ordering::Relaxed);
-                parent.marked.store(true, Ordering::Relaxed);
-                sibling.marked.store(true, Ordering::Relaxed);
+                node.marked.store(true, Ordering::Release);
+                parent.marked.store(true, Ordering::Release);
+                sibling.marked.store(true, Ordering::Release);
 
                 unsafe {
                     handle.thread.retire(cursor.l.with_tag(0).into_raw());
@@ -1191,9 +1191,9 @@ where
                 let new_parent = Shared::from_owned(new_parent);
 
                 gparent.store_next(cursor.gp_p_idx, new_parent, &gparent_lock);
-                node.marked.store(true, Ordering::Relaxed);
-                parent.marked.store(true, Ordering::Relaxed);
-                sibling.marked.store(true, Ordering::Relaxed);
+                node.marked.store(true, Ordering::Release);
+                parent.marked.store(true, Ordering::Release);
+                sibling.marked.store(true, Ordering::Release);
 
                 unsafe {
                     handle.thread.retire(cursor.l.with_tag(0).into_raw());
@@ -1305,9 +1305,9 @@ where
                 Shared::from_owned(new_parent),
                 &gparent_lock,
             );
-            node.marked.store(true, Ordering::Relaxed);
-            parent.marked.store(true, Ordering::Relaxed);
-            sibling.marked.store(true, Ordering::Relaxed);
+            node.marked.store(true, Ordering::Release);
+            parent.marked.store(true, Ordering::Release);
+            sibling.marked.store(true, Ordering::Release);
 
             unsafe {
                 handle.thread.retire(cursor.l.with_tag(0).into_raw());
