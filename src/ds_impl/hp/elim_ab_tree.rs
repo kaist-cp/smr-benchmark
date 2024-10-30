@@ -755,17 +755,20 @@ where
 
             // Manually unlock and fix the tag.
             drop((parent_lock, node_lock));
-            unsafe {
-                handle.thread.retire(cursor.l.with_tag(0).into_raw());
-            }
-            self.fix_tag_violation(new_internal, handle);
+            unsafe { handle.thread.retire(cursor.l.with_tag(0).into_raw()) };
+            self.fix_tag_violation(kv_pairs[left_size].0, new_internal, handle);
 
             Ok(None)
         }
     }
 
-    fn fix_tag_violation<'hp>(&self, viol: Shared<Node<K, V>>, handle: &'hp mut Handle<'_>) {
-        let mut stack = vec![(unsafe { viol.deref() }.search_key, viol)];
+    fn fix_tag_violation<'hp>(
+        &self,
+        search_key: K,
+        viol: Shared<Node<K, V>>,
+        handle: &'hp mut Handle<'_>,
+    ) {
+        let mut stack = vec![(search_key, viol)];
         while let Some((search_key, viol)) = stack.pop() {
             let (found, cursor) = self.search(&search_key, Some(viol), handle);
             if !found || cursor.l != viol {
@@ -773,11 +776,11 @@ where
                 // We hand over responsibility for `viol` to that update.
                 continue;
             }
-            match self.fix_tag_violation_inner(&cursor, handle) {
-                Ok(()) => continue,
-                Err(None) => stack.push((search_key, viol)),
-                Err(Some(pair)) => stack.extend_from_slice(&[(search_key, viol), pair]),
+            let (success, recur) = self.fix_tag_violation_inner(&cursor, handle);
+            if !success {
+                stack.push((search_key, viol));
             }
+            stack.extend(recur);
         }
     }
 
@@ -785,11 +788,11 @@ where
         &self,
         cursor: &Cursor<K, V>,
         handle: &'hp mut Handle<'_>,
-    ) -> Result<(), Option<(K, Shared<Node<K, V>>)>> {
+    ) -> (bool, Option<(K, Shared<Node<K, V>>)>) {
         let viol = cursor.l;
         let viol_node = unsafe { cursor.l.deref() };
         if viol_node.weight {
-            return Ok(());
+            return (true, None);
         }
 
         // `viol` should be internal because leaves always have weight = 1.
@@ -808,23 +811,29 @@ where
         // We cannot apply this update if p has a weight violation.
         // So, we check if this is the case, and, if so, try to fix it.
         if !parent.weight {
-            return Err(Some((parent.search_key, cursor.p)));
+            return (false, Some((parent.search_key, cursor.p)));
         }
 
-        try_acq_val_or!(node, node_lock, Operation::Balance, None, return Err(None));
+        try_acq_val_or!(
+            node,
+            node_lock,
+            Operation::Balance,
+            None,
+            return (false, None)
+        );
         try_acq_val_or!(
             parent,
             parent_lock,
             Operation::Balance,
             None,
-            return Err(None)
+            return (false, None)
         );
         try_acq_val_or!(
             gparent,
             gparent_lock,
             Operation::Balance,
             None,
-            return Err(None)
+            return (false, None)
         );
 
         let psize = parent.size.load(Ordering::Relaxed);
@@ -849,13 +858,9 @@ where
             node.marked.store(true, Ordering::Relaxed);
             parent.marked.store(true, Ordering::Relaxed);
 
-            unsafe {
-                handle.thread.retire(cursor.l.with_tag(0).into_raw());
-            }
-            unsafe {
-                handle.thread.retire(cursor.p.with_tag(0).into_raw());
-            }
-            return Ok(());
+            unsafe { handle.thread.retire(cursor.l.with_tag(0).into_raw()) };
+            unsafe { handle.thread.retire(cursor.p.with_tag(0).into_raw()) };
+            return (true, None);
         } else {
             // Split case.
 
@@ -898,16 +903,14 @@ where
             node.marked.store(true, Ordering::Relaxed);
             parent.marked.store(true, Ordering::Relaxed);
 
-            unsafe {
-                handle.thread.retire(cursor.l.with_tag(0).into_raw());
-            };
-            unsafe {
-                handle.thread.retire(cursor.p.with_tag(0).into_raw());
-            };
+            unsafe { handle.thread.retire(cursor.l.with_tag(0).into_raw()) };
+            unsafe { handle.thread.retire(cursor.p.with_tag(0).into_raw()) };
 
             drop((node_lock, parent_lock, gparent_lock));
-            self.fix_tag_violation(new_internal, handle);
-            return Ok(());
+            return (
+                true,
+                Some((keys[left_size - 1].get().unwrap(), new_internal)),
+            );
         }
     }
 
@@ -964,7 +967,7 @@ where
 
                 if new_size == Self::UNDERFULL_THRESHOLD - 1 {
                     drop(node_lock);
-                    self.fix_underfull_violation(cursor.l, handle);
+                    self.fix_underfull_violation(node.search_key, cursor.l, handle);
                 }
                 return Ok(Some(val));
             }
@@ -972,8 +975,13 @@ where
         Err(())
     }
 
-    fn fix_underfull_violation<'hp>(&self, viol: Shared<Node<K, V>>, handle: &'hp mut Handle<'_>) {
-        let mut stack = vec![(unsafe { viol.deref() }.search_key, viol)];
+    fn fix_underfull_violation<'hp>(
+        &self,
+        search_key: K,
+        viol: Shared<Node<K, V>>,
+        handle: &'hp mut Handle<'_>,
+    ) {
+        let mut stack = vec![(search_key, viol)];
         while let Some((search_key, viol)) = stack.pop() {
             // We search for `viol` and try to fix any violation we find there.
             // This entails performing AbsorbSibling or Distribute.
@@ -983,11 +991,11 @@ where
                 // We hand over responsibility for `viol` to that update.
                 continue;
             }
-            match self.fix_underfull_violation_inner(&cursor, handle) {
-                Ok(()) => continue,
-                Err(None) => stack.push((search_key, viol)),
-                Err(Some(pair)) => stack.extend_from_slice(&[(search_key, viol), pair]),
+            let (success, recur) = self.fix_underfull_violation_inner(&cursor, handle);
+            if !success {
+                stack.push((search_key, viol));
             }
+            stack.extend(recur);
         }
     }
 
@@ -995,7 +1003,7 @@ where
         &self,
         cursor: &Cursor<K, V>,
         handle: &'hp mut Handle<'_>,
-    ) -> Result<(), Option<(K, Shared<Node<K, V>>)>> {
+    ) -> (bool, ArrayVec<(K, Shared<Node<K, V>>), 2>) {
         let viol = cursor.l;
         let viol_node = unsafe { viol.deref() };
 
@@ -1007,7 +1015,7 @@ where
             || viol == self.entry.load_next(0)
         {
             // No degree violation at `viol`.
-            return Ok(());
+            return (true, ArrayVec::<_, 2>::new());
         }
 
         let node = unsafe { cursor.l.deref() };
@@ -1021,7 +1029,10 @@ where
             && !eq(parent, &self.entry)
             && cursor.p != self.entry.load_next(0)
         {
-            return Err(Some((parent.search_key, cursor.p)));
+            return (
+                false,
+                ArrayVec::from_iter(once((parent.search_key, cursor.p))),
+            );
         }
 
         // Don't need a lock on parent here because if the pointer to sibling changes
@@ -1036,19 +1047,25 @@ where
             ((node, cursor.p_l_idx), (sibling, cursor.p_s_idx))
         };
 
-        try_acq_val_or!(left, left_lock, Operation::Balance, None, return Err(None));
+        try_acq_val_or!(
+            left,
+            left_lock,
+            Operation::Balance,
+            None,
+            return (false, ArrayVec::new())
+        );
         try_acq_val_or!(
             right,
             right_lock,
             Operation::Balance,
             None,
-            return Err(None)
+            return (false, ArrayVec::new())
         );
 
         // Repeat this check, this might have changed while we locked `viol`.
         if viol_node.size.load(Ordering::Relaxed) >= Self::UNDERFULL_THRESHOLD {
             // No degree violation at `viol`.
-            return Ok(());
+            return (true, ArrayVec::new());
         }
 
         try_acq_val_or!(
@@ -1056,14 +1073,14 @@ where
             parent_lock,
             Operation::Balance,
             None,
-            return Err(None)
+            return (false, ArrayVec::new())
         );
         try_acq_val_or!(
             gparent,
             gparent_lock,
             Operation::Balance,
             None,
-            return Err(None)
+            return (false, ArrayVec::new())
         );
 
         // We can only apply AbsorbSibling or Distribute if there are no
@@ -1071,15 +1088,18 @@ where
         // So, we first check for any weight violations and fix any that we see.
         if !parent.weight {
             drop((left_lock, right_lock, parent_lock, gparent_lock));
-            return Err(Some((parent.search_key, cursor.p)));
+            self.fix_tag_violation(parent.search_key, cursor.p, handle);
+            return (false, ArrayVec::new());
         }
         if !node.weight {
             drop((left_lock, right_lock, parent_lock, gparent_lock));
-            return Err(Some((node.search_key, cursor.l)));
+            self.fix_tag_violation(node.search_key, cursor.l, handle);
+            return (false, ArrayVec::new());
         }
         if !sibling.weight {
             drop((left_lock, right_lock, parent_lock, gparent_lock));
-            return Err(Some((node.search_key, cursor.s)));
+            self.fix_tag_violation(sibling.search_key, cursor.s, handle);
+            return (false, ArrayVec::new());
         }
 
         // There are no weight violations at `parent`, `node` or `sibling`.
@@ -1142,8 +1162,7 @@ where
                 }
 
                 drop((left_lock, right_lock, parent_lock, gparent_lock));
-                self.fix_underfull_violation(new_node, handle);
-                return Ok(());
+                return (true, ArrayVec::from_iter(once((node.search_key, new_node))));
             } else {
                 debug_assert!(!eq(gparent, &self.entry) || psize > 2);
                 let mut new_parent = Node::internal(true, psize - 1, parent.search_key);
@@ -1183,9 +1202,12 @@ where
                 }
 
                 drop((left_lock, right_lock, parent_lock, gparent_lock));
-                self.fix_underfull_violation(new_node, handle);
-                self.fix_underfull_violation(new_parent, handle);
-                return Ok(());
+                return (
+                    true,
+                    ArrayVec::from_iter(
+                        [(node.search_key, new_node), (parent.search_key, new_parent)].into_iter(),
+                    ),
+                );
             }
         } else {
             // Distribute
@@ -1293,7 +1315,7 @@ where
                 handle.thread.retire(cursor.s.with_tag(0).into_raw());
             }
 
-            return Ok(());
+            return (true, ArrayVec::new());
         }
     }
 }
