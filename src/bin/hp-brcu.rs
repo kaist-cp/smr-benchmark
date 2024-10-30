@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use smr_benchmark::config::map::{setup, BagSize, BenchWriter, Config, Op, Perf, DS};
 use smr_benchmark::ds_impl::hp_brcu::{
-    BonsaiTreeMap, ConcurrentMap, HHSList, HList, HMList, HashMap, NMTreeMap, SkipList,
+    BonsaiTreeMap, ConcurrentMap, ElimABTree, HHSList, HList, HMList, HashMap, NMTreeMap, SkipList,
 };
 
 fn main() {
@@ -36,6 +36,7 @@ fn bench(config: &Config, output: BenchWriter) {
         DS::BonsaiTree => {
             bench_map::<BonsaiTreeMap<usize, usize>>(config, PrefillStrategy::Decreasing)
         }
+        DS::ElimAbTree => bench_map::<ElimABTree<usize, usize>>(config, PrefillStrategy::Random),
         _ => panic!("Unsupported(or unimplemented) data structure for HP-BRCU"),
     };
     output.write_record(config, &perf);

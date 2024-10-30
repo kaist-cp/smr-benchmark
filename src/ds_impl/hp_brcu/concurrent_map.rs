@@ -15,8 +15,7 @@ pub trait ConcurrentMap<K, V> {
     fn new() -> Self;
     fn get(&self, key: &K, output: &mut Self::Output, thread: &mut Thread) -> bool;
     fn insert(&self, key: K, value: V, output: &mut Self::Output, thread: &mut Thread) -> bool;
-    fn remove<'domain, 'hp>(&self, key: &K, output: &mut Self::Output, thread: &mut Thread)
-        -> bool;
+    fn remove(&self, key: &K, output: &mut Self::Output, thread: &mut Thread) -> bool;
 }
 
 #[cfg(test)]

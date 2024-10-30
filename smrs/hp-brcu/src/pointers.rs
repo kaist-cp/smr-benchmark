@@ -140,6 +140,15 @@ impl<T> Default for Atomic<T> {
     }
 }
 
+impl<T> Clone for Atomic<T> {
+    fn clone(&self) -> Self {
+        Self {
+            link: AtomicUsize::new(self.link.load(Ordering::Relaxed)),
+            _marker: PhantomData,
+        }
+    }
+}
+
 /// A pointer to a shared object.
 ///
 /// This pointer is valid for use only during the lifetime `'r`.
