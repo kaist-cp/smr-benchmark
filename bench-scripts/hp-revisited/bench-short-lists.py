@@ -6,9 +6,9 @@ import os
 RESULTS_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "results")
 BIN_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "target", "release")
 
-dss = ['h-list', 'hm-list', 'hhs-list', 'hash-map', 'nm-tree', 'skip-list', 'elim-ab-tree']
+dss = ['hhs-list', 'hm-list']
 # "-large" suffix if it uses a large garbage bag.
-mms = ['nr', 'ebr', 'pebr', 'hp', 'hp-pp', 'hp-brcu', 'vbr']
+mms = ['hp', 'hp-pp']
 i = 10
 cpu_count = os.cpu_count()
 if not cpu_count or cpu_count <= 24:
@@ -23,12 +23,7 @@ gs = [0, 1, 2]
 subprocess.run(['cargo', 'build', '--release'])
 
 def key_ranges(ds):
-    if ds in ["h-list", "hm-list", "hhs-list"]:
-        # 1K and 10K
-        return ["1000", "10000"]
-    else:
-        # 100K and 100M
-        return ["100000", "100000000"]
+    return ["16"]
 
 def is_suffix(orig, suf):
     return len(suf) <= len(orig) and mm[-len(suf):] == suf
