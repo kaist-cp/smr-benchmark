@@ -693,11 +693,11 @@ where
         handle: &'hp mut Self::Handle<'_>,
         key: &'hp K,
     ) -> Option<impl OutputHolder<V>> {
-        self.inner.harris_michael_get(key, handle)
+        self.inner.harris_herlihy_shavit_get(key, handle)
     }
     #[inline(always)]
     fn insert(&self, handle: &mut Self::Handle<'_>, key: K, value: V) -> bool {
-        self.inner.harris_michael_insert(key, value, handle)
+        self.inner.harris_insert(key, value, handle)
     }
     #[inline(always)]
     fn remove<'hp>(
@@ -705,7 +705,7 @@ where
         handle: &'hp mut Self::Handle<'_>,
         key: &'hp K,
     ) -> Option<impl OutputHolder<V>> {
-        self.inner.harris_michael_remove(key, handle)
+        self.inner.harris_remove(key, handle)
     }
 }
 
