@@ -29,6 +29,7 @@ HHSLIST = "hhs-list"
 HASHMAP = "hash-map"
 NMTREE = "nm-tree"
 SKIPLIST = "skip-list"
+ELIMABTREE = "elim-ab-tree"
 
 FORMAL_NAMES = {
     HLIST: "HList",
@@ -36,12 +37,13 @@ FORMAL_NAMES = {
     HASHMAP: "HashMap",
     NMTREE: "NMTree",
     SKIPLIST: "SkipList",
+    ELIMABTREE: "ElimAbTRee",
 }
 
 # DS with read-dominated bench & write-only bench
-dss_all   = [HLIST, HHSLIST, HASHMAP, NMTREE, SKIPLIST]
-dss_read  = [HLIST, HHSLIST, HASHMAP, NMTREE, SKIPLIST]
-dss_write = [HLIST,          HASHMAP, NMTREE, SKIPLIST]
+dss_all   = [HLIST, HHSLIST, HASHMAP, NMTREE, SKIPLIST, ELIMABTREE]
+dss_read  = [HLIST, HHSLIST, HASHMAP, NMTREE, SKIPLIST, ELIMABTREE]
+dss_write = [HLIST,          HASHMAP, NMTREE, SKIPLIST, ELIMABTREE]
 
 WRITE, HALF, READ = "write", "half", "read"
 
