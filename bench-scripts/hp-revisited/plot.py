@@ -37,7 +37,7 @@ FORMAL_NAMES = {
     HASHMAP: "HashMap",
     NMTREE: "NMTree",
     SKIPLIST: "SkipList",
-    ELIMABTREE: "ElimAbTRee",
+    ELIMABTREE: "ElimAbTree",
 }
 
 # DS with read-dominated bench & write-only bench
