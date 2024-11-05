@@ -6,6 +6,7 @@ members = [
     "./smrs/hp-brcu",
     "./smrs/vbr",
     "./smrs/circ",
+    "./smrs/crystalline-l",
 ]
 
 [package]
@@ -33,6 +34,7 @@ cdrc = { path = "./smrs/cdrc" }
 hp-brcu = { path = "./smrs/hp-brcu" }
 vbr = { path = "./smrs/vbr" }
 circ = { path = "./smrs/circ" }
+crystalline-l = { path = "./smrs/crystalline-l" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tikv-jemallocator = "0.5"
