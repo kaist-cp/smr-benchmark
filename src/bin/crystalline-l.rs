@@ -185,7 +185,6 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
                             map.remove(&key, &mut shields, &handle);
                         }
                     }
-                    handle.clear_all();
                     ops += 1;
                 }
 

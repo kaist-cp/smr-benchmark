@@ -224,7 +224,7 @@ impl<T> Drop for Domain<T> {
             .map(|_| self.register())
             .collect::<Vec<_>>();
         for handle in handles {
-            handle.clear_all();
+            unsafe { handle.clear_all() };
             let batch = handle.batch_mut();
             if !batch.first.is_null() {
                 let mut curr = batch.first;
@@ -390,7 +390,7 @@ impl<'d, T> Handle<'d, T> {
         batch.count = 0;
     }
 
-    pub fn clear_all(&self) {
+    pub unsafe fn clear_all(&self) {
         let mut first = [null_mut(); SLOTS_CAP];
         for i in 0..SLOTS_CAP {
             first[i] = self.slots().first[i].swap(invalid_ptr(), Ordering::AcqRel);
