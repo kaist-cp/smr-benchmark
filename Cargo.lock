@@ -833,6 +833,7 @@ dependencies = [
  "nbr",
  "num",
  "rand",
+ "scopeguard",
  "tikv-jemalloc-ctl",
  "tikv-jemallocator",
  "typenum",

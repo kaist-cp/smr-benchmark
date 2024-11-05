@@ -48,7 +48,7 @@ pub struct EraShields<'d, 'h, K, V> {
 }
 
 impl<'d, 'h, K, V> EraShields<'d, 'h, K, V> {
-    fn new(handle: &'h Handle<'d, Node<K, V>>) -> Self {
+    pub fn new(handle: &'h Handle<'d, Node<K, V>>) -> Self {
         Self {
             prev_h: HazardEra::new(handle),
             curr_h: HazardEra::new(handle),
@@ -175,6 +175,11 @@ where
 
         let found = self.traverse_with_anchor(key, shields)?;
 
+        scopeguard::defer! {
+            shields.anchor_h.clear();
+            shields.anchor_next_h.clear();
+        }
+
         if self.anchor.is_null() {
             self.prev = self.prev.with_tag(0);
             self.curr = self.curr.with_tag(0);
@@ -260,6 +265,8 @@ where
         // Others are not necessary because we are not going to do insertion or deletion
         // with this Harris-Herlihy-Shavit traversal.
         self.curr = self.curr.with_tag(0);
+        shields.anchor_h.clear();
+        shields.anchor_next_h.clear();
         Ok(found)
     }
 }

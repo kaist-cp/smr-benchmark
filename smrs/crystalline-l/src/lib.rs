@@ -224,7 +224,7 @@ impl<T> Drop for Domain<T> {
             .map(|_| self.register())
             .collect::<Vec<_>>();
         for handle in handles {
-            unsafe { handle.clear_all() };
+            handle.clear_all();
             let batch = handle.batch_mut();
             if !batch.first.is_null() {
                 let mut curr = batch.first;
@@ -314,7 +314,6 @@ impl<'d, T> Handle<'d, T> {
         batch.count += 1;
         if batch.count % COLLECT_FREQ.load(Ordering::Relaxed) == 0 {
             unsafe { (*batch.last).set_batch_link(node_ptr) };
-            GLOBAL_GARBAGE_COUNT.fetch_add(batch.count, Ordering::AcqRel);
             self.try_retire(batch);
         }
     }
@@ -343,7 +342,9 @@ impl<'d, T> Handle<'d, T> {
                 last = unsafe { (*last).batch_next() };
             }
         }
+
         // Retire if successful.
+        GLOBAL_GARBAGE_COUNT.fetch_add(batch.count, Ordering::AcqRel);
         let mut adjs = 0;
         while curr != last {
             'body: {
@@ -389,7 +390,7 @@ impl<'d, T> Handle<'d, T> {
         batch.count = 0;
     }
 
-    pub unsafe fn clear_all(&self) {
+    pub fn clear_all(&self) {
         let mut first = [null_mut(); SLOTS_CAP];
         for i in 0..SLOTS_CAP {
             first[i] = self.slots().first[i].swap(invalid_ptr(), Ordering::AcqRel);
@@ -400,7 +401,7 @@ impl<'d, T> Handle<'d, T> {
             }
         }
         let mut batch = self.batch_mut();
-        if let Some(list) = batch.list.as_ref() {
+        if let Some(list) = unsafe { batch.list.as_ref() } {
             list.free_list();
         }
         batch.list = null_mut();
@@ -445,6 +446,10 @@ impl<'d, 'h, T> HazardEra<'d, 'h, T> {
 
     pub fn swap(h1: &mut Self, h2: &mut Self) {
         swap(&mut h1.sidx, &mut h2.sidx);
+    }
+
+    pub fn clear(&mut self) {
+        self.handle.slots().era[self.sidx].store(0, Ordering::Release);
     }
 }
 
