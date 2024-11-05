@@ -173,7 +173,9 @@ impl<T> Batch<T> {
             return;
         }
         if self.list_count == CACHE_CAP {
-            unsafe { self.list.as_ref().map(|list| list.free_list()) };
+            if let Some(list) = unsafe { self.list.as_ref() } {
+                list.free_list();
+            }
             self.list = null_mut();
             self.list_count = 0;
         }
@@ -223,6 +225,16 @@ impl<T> Drop for Domain<T> {
             .collect::<Vec<_>>();
         for handle in handles {
             unsafe { handle.clear_all() };
+            let batch = handle.batch_mut();
+            if !batch.first.is_null() {
+                let mut curr = batch.first;
+                while curr != batch.last {
+                    let next = unsafe { (*curr).batch_next() };
+                    unsafe { drop(Box::from_raw(curr)) };
+                    curr = next;
+                }
+                unsafe { drop(Box::from_raw(batch.last)) };
+            }
         }
     }
 }
@@ -388,7 +400,9 @@ impl<'d, T> Handle<'d, T> {
             }
         }
         let mut batch = self.batch_mut();
-        unsafe { batch.list.as_ref().map(|list| list.free_list()) };
+        if let Some(list) = batch.list.as_ref() {
+            list.free_list();
+        }
         batch.list = null_mut();
         batch.list_count = 0;
     }
