@@ -185,6 +185,8 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
                             map.remove(&key, &mut shields, &handle);
                         }
                     }
+                    // Original author's implementation of `clear_all` has an use-after-free error.
+                    // unsafe { handle.clear_all() };
                     ops += 1;
                 }
 
