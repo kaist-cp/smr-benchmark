@@ -1,0 +1,10 @@
+[package]
+name = "he"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+crossbeam-utils = "0.8.14"
+rustc-hash = "1.1.0"
+atomic = "0.5"
+static_assertions = "1.1.0"
