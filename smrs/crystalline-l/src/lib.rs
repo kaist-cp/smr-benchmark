@@ -401,7 +401,7 @@ impl<'d, T> Handle<'d, T> {
             }
         }
         let mut batch = self.batch_mut();
-        if let Some(list) = unsafe { batch.list.as_ref() } {
+        if let Some(list) = batch.list.as_ref() {
             list.free_list();
         }
         batch.list = null_mut();
