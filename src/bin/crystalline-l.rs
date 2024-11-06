@@ -11,7 +11,9 @@ use std::thread::available_parallelism;
 use std::time::Instant;
 
 use smr_benchmark::config::map::{setup, BagSize, BenchWriter, Config, Op, Perf, DS};
-use smr_benchmark::ds_impl::crystalline_l::{ConcurrentMap, HHSList, HList, HMList, HashMap};
+use smr_benchmark::ds_impl::crystalline_l::{
+    ConcurrentMap, HHSList, HList, HMList, HashMap, NMTreeMap,
+};
 
 fn main() {
     let (config, output) = setup(
@@ -31,6 +33,7 @@ fn bench(config: &Config, output: BenchWriter) {
         DS::HHSList => bench_map::<HHSList<usize, usize>>(config, PrefillStrategy::Decreasing),
         DS::HMList => bench_map::<HMList<usize, usize>>(config, PrefillStrategy::Decreasing),
         DS::HashMap => bench_map::<HashMap<usize, usize>>(config, PrefillStrategy::Decreasing),
+        DS::NMTree => bench_map::<NMTreeMap<usize, usize>>(config, PrefillStrategy::Random),
         _ => panic!("Unsupported(or unimplemented) data structure for CrystallineL"),
     };
     output.write_record(config, &perf);
