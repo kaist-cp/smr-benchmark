@@ -1,5 +1,21 @@
 use crossbeam_pebr::Guard;
 
+pub trait OutputHolder<V> {
+    fn output(&self) -> &V;
+}
+
+impl<'g, V> OutputHolder<V> for &'g V {
+    fn output(&self) -> &V {
+        self
+    }
+}
+
+impl<V> OutputHolder<V> for V {
+    fn output(&self) -> &V {
+        self
+    }
+}
+
 pub trait ConcurrentMap<K, V> {
     type Handle;
 
@@ -12,15 +28,20 @@ pub trait ConcurrentMap<K, V> {
         handle: &'g mut Self::Handle,
         key: &'g K,
         guard: &'g mut Guard,
-    ) -> Option<&'g V>;
+    ) -> Option<impl OutputHolder<V>>;
     fn insert(&self, handle: &mut Self::Handle, key: K, value: V, guard: &mut Guard) -> bool;
-    fn remove(&self, handle: &mut Self::Handle, key: &K, guard: &mut Guard) -> Option<V>;
+    fn remove(
+        &self,
+        handle: &mut Self::Handle,
+        key: &K,
+        guard: &mut Guard,
+    ) -> Option<impl OutputHolder<V>>;
 }
 
 #[cfg(test)]
 pub mod tests {
     extern crate rand;
-    use super::ConcurrentMap;
+    use super::{ConcurrentMap, OutputHolder};
     use crossbeam_pebr::pin;
     use crossbeam_utils::thread;
     use rand::prelude::*;
@@ -58,7 +79,7 @@ pub mod tests {
                     for i in keys {
                         assert_eq!(
                             i.to_string(),
-                            map.remove(&mut handle, &i, &mut pin()).unwrap()
+                            *map.remove(&mut handle, &i, &mut pin()).unwrap().output()
                         );
                     }
                 });
@@ -77,7 +98,7 @@ pub mod tests {
                     for i in keys {
                         assert_eq!(
                             i.to_string(),
-                            *map.get(&mut handle, &i, &mut pin()).unwrap()
+                            *map.get(&mut handle, &i, &mut pin()).unwrap().output()
                         );
                     }
                 });

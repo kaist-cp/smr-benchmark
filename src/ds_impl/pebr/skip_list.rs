@@ -5,7 +5,7 @@ use std::{
 
 use crossbeam_pebr::{unprotected, Atomic, Guard, Owned, Pointer, Shared, Shield, ShieldError};
 
-use super::concurrent_map::ConcurrentMap;
+use super::concurrent_map::{ConcurrentMap, OutputHolder};
 
 const MAX_HEIGHT: usize = 32;
 
@@ -474,7 +474,7 @@ where
         handle: &'g mut Self::Handle,
         key: &'g K,
         guard: &'g mut Guard,
-    ) -> Option<&'g V> {
+    ) -> Option<impl OutputHolder<V>> {
         let cursor = self.find_optimistic(key, handle, guard)?;
         let node = unsafe { cursor.found?.deref() };
         if node.key.eq(&key) {
@@ -490,7 +490,12 @@ where
     }
 
     #[inline(always)]
-    fn remove(&self, handle: &mut Self::Handle, key: &K, guard: &mut Guard) -> Option<V> {
+    fn remove(
+        &self,
+        handle: &mut Self::Handle,
+        key: &K,
+        guard: &mut Guard,
+    ) -> Option<impl OutputHolder<V>> {
         self.remove(key, handle, guard)
     }
 }

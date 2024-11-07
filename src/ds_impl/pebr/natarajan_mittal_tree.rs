@@ -1,6 +1,6 @@
 use crossbeam_pebr::{unprotected, Atomic, Guard, Owned, Pointer, Shared, Shield, ShieldError};
 
-use super::concurrent_map::ConcurrentMap;
+use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use std::cmp;
 use std::mem;
 use std::sync::atomic::Ordering;
@@ -601,7 +601,7 @@ where
         handle: &'g mut Self::Handle,
         key: &'g K,
         guard: &'g mut Guard,
-    ) -> Option<&'g V> {
+    ) -> Option<impl OutputHolder<V>> {
         self.get(key, handle, guard)
     }
 
@@ -611,7 +611,12 @@ where
     }
 
     #[inline(always)]
-    fn remove(&self, handle: &mut Self::Handle, key: &K, guard: &mut Guard) -> Option<V> {
+    fn remove(
+        &self,
+        handle: &mut Self::Handle,
+        key: &K,
+        guard: &mut Guard,
+    ) -> Option<impl OutputHolder<V>> {
         self.remove(key, handle, guard)
     }
 }

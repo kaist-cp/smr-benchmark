@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 
 use crossbeam_pebr::{unprotected, Atomic, Guard, Owned, Shared, Shield, ShieldError};
 
-use super::concurrent_map::ConcurrentMap;
+use super::concurrent_map::{ConcurrentMap, OutputHolder};
 
 bitflags! {
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -808,7 +808,7 @@ where
         handle: &'g mut Self::Handle,
         key: &'g K,
         guard: &'g mut Guard,
-    ) -> Option<&'g V> {
+    ) -> Option<impl OutputHolder<V>> {
         match self.find(key, handle, guard) {
             Some(node) => Some(node),
             None => None,
@@ -821,7 +821,12 @@ where
     }
 
     #[inline(always)]
-    fn remove(&self, handle: &mut Self::Handle, key: &K, guard: &mut Guard) -> Option<V> {
+    fn remove(
+        &self,
+        handle: &mut Self::Handle,
+        key: &K,
+        guard: &mut Guard,
+    ) -> Option<impl OutputHolder<V>> {
         self.delete(key, handle, guard)
     }
 }
