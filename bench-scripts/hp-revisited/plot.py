@@ -25,6 +25,7 @@ PEAK_GARB = "peak_garb"
 SMR_ONLY = "SMR\n"
 
 HLIST = "h-list"
+HMLIST = "hm-list"
 HHSLIST = "hhs-list"
 HASHMAP = "hash-map"
 NMTREE = "nm-tree"
@@ -33,6 +34,7 @@ ELIMABTREE = "elim-ab-tree"
 
 FORMAL_NAMES = {
     HLIST: "HList",
+    HMLIST: "HMList",
     HHSLIST: "HHSList",
     HASHMAP: "HashMap",
     NMTREE: "NMTree",
@@ -41,9 +43,9 @@ FORMAL_NAMES = {
 }
 
 # DS with read-dominated bench & write-only bench
-dss_all   = [HLIST, HHSLIST, HASHMAP, NMTREE, SKIPLIST, ELIMABTREE]
-dss_read  = [HLIST, HHSLIST, HASHMAP, NMTREE, SKIPLIST, ELIMABTREE]
-dss_write = [HLIST,          HASHMAP, NMTREE, SKIPLIST, ELIMABTREE]
+dss_all   = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, SKIPLIST, ELIMABTREE]
+dss_read  = [HLIST, HMLIST, HHSLIST, HASHMAP, NMTREE, SKIPLIST, ELIMABTREE]
+dss_write = [HLIST, HMLIST,          HASHMAP, NMTREE, SKIPLIST, ELIMABTREE]
 
 WRITE, HALF, READ = "write", "half", "read"
 
@@ -74,7 +76,7 @@ def plot_title(ds, bench):
     return FORMAL_NAMES[ds]
 
 def key_ranges(ds):
-    if ds in [HLIST, HHSLIST]:
+    if ds in [HLIST, HMLIST, HHSLIST]:
         return [1000, 10000]
     else:
         return [100000, 100000000]

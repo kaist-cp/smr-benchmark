@@ -64,6 +64,12 @@ line_shapes = {
         "color": "orange",
         "linestyle": (0, (2, 1)),
     },
+    # Used in `plot-short-lists`
+    "PESSIM_HP": {
+        "marker": "v",
+        "color": "#828282",
+        "linestyle": "dotted",
+    },
 }
 
 # Add some common or derivable properties.
