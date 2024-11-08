@@ -12,7 +12,8 @@ use typenum::{Unsigned, U1, U4};
 
 use smr_benchmark::config::map::{setup, BagSize, BenchWriter, Config, Op, OpsPerCs, Perf, DS};
 use smr_benchmark::ds_impl::pebr::{
-    BonsaiTreeMap, ConcurrentMap, EFRBTree, HHSList, HList, HMList, HashMap, NMTreeMap, SkipList,
+    BonsaiTreeMap, ConcurrentMap, EFRBTree, ElimABTree, HHSList, HList, HMList, HashMap, NMTreeMap,
+    SkipList,
 };
 
 fn main() {
@@ -38,15 +39,12 @@ fn bench<N: Unsigned>(config: &Config, output: BenchWriter) {
         DS::HashMap => bench_map::<HashMap<usize, usize>, N>(config, PrefillStrategy::Decreasing),
         DS::NMTree => bench_map::<NMTreeMap<usize, usize>, N>(config, PrefillStrategy::Random),
         DS::BonsaiTree => {
-            // Note: Using the `Random` strategy with the Bonsai tree is unsafe
-            // because it involves multiple threads with unprotected guards.
-            // It is safe for many other data structures that don't retire elements
-            // during insertion, but this is not the case for the Bonsai tree.
+            // For Bonsai Tree, it would be faster to use a single thread to prefill.
             bench_map::<BonsaiTreeMap<usize, usize>, N>(config, PrefillStrategy::Decreasing)
         }
         DS::EFRBTree => bench_map::<EFRBTree<usize, usize>, N>(config, PrefillStrategy::Random),
         DS::SkipList => bench_map::<SkipList<usize, usize>, N>(config, PrefillStrategy::Decreasing),
-        _ => panic!("Unsupported(or unimplemented) data structure for PEBR"),
+        DS::ElimAbTree => bench_map::<ElimABTree<usize, usize>, N>(config, PrefillStrategy::Random),
     };
     output.write_record(config, &perf);
     println!("{}", perf);
@@ -62,6 +60,9 @@ pub enum PrefillStrategy {
 
 impl PrefillStrategy {
     fn prefill<M: ConcurrentMap<usize, usize> + Send + Sync>(self, config: &Config, map: &M) {
+        // Some data structures (e.g., Bonsai tree, Elim AB-Tree) need SMR's retirement
+        // functionality even during insertions.
+        let collector = &crossbeam_pebr::Collector::new();
         match self {
             PrefillStrategy::Random => {
                 let threads = available_parallelism().map(|v| v.get()).unwrap_or(1);
@@ -70,10 +71,8 @@ impl PrefillStrategy {
                 scope(|s| {
                     for t in 0..threads {
                         s.spawn(move |_| {
-                            // Safety: We assume that the insert operation does not retire
-                            // any elements. Note that this assumption may not hold for all
-                            // data structures (e.g., Bonsai tree).
-                            let guard = unsafe { crossbeam_pebr::unprotected() };
+                            let handle = collector.register();
+                            let guard = &mut handle.pin();
                             let mut handle = M::handle(guard);
                             let rng = &mut rand::thread_rng();
                             let count = config.prefill / threads
@@ -89,7 +88,8 @@ impl PrefillStrategy {
                 .unwrap();
             }
             PrefillStrategy::Decreasing => {
-                let guard = unsafe { crossbeam_pebr::unprotected() };
+                let handle = collector.register();
+                let guard = &mut handle.pin();
                 let mut handle = M::handle(guard);
                 let rng = &mut rand::thread_rng();
                 let mut keys = Vec::with_capacity(config.prefill);
