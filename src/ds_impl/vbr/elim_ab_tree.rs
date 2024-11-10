@@ -17,7 +17,7 @@ macro_rules! try_acq_val_or {
         let __slot = UnsafeCell::new(MCSLockSlot::new());
         let $lock = match (
             $node.acquire($op, $key, &__slot),
-            $node.marked.load(Ordering::Acquire),
+            $node._marked.load(Ordering::Acquire),
         ) {
             (AcqResult::Acquired(lock), false) => lock,
             _ => $acq_val_err,
@@ -151,20 +151,20 @@ where
     V: Copy + Default,
 {
     _keys: [Cell<Option<K>>; DEGREE],
-    search_key: Cell<K>,
+    _search_key: Cell<K>,
     lock: AtomicPtr<MCSLockSlot<K, V>>,
     /// The number of next pointers (for an internal node) or values (for a leaf node).
     /// Note that it may not be equal to the number of keys, because the last next pointer
     /// is mapped by a bottom key (i.e., `None`).
-    size: AtomicUsize,
-    weight: Cell<bool>,
-    marked: AtomicBool,
+    _size: AtomicUsize,
+    _weight: Cell<bool>,
+    _marked: AtomicBool,
     // Leaf node data
-    values: [Cell<Option<V>>; DEGREE],
-    write_version: AtomicUsize,
+    _values: [Cell<Option<V>>; DEGREE],
+    _write_version: AtomicUsize,
     // Internal node data
-    next: [AtomicPtr<Inner<Node<K, V>>>; DEGREE],
-    is_leaf: Cell<bool>,
+    _next: [AtomicPtr<Inner<Node<K, V>>>; DEGREE],
+    _is_leaf: Cell<bool>,
 }
 
 impl<K, V> Node<K, V>
@@ -172,23 +172,59 @@ where
     K: Default + Copy,
     V: Default + Copy,
 {
+    fn get_marked_locked<'l>(&'l self, _: &MCSLockGuard<'l, K, V>) -> bool {
+        self._marked.load(Ordering::Acquire)
+    }
+
+    fn set_marked_locked<'l>(&'l self, mark: bool, _: &MCSLockGuard<'l, K, V>) {
+        self._marked.store(mark, Ordering::Release);
+    }
+
     fn weight(&self, guard: &Guard<Self>) -> Result<bool, ()> {
-        let result = self.weight.get();
+        let result = self._weight.get();
         guard.validate_epoch().map(|_| result)
+    }
+
+    fn weight_locked<'l>(&'l self, _: &MCSLockGuard<'l, K, V>) -> bool {
+        self._weight.get()
     }
 
     fn search_key(&self, guard: &Guard<Self>) -> Result<K, ()> {
-        let result = self.search_key.get();
+        let result = self._search_key.get();
         guard.validate_epoch().map(|_| result)
+    }
+
+    fn search_key_locked<'l>(&'l self, _: &MCSLockGuard<'l, K, V>) -> K {
+        self._search_key.get()
+    }
+
+    /// # Safety
+    ///
+    /// The current thread has an exclusive ownership and it is not exposed to the shared memory.
+    /// (e.g., in the `init` closure of `allocate` function)
+    unsafe fn search_key_unchecked(&self) -> K {
+        self._search_key.get()
+    }
+
+    /// # Safety
+    ///
+    /// The current thread has an exclusive ownership and it is not exposed to the shared memory.
+    /// (e.g., in the `init` closure of `allocate` function)
+    unsafe fn init_search_key(&self, key: K) {
+        self._search_key.set(key);
     }
 
     fn is_leaf(&self, guard: &Guard<Self>) -> Result<bool, ()> {
-        let result = self.is_leaf.get();
+        let result = self._is_leaf.get();
         guard.validate_epoch().map(|_| result)
     }
 
+    fn is_leaf_locked<'l>(&'l self, _: &MCSLockGuard<'l, K, V>) -> bool {
+        self._is_leaf.get()
+    }
+
     fn load_next(&self, index: usize, guard: &Guard<Self>) -> Result<*mut Inner<Self>, ()> {
-        let result = self.next[index].load(Ordering::Acquire);
+        let result = self._next[index].load(Ordering::Acquire);
         guard.validate_epoch().map(|_| result)
     }
 
@@ -197,11 +233,11 @@ where
         index: usize,
         _: &MCSLockGuard<'l, K, V>,
     ) -> *mut Inner<Self> {
-        self.next[index].load(Ordering::Acquire)
+        self._next[index].load(Ordering::Acquire)
     }
 
-    fn store_next<'l>(&self, index: usize, ptr: *mut Inner<Self>, _: &MCSLockGuard<'l, K, V>) {
-        self.next[index].store(ptr, Ordering::Release);
+    fn store_next<'l>(&'l self, index: usize, ptr: *mut Inner<Self>, _: &MCSLockGuard<'l, K, V>) {
+        self._next[index].store(ptr, Ordering::Release);
     }
 
     /// # Safety
@@ -209,15 +245,27 @@ where
     /// The current thread has an exclusive ownership and it is not exposed to the shared memory.
     /// (e.g., in the `init` closure of `allocate` function)
     unsafe fn init_next(&self, index: usize, ptr: *mut Inner<Self>) {
-        self.next[index].store(ptr, Ordering::Release);
+        self._next[index].store(ptr, Ordering::Release);
+    }
+
+    fn next_slice<'l>(&'l self, _: &MCSLockGuard<'l, K, V>) -> &[AtomicPtr<Inner<Node<K, V>>>] {
+        &self._next
+    }
+
+    /// # Safety
+    ///
+    /// The current thread has an exclusive ownership and it is not exposed to the shared memory.
+    /// (e.g., in the `init` closure of `allocate` function)
+    unsafe fn next_slice_unchecked(&self) -> &[AtomicPtr<Inner<Node<K, V>>>] {
+        &self._next
     }
 
     fn start_write<'g>(&'g self, lock: &MCSLockGuard<'g, K, V>) -> WriteGuard<'g, K, V> {
         debug_assert!(eq(unsafe { lock.owner_node() }, self));
-        let init_version = self.write_version.load(Ordering::Acquire);
+        let init_version = self._write_version.load(Ordering::Acquire);
         debug_assert!(init_version % 2 == 0);
         // It is safe to skip the epoch validation, as we are grabbing the lock.
-        self.write_version
+        self._write_version
             .store(init_version + 1, Ordering::Release);
         compiler_fence(Ordering::SeqCst);
 
@@ -227,30 +275,51 @@ where
         };
     }
 
+    fn get_size(&self, guard: &Guard<Self>) -> Result<usize, ()> {
+        let result = self._size.load(Ordering::Acquire);
+        guard.validate_epoch().map(|_| result)
+    }
+
+    fn get_size_locked<'l>(&'l self, _: &MCSLockGuard<'l, K, V>) -> usize {
+        self._size.load(Ordering::Acquire)
+    }
+
+    /// # Safety
+    ///
+    /// The current thread has an exclusive ownership and it is not exposed to the shared memory.
+    /// (e.g., in the `init` closure of `allocate` function)
+    unsafe fn get_size_unchecked(&self) -> usize {
+        self._size.load(Ordering::Acquire)
+    }
+
+    fn set_size_locked<'l>(&'l self, size: usize, _: &MCSLockGuard<'l, K, V>) {
+        self._size.store(size, Ordering::Release);
+    }
+
     fn key_count(&self, guard: &Guard<Self>) -> Result<usize, ()> {
-        let result = if self.is_leaf.get() {
-            self.size.load(Ordering::Acquire)
+        let result = if self.is_leaf(guard)? {
+            self.get_size(guard)?
         } else {
-            self.size.load(Ordering::Acquire) - 1
+            self.get_size(guard)? - 1
         };
         guard.validate_epoch().map(|_| result)
     }
 
-    fn key_count_locked<'l>(&'l self, _: &MCSLockGuard<'l, K, V>) -> usize {
-        if self.is_leaf.get() {
-            self.size.load(Ordering::Acquire)
+    fn key_count_locked<'l>(&'l self, lock: &MCSLockGuard<'l, K, V>) -> usize {
+        if self._is_leaf.get() {
+            self.get_size_locked(lock)
         } else {
-            self.size.load(Ordering::Acquire) - 1
+            self.get_size_locked(lock) - 1
         }
     }
 
     fn get_value(&self, index: usize, guard: &Guard<Self>) -> Result<Option<V>, ()> {
-        let value = self.values[index].get();
+        let value = self._values[index].get();
         guard.validate_epoch().map(|_| value)
     }
 
     fn get_value_locked<'l>(&'l self, index: usize, _: &MCSLockGuard<'l, K, V>) -> Option<V> {
-        self.values[index].get()
+        self._values[index].get()
     }
 
     /// # Safety
@@ -258,11 +327,11 @@ where
     /// The current thread has an exclusive ownership and it is not exposed to the shared memory.
     /// (e.g., in the `init` closure of `allocate` function)
     unsafe fn init_value(&self, index: usize, val: V) {
-        self.values[index].set(Some(val));
+        self._values[index].set(Some(val));
     }
 
     fn set_value<'g>(&'g self, index: usize, val: V, _: &WriteGuard<'g, K, V>) {
-        self.values[index].set(Some(val));
+        self._values[index].set(Some(val));
     }
 
     /// # Safety
@@ -278,11 +347,11 @@ where
         guard.validate_epoch().map(|_| result)
     }
 
-    fn get_key_locked<'l>(&self, index: usize, _: &MCSLockGuard<'l, K, V>) -> Option<K> {
+    fn get_key_locked<'l>(&'l self, index: usize, _: &MCSLockGuard<'l, K, V>) -> Option<K> {
         self._keys[index].get()
     }
 
-    fn key_slice<'l>(&self, _: &MCSLockGuard<'l, K, V>) -> &[Cell<Option<K>>] {
+    fn key_slice<'l>(&'l self, _: &MCSLockGuard<'l, K, V>) -> &[Cell<Option<K>>] {
         &self._keys
     }
 
@@ -290,7 +359,7 @@ where
     ///
     /// The current thread has an exclusive ownership and it is not exposed to the shared memory.
     /// (e.g., in the `init` closure of `allocate` function)
-    unsafe fn key_slice_unchecked<'l>(&self) -> &[Cell<Option<K>>] {
+    unsafe fn key_slice_unchecked(&self) -> &[Cell<Option<K>>] {
         &self._keys
     }
 
@@ -310,27 +379,27 @@ where
         for key in &self._keys {
             key.set(Default::default());
         }
-        self.search_key.set(search_key);
-        self.size.store(size, Ordering::Release);
-        self.weight.set(weight);
-        self.marked.store(false, Ordering::Release);
-        for next in &self.next {
+        self._search_key.set(search_key);
+        self._size.store(size, Ordering::Release);
+        self._weight.set(weight);
+        self._marked.store(false, Ordering::Release);
+        for next in &self._next {
             next.store(null_mut(), Ordering::Release);
         }
-        for value in &self.values {
+        for value in &self._values {
             value.set(Default::default());
         }
-        self.write_version.store(0, Ordering::Release);
+        self._write_version.store(0, Ordering::Release);
     }
 
     unsafe fn init_for_internal(&self, weight: bool, size: usize, search_key: K) {
         self.init_on_allocate(weight, size, search_key);
-        self.is_leaf.set(false);
+        self._is_leaf.set(false);
     }
 
     unsafe fn init_for_leaf(&self, weight: bool, size: usize, search_key: K) {
         self.init_on_allocate(weight, size, search_key);
-        self.is_leaf.set(true);
+        self._is_leaf.set(true);
     }
 }
 
@@ -352,18 +421,18 @@ where
     fn read_consistent(&self, key: &K, guard: &Guard<Self>) -> Result<(usize, Option<V>), ()> {
         loop {
             guard.validate_epoch()?;
-            let mut version = self.write_version.load(Ordering::Acquire);
+            let mut version = self._write_version.load(Ordering::Acquire);
             while version & 1 > 0 {
-                version = self.write_version.load(Ordering::Acquire);
+                version = self._write_version.load(Ordering::Acquire);
             }
             let mut key_index = 0;
             while key_index < DEGREE && self.get_key(key_index, guard)? != Some(*key) {
                 key_index += 1;
             }
-            let value = self.values.get(key_index).and_then(|value| value.get());
+            let value = self._values.get(key_index).and_then(|value| value.get());
             compiler_fence(Ordering::SeqCst);
 
-            if version == self.write_version.load(Ordering::Acquire) {
+            if version == self._write_version.load(Ordering::Acquire) {
                 return guard.validate_epoch().map(|_| (key_index, value));
             }
         }
@@ -458,13 +527,17 @@ where
     ) {
         let next: [AtomicPtr<Inner<Node<K, V>>>; DEGREE * 2] = Default::default();
         let keys: [Cell<Option<K>>; DEGREE * 2] = Default::default();
-        let psize = self.size.load(Ordering::Relaxed);
-        let nsize = child.size.load(Ordering::Relaxed);
+        let psize = self.get_size_locked(self_lock);
+        let nsize = child.get_size_locked(child_lock);
 
-        atomic_clone(&self.next[0..], &next[0..], child_idx);
-        atomic_clone(&child.next[0..], &next[child_idx..], nsize);
+        atomic_clone(&self.next_slice(self_lock)[0..], &next[0..], child_idx);
         atomic_clone(
-            &self.next[child_idx + 1..],
+            &child.next_slice(child_lock)[0..],
+            &next[child_idx..],
+            nsize,
+        );
+        atomic_clone(
+            &self.next_slice(self_lock)[child_idx + 1..],
             &next[child_idx + nsize..],
             psize - (child_idx + 1),
         );
@@ -540,7 +613,7 @@ where
 {
     fn drop(&mut self) {
         self.node
-            .write_version
+            ._write_version
             .store(self.init_version + 2, Ordering::Release);
     }
 }
@@ -719,7 +792,8 @@ where
             AcqResult::Acquired(lock) => lock,
             AcqResult::Eliminated(value) => return Ok(Some(value)),
         };
-        if node.marked.load(Ordering::SeqCst) {
+        guard.validate_epoch()?;
+        if node.get_marked_locked(&node_lock) {
             return Err(());
         }
         for i in 0..DEGREE {
@@ -729,7 +803,7 @@ where
         }
         // At this point, we are guaranteed key is not in the node.
 
-        if node.size.load(Ordering::Acquire) < Self::ABSORB_THRESHOLD {
+        if node.get_size_locked(&node_lock) < Self::ABSORB_THRESHOLD {
             // We have the capacity to fit this new key. So let's just find an empty slot.
             for i in 0..DEGREE {
                 if node.get_key_locked(i, &node_lock).is_some() {
@@ -738,8 +812,7 @@ where
                 let wguard = node.start_write(&node_lock);
                 node.set_key(i, Some(*key), &wguard);
                 node.set_value(i, *value, &wguard);
-                node.size
-                    .store(node.size.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
+                node.set_size_locked(node.get_size_locked(&node_lock) + 1, &node_lock);
 
                 node.elim_key_ops(*value, wguard, &node_lock);
 
@@ -816,7 +889,7 @@ where
             // a node since any update to parent would have deleted node (and hence we would have
             // returned at the `node.marked` check).
             parent.store_next(cursor.p_l_idx, internal.as_raw(), &parent_lock);
-            node.marked.store(true, Ordering::Release);
+            node.set_marked_locked(true, &node_lock);
 
             // Manually unlock and fix the tag.
             drop((parent_lock, node_lock));
@@ -873,7 +946,7 @@ where
         );
 
         debug_assert!(!cursor.gp.is_null());
-        let node = unsafe { &*cursor.l };
+        let node = viol_node;
         let parent = unsafe { &*cursor.p };
         let gparent = unsafe { &*cursor.gp };
         debug_assert!(!node.is_leaf(guard)?);
@@ -914,8 +987,8 @@ where
             return Err(())
         );
 
-        let psize = parent.size.load(Ordering::Relaxed);
-        let nsize = viol_node.size.load(Ordering::Relaxed);
+        let psize = parent.get_size_locked(&parent_lock);
+        let nsize = viol_node.get_size_locked(&node_lock);
         // We don't ever change the size of a tag node, so its size should always be 2.
         debug_assert_eq!(nsize, 2);
         let c = psize + nsize;
@@ -934,13 +1007,13 @@ where
                     size,
                     parent.get_key_locked(0, &parent_lock).unwrap(),
                 );
-                atomic_clone(&next, &absorber.deref().next, DEGREE);
+                atomic_clone(&next, &absorber.deref().next_slice_unchecked(), DEGREE);
                 cell_clone(&keys, &absorber.deref().key_slice_unchecked(), DEGREE);
             })?;
 
             gparent.store_next(cursor.gp_p_idx, absorber.as_raw(), &gparent_lock);
-            node.marked.store(true, Ordering::Relaxed);
-            parent.marked.store(true, Ordering::Relaxed);
+            node.set_marked_locked(true, &node_lock);
+            parent.set_marked_locked(true, &parent_lock);
 
             unsafe { guard.retire_raw(cursor.l) };
             unsafe { guard.retire_raw(cursor.p) };
@@ -962,7 +1035,7 @@ where
                 left.deref()
                     .init_for_internal(true, left_size, keys[0].get().unwrap());
                 cell_clone(&keys, &left.deref().key_slice_unchecked(), left_size - 1);
-                atomic_clone(&next, &left.deref().next, left_size);
+                atomic_clone(&next, &left.deref().next_slice_unchecked(), left_size);
             })?;
 
             let right_size = size - left_size;
@@ -975,7 +1048,11 @@ where
                     &right.deref().key_slice_unchecked()[0..],
                     right_size - 1,
                 );
-                atomic_clone(&next[left_size..], &right.deref().next[0..], right_size);
+                atomic_clone(
+                    &next[left_size..],
+                    &right.deref().next_slice_unchecked()[0..],
+                    right_size,
+                );
             }) else {
                 unsafe { guard.retire(left) };
                 return Err(());
@@ -1003,8 +1080,8 @@ where
             // as this Overflow if `n` will become the root.
 
             gparent.store_next(cursor.gp_p_idx, new_internal.as_raw(), &gparent_lock);
-            node.marked.store(true, Ordering::Relaxed);
-            parent.marked.store(true, Ordering::Relaxed);
+            node.set_marked_locked(true, &node_lock);
+            parent.set_marked_locked(true, &parent_lock);
 
             unsafe { guard.retire_raw(cursor.l) };
             unsafe { guard.retire_raw(cursor.p) };
@@ -1061,23 +1138,22 @@ where
         // Bug Fix: Added a check to ensure the node size is greater than 0.
         // This prevents underflows caused by decrementing the size value.
         // This check is not present in the original code.
-        if node.size.load(Ordering::Acquire) == 0 {
+        if node.get_size_locked(&node_lock) == 0 {
             return Err(());
         }
 
-        let new_size = node.size.load(Ordering::Relaxed) - 1;
+        let new_size = node.get_size_locked(&node_lock) - 1;
         for i in 0..DEGREE {
             if node.get_key_locked(i, &node_lock) == Some(*key) {
-                // Safety of raw `get`: `node` is locked.
-                let val = node.values[i].get().unwrap();
+                let val = node.get_value_locked(i, &node_lock).unwrap();
                 let wguard = node.start_write(&node_lock);
                 node.set_key(i, None, &wguard);
-                node.size.store(new_size, Ordering::Relaxed);
+                node.set_size_locked(new_size, &node_lock);
 
                 node.elim_key_ops(val, wguard, &node_lock);
 
                 if new_size == Self::UNDERFULL_THRESHOLD - 1 {
-                    let search_key = node.search_key.get();
+                    let search_key = node.search_key_locked(&node_lock);
                     drop(node_lock);
                     self.fix_underfull_violation(search_key, cursor.l, guard);
                 }
@@ -1126,7 +1202,7 @@ where
         // We do not need a lock for the `viol == entry.ptrs[0]` check since since we cannot
         // "be turned into" the root. The root is only created by the root absorb
         // operation below, so a node that is not the root will never become the root.
-        if viol_node.size.load(Ordering::Relaxed) >= Self::UNDERFULL_THRESHOLD
+        if viol_node.get_size(guard)? >= Self::UNDERFULL_THRESHOLD
             || eq(viol_node, self.entry.load_raw())
             || viol == unsafe { self.entry.load(guard)?.deref() }.load_next(0, guard)?
         {
@@ -1134,14 +1210,14 @@ where
             return Ok((true, ArrayVec::<_, 2>::new()));
         }
 
-        let node = unsafe { &*cursor.l };
+        let node = viol_node;
         let parent = unsafe { &*cursor.p };
         // `gp` cannot be null, because if AbsorbSibling or Distribute can be applied,
         // then `p` is not the root.
         debug_assert!(!cursor.gp.is_null());
         let gparent = unsafe { &*cursor.gp };
 
-        if parent.size.load(Ordering::Relaxed) < Self::UNDERFULL_THRESHOLD
+        if parent.get_size(guard)? < Self::UNDERFULL_THRESHOLD
             && !eq(parent, self.entry.load_raw())
             && cursor.p != unsafe { self.entry.load(guard)?.deref() }.load_next(0, guard)?
         {
@@ -1189,7 +1265,8 @@ where
         );
 
         // Repeat this check, this might have changed while we locked `viol`.
-        if viol_node.size.load(Ordering::Relaxed) >= Self::UNDERFULL_THRESHOLD {
+        // Safety: `viol_node` is locked by either `left_lock` or `right_lock`.
+        if unsafe { viol_node.get_size_unchecked() } >= Self::UNDERFULL_THRESHOLD {
             // No degree violation at `viol`.
             return Ok((true, ArrayVec::new()));
         }
@@ -1216,43 +1293,51 @@ where
         // We can only apply AbsorbSibling or Distribute if there are no
         // weight violations at `parent`, `node`, or `sibling`.
         // So, we first check for any weight violations and fix any that we see.
-        if !parent.weight.get() {
+        if !parent.weight_locked(&parent_lock) {
+            let search_key = parent.search_key_locked(&parent_lock);
             drop((left_lock, right_lock, parent_lock, gparent_lock));
-            self.fix_tag_violation(parent.search_key.get(), cursor.p, guard);
+            self.fix_tag_violation(search_key, cursor.p, guard);
             return Ok((false, ArrayVec::new()));
         }
-        if !node.weight.get() {
+        if !left.weight_locked(&left_lock) {
+            let search_key = left.search_key_locked(&left_lock);
             drop((left_lock, right_lock, parent_lock, gparent_lock));
-            self.fix_tag_violation(node.search_key.get(), cursor.l, guard);
+            self.fix_tag_violation(search_key, left as *const _ as *mut _, guard);
             return Ok((false, ArrayVec::new()));
         }
-        if !sibling.weight.get() {
+        if !right.weight_locked(&right_lock) {
+            let search_key = right.search_key_locked(&right_lock);
             drop((left_lock, right_lock, parent_lock, gparent_lock));
-            self.fix_tag_violation(sibling.search_key.get(), sibling_sh, guard);
+            self.fix_tag_violation(search_key, right as *const _ as *mut _, guard);
             return Ok((false, ArrayVec::new()));
         }
 
         // There are no weight violations at `parent`, `node` or `sibling`.
-        debug_assert!(parent.weight.get() && node.weight.get() && sibling.weight.get());
+        debug_assert!(
+            parent.weight_locked(&parent_lock)
+                && left.weight_locked(&left_lock)
+                && right.weight_locked(&right_lock)
+        );
         // l and s are either both leaves or both internal nodes,
         // because there are no weight violations at these nodes.
         debug_assert!(
-            (node.is_leaf.get() && sibling.is_leaf.get())
-                || (!node.is_leaf.get() && !sibling.is_leaf.get())
+            (left.is_leaf_locked(&left_lock) && right.is_leaf_locked(&right_lock))
+                || (!left.is_leaf_locked(&left_lock) && !right.is_leaf_locked(&right_lock))
         );
 
-        let lsize = left.size.load(Ordering::Relaxed);
-        let rsize = right.size.load(Ordering::Relaxed);
-        let psize = parent.size.load(Ordering::Relaxed);
+        let lsize = left.get_size_locked(&left_lock);
+        let rsize = right.get_size_locked(&right_lock);
+        let psize = parent.get_size_locked(&parent_lock);
         let size = lsize + rsize;
 
         if size < 2 * Self::UNDERFULL_THRESHOLD {
             // AbsorbSibling
             let new_node = guard.allocate(|new_node| unsafe {
-                if left.is_leaf.get() {
-                    debug_assert!(right.is_leaf.get());
+                if left.is_leaf_locked(&left_lock) {
+                    debug_assert!(right.is_leaf_locked(&right_lock));
                     let new_leaf = new_node.deref();
-                    new_leaf.init_for_leaf(true, size, node.search_key.get());
+                    // Safety: `node` is locked.
+                    new_leaf.init_for_leaf(true, size, node.search_key_unchecked());
                     let kv_iter = left
                         .iter_key_value(&left_lock)
                         .chain(right.iter_key_value(&right_lock))
@@ -1262,9 +1347,10 @@ where
                         new_leaf.init_value(i, value);
                     }
                 } else {
-                    debug_assert!(!right.is_leaf.get());
+                    debug_assert!(!right.is_leaf_locked(&right_lock));
                     let new_internal = new_node.deref();
-                    new_internal.init_for_internal(true, size, node.search_key.get());
+                    // Safety: `node` is locked.
+                    new_internal.init_for_internal(true, size, node.search_key_unchecked());
                     let key_btw = parent.get_key_locked(left_idx, &parent_lock).unwrap();
                     let kn_iter = left
                         .iter_key_next(&left_lock)
@@ -1283,9 +1369,9 @@ where
             if eq(gparent, self.entry.load_raw()) && psize == 2 {
                 debug_assert!(cursor.gp_p_idx == 0);
                 gparent.store_next(cursor.gp_p_idx, new_node.as_raw(), &gparent_lock);
-                node.marked.store(true, Ordering::Relaxed);
-                parent.marked.store(true, Ordering::Relaxed);
-                sibling.marked.store(true, Ordering::Relaxed);
+                left.set_marked_locked(true, &left_lock);
+                parent.set_marked_locked(true, &parent_lock);
+                right.set_marked_locked(true, &right_lock);
 
                 unsafe {
                     guard.retire_raw(cursor.l);
@@ -1293,7 +1379,8 @@ where
                     guard.retire_raw(sibling_sh);
                 }
 
-                let search_key = node.search_key.get();
+                // Safety: `node` is locked.
+                let search_key = unsafe { node.search_key_unchecked() };
                 drop((left_lock, right_lock, parent_lock, gparent_lock));
                 return Ok((
                     true,
@@ -1303,7 +1390,11 @@ where
                 debug_assert!(!eq(gparent, self.entry.load_raw()) || psize > 2);
                 let Ok(new_parent) = guard.allocate(|new_parent| unsafe {
                     let new_parent = new_parent.deref();
-                    new_parent.init_for_internal(true, psize - 1, parent.search_key.get());
+                    new_parent.init_for_internal(
+                        true,
+                        psize - 1,
+                        parent.search_key_locked(&parent_lock),
+                    );
 
                     for i in 0..left_idx {
                         new_parent.init_key(i, parent.get_key_locked(i, &parent_lock));
@@ -1328,9 +1419,9 @@ where
                 };
 
                 gparent.store_next(cursor.gp_p_idx, new_parent.as_raw(), &gparent_lock);
-                node.marked.store(true, Ordering::Relaxed);
-                parent.marked.store(true, Ordering::Relaxed);
-                sibling.marked.store(true, Ordering::Relaxed);
+                left.set_marked_locked(true, &left_lock);
+                parent.set_marked_locked(true, &parent_lock);
+                right.set_marked_locked(true, &right_lock);
 
                 unsafe {
                     guard.retire_raw(cursor.l);
@@ -1338,8 +1429,9 @@ where
                     guard.retire_raw(sibling_sh);
                 }
 
-                let node_key = node.search_key.get();
-                let parent_key = parent.search_key.get();
+                // Safety: `node` is locked.
+                let node_key = unsafe { node.search_key_unchecked() };
+                let parent_key = parent.search_key_locked(&parent_lock);
                 drop((left_lock, right_lock, parent_lock, gparent_lock));
                 return Ok((
                     true,
@@ -1357,11 +1449,11 @@ where
             let left_size = size / 2;
             let right_size = size - left_size;
 
-            assert!(left.is_leaf.get() == right.is_leaf.get());
+            assert!(left.is_leaf_locked(&left_lock) == right.is_leaf_locked(&right_lock));
 
             // `pivot`: Reserve one key for the parent
             //          (to go between `new_left` and `new_right`).
-            let (new_left, new_right, pivot) = if left.is_leaf.get() {
+            let (new_left, new_right, pivot) = if left.is_leaf_locked(&left_lock) {
                 // Combine the contents of `l` and `s`.
                 let mut kv_pairs = left
                     .iter_key_value(&left_lock)
@@ -1378,13 +1470,11 @@ where
                         new_leaf.init_key(i, Some(k));
                         new_leaf.init_value(i, v);
                     }
-                    new_leaf
-                        .search_key
-                        .set(new_leaf.get_key_unchecked(0).unwrap());
+                    new_leaf.init_search_key(new_leaf.get_key_unchecked(0).unwrap());
                 })?;
 
                 let Ok(new_right) = guard.allocate(|new_leaf| unsafe {
-                    debug_assert!(left.is_leaf.get());
+                    debug_assert!(left.is_leaf_locked(&left_lock));
                     let new_leaf = new_leaf.deref();
                     new_leaf.init_for_leaf(true, right_size, Default::default());
                     for i in 0..right_size {
@@ -1392,14 +1482,12 @@ where
                         new_leaf.init_key(i, Some(k));
                         new_leaf.init_value(i, v);
                     }
-                    new_leaf
-                        .search_key
-                        .set(new_leaf.get_key_unchecked(0).unwrap());
+                    new_leaf.init_search_key(new_leaf.get_key_unchecked(0).unwrap());
                 }) else {
                     unsafe { guard.retire(new_left) };
                     return Err(());
                 };
-                let pivot = unsafe { new_right.deref() }.search_key.get();
+                let pivot = unsafe { new_right.deref().search_key_unchecked() };
 
                 debug_assert!(kv_iter.next().is_none());
                 (new_left, new_right, pivot)
@@ -1420,9 +1508,7 @@ where
                         new_internal.init_key(i, k);
                         new_internal.init_next(i, n);
                     }
-                    new_internal
-                        .search_key
-                        .set(new_internal.get_key_unchecked(0).unwrap());
+                    new_internal.init_search_key(new_internal.get_key_unchecked(0).unwrap());
                 })?;
                 let pivot = unsafe { new_left.deref().get_key_unchecked(left_size - 1) }
                     .take()
@@ -1436,9 +1522,7 @@ where
                         new_internal.init_key(i, k);
                         new_internal.init_next(i, n);
                     }
-                    new_internal
-                        .search_key
-                        .set(new_internal.get_key_unchecked(0).unwrap());
+                    new_internal.init_search_key(new_internal.get_key_unchecked(0).unwrap());
                 }) else {
                     unsafe { guard.retire(new_left) };
                     return Err(());
@@ -1450,13 +1534,21 @@ where
 
             let Ok(new_parent) = guard.allocate(|new_parent| unsafe {
                 let new_parent = new_parent.deref();
-                new_parent.init_for_internal(parent.weight.get(), psize, parent.search_key.get());
+                new_parent.init_for_internal(
+                    parent.weight_locked(&parent_lock),
+                    psize,
+                    parent.search_key_locked(&parent_lock),
+                );
                 cell_clone(
                     &parent.key_slice(&parent_lock)[0..],
                     &new_parent.key_slice_unchecked()[0..],
                     parent.key_count_locked(&parent_lock),
                 );
-                atomic_clone(&parent.next[0..], &new_parent.next[0..], psize);
+                atomic_clone(
+                    &parent.next_slice(&parent_lock)[0..],
+                    &new_parent.next_slice_unchecked()[0..],
+                    psize,
+                );
                 new_parent.init_next(left_idx, new_left.as_raw());
                 new_parent.init_next(right_idx, new_right.as_raw());
                 new_parent.init_key(left_idx, Some(pivot));
@@ -1467,9 +1559,9 @@ where
             };
 
             gparent.store_next(cursor.gp_p_idx, new_parent.as_raw(), &gparent_lock);
-            node.marked.store(true, Ordering::Relaxed);
-            parent.marked.store(true, Ordering::Relaxed);
-            sibling.marked.store(true, Ordering::Relaxed);
+            left.set_marked_locked(true, &left_lock);
+            parent.set_marked_locked(true, &parent_lock);
+            right.set_marked_locked(true, &right_lock);
 
             unsafe {
                 guard.retire_raw(cursor.l);
