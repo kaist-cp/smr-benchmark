@@ -172,11 +172,15 @@ impl<K, V> Node<K, V> {
         self.next()[index].load(Ordering::Acquire)
     }
 
-    fn protect_next(&self, index: usize, slot: &mut HazardPointer<'_>) -> Result<Shared<Self>, ()> {
+    fn protect_next_pess(
+        &self,
+        index: usize,
+        slot: &mut HazardPointer<'_>,
+    ) -> Result<Shared<Self>, ()> {
         let atomic = &self.next()[index];
         let mut ptr = atomic.load(Ordering::Relaxed);
         loop {
-            slot.protect_raw(ptr.with_tag(0).into_raw());
+            slot.protect_raw(ptr.into_raw());
             light_membarrier();
             let new = atomic.load(Ordering::Acquire);
             if ptr == new {
@@ -188,6 +192,27 @@ impl<K, V> Node<K, V> {
             return Err(());
         }
         Ok(ptr)
+    }
+
+    /// Stores the next pointer into the given slot.
+    /// It retries if the marked state or the pointer changes.
+    fn protect_next_consistent(
+        &self,
+        index: usize,
+        slot: &mut HazardPointer<'_>,
+    ) -> (Shared<Self>, bool) {
+        let mut marked = self.marked.load(Ordering::Acquire);
+        let mut ptr = self.load_next(index);
+        loop {
+            slot.protect_raw(ptr.into_raw());
+            light_membarrier();
+            let marked_new = self.marked.load(Ordering::Acquire);
+            let ptr_new = self.load_next(index);
+            if marked_new == marked && ptr_new == ptr {
+                return (ptr, marked);
+            }
+            (marked, ptr) = (marked_new, ptr_new);
+        }
     }
 
     fn store_next<'g>(&'g self, index: usize, ptr: impl Pointer<Self>, _: &MCSLockGuard<'g, K, V>) {
@@ -520,6 +545,8 @@ pub struct Handle<'domain> {
     gp_h: HazardPointer<'domain>,
     /// A protector for the sibling node.
     s_h: HazardPointer<'domain>,
+    /// Used in `search_basic`, which does optimistic traversal.
+    c_h: HazardPointer<'domain>,
     thread: Box<Thread<'domain>>,
 }
 
@@ -531,6 +558,7 @@ impl Default for Handle<'static> {
             p_h: HazardPointer::new(&mut thread),
             gp_h: HazardPointer::new(&mut thread),
             s_h: HazardPointer::new(&mut thread),
+            c_h: HazardPointer::new(&mut thread),
             thread,
         }
     }
@@ -583,13 +611,81 @@ where
         key: &K,
         handle: &'hp mut Handle<'_>,
     ) -> Result<Option<V>, ()> {
-        let mut node = unsafe { self.entry.protect_next(0, &mut handle.p_h)?.deref() };
-        while !node.is_leaf() {
-            let next = node.protect_next(node.child_index(key), &mut handle.l_h)?;
-            HazardPointer::swap(&mut handle.l_h, &mut handle.p_h);
-            node = unsafe { next.deref() };
+        let (a_h, an_h, p_h, l_h, n_h) = (
+            &mut handle.gp_h,
+            &mut handle.s_h,
+            &mut handle.p_h,
+            &mut handle.l_h,
+            &mut handle.c_h,
+        );
+
+        let mut p = Shared::<Node<K, V>>::from(&self.entry as *const _ as usize);
+        let mut p_l_idx = 0;
+        let (mut l, mut l_marked) = self.entry.protect_next_consistent(p_l_idx, l_h);
+
+        let mut a = Shared::<Node<K, V>>::null();
+        let mut a_an_idx = 0;
+        let mut an = Shared::<Node<K, V>>::null();
+
+        loop {
+            // Validation depending on the state of `p`.
+            //
+            // - If it is marked, validate on anchor.
+            // - If it is not marked, it is already protected safely.
+            if l_marked {
+                // Validate on anchor.
+                debug_assert!(!a.is_null());
+                debug_assert!(!an.is_null());
+                let an_new = unsafe { a.deref() }.load_next(a_an_idx);
+
+                if an != an_new {
+                    if unsafe { a.deref() }.marked.load(Ordering::Acquire) {
+                        return Err(());
+                    }
+                    // Anchor is updated but clear, so can restart from anchor.
+                    p = a;
+                    p_l_idx = a_an_idx;
+                    l = an_new;
+                    l_marked = false;
+                    a = Shared::null();
+
+                    HazardPointer::swap(p_h, a_h);
+                    continue;
+                }
+            }
+
+            let l_node = unsafe { l.deref() };
+            if l_node.is_leaf() {
+                return Ok(l_node.read_consistent(key).1);
+            }
+
+            let l_n_idx = l_node.child_index(key);
+            let (n, n_marked) = l_node.protect_next_consistent(l_n_idx, n_h);
+            if n_marked {
+                if a.is_null() {
+                    a = p;
+                    a_an_idx = p_l_idx;
+                    an = l;
+                    HazardPointer::swap(a_h, p_h);
+                } else if an == p {
+                    HazardPointer::swap(an_h, p_h);
+                }
+                p = l;
+                p_l_idx = l_n_idx;
+                l = n;
+                l_marked = n_marked;
+                HazardPointer::swap(l_h, p_h);
+                HazardPointer::swap(l_h, n_h);
+            } else {
+                p = l;
+                p_l_idx = l_n_idx;
+                l = n;
+                l_marked = n_marked;
+                a = Shared::null();
+                HazardPointer::swap(l_h, p_h);
+                HazardPointer::swap(l_h, n_h);
+            }
         }
-        Ok(node.read_consistent(key).1)
     }
 
     fn search<'hp>(
@@ -613,8 +709,8 @@ where
         handle: &'hp mut Handle<'_>,
     ) -> Result<(bool, Cursor<K, V>), ()> {
         let mut cursor = Cursor {
-            l: self.entry.protect_next(0, &mut handle.l_h)?,
-            s: self.entry.protect_next(1, &mut handle.s_h)?,
+            l: self.entry.protect_next_pess(0, &mut handle.l_h)?,
+            s: self.entry.protect_next_pess(1, &mut handle.s_h)?,
             p: Shared::from(&self.entry as *const _ as usize),
             gp: Shared::null(),
             gp_p_idx: 0,
@@ -635,8 +731,8 @@ where
             cursor.gp_p_idx = cursor.p_l_idx;
             cursor.p_l_idx = l_node.child_index(key);
             cursor.p_s_idx = Node::<K, V>::p_s_idx(cursor.p_l_idx);
-            cursor.l = l_node.protect_next(cursor.p_l_idx, &mut handle.l_h)?;
-            cursor.s = l_node.protect_next(cursor.p_s_idx, &mut handle.s_h)?;
+            cursor.l = l_node.protect_next_pess(cursor.p_l_idx, &mut handle.l_h)?;
+            cursor.s = l_node.protect_next_pess(cursor.p_s_idx, &mut handle.s_h)?;
         }
 
         if let Some(target) = target {
@@ -755,7 +851,7 @@ where
 
             // Manually unlock and fix the tag.
             drop((parent_lock, node_lock));
-            unsafe { handle.thread.retire(cursor.l.with_tag(0).into_raw()) };
+            unsafe { handle.thread.retire(cursor.l.into_raw()) };
             self.fix_tag_violation(kv_pairs[left_size].0, new_internal, handle);
 
             Ok(None)
@@ -858,8 +954,8 @@ where
             node.marked.store(true, Ordering::Release);
             parent.marked.store(true, Ordering::Release);
 
-            unsafe { handle.thread.retire(cursor.l.with_tag(0).into_raw()) };
-            unsafe { handle.thread.retire(cursor.p.with_tag(0).into_raw()) };
+            unsafe { handle.thread.retire(cursor.l.into_raw()) };
+            unsafe { handle.thread.retire(cursor.p.into_raw()) };
             return (true, None);
         } else {
             // Split case.
@@ -903,8 +999,8 @@ where
             node.marked.store(true, Ordering::Release);
             parent.marked.store(true, Ordering::Release);
 
-            unsafe { handle.thread.retire(cursor.l.with_tag(0).into_raw()) };
-            unsafe { handle.thread.retire(cursor.p.with_tag(0).into_raw()) };
+            unsafe { handle.thread.retire(cursor.l.into_raw()) };
+            unsafe { handle.thread.retire(cursor.p.into_raw()) };
 
             drop((node_lock, parent_lock, gparent_lock));
             return (
@@ -1156,9 +1252,9 @@ where
                 sibling.marked.store(true, Ordering::Release);
 
                 unsafe {
-                    handle.thread.retire(cursor.l.with_tag(0).into_raw());
-                    handle.thread.retire(cursor.p.with_tag(0).into_raw());
-                    handle.thread.retire(cursor.s.with_tag(0).into_raw());
+                    handle.thread.retire(cursor.l.into_raw());
+                    handle.thread.retire(cursor.p.into_raw());
+                    handle.thread.retire(cursor.s.into_raw());
                 }
 
                 drop((left_lock, right_lock, parent_lock, gparent_lock));
@@ -1196,9 +1292,9 @@ where
                 sibling.marked.store(true, Ordering::Release);
 
                 unsafe {
-                    handle.thread.retire(cursor.l.with_tag(0).into_raw());
-                    handle.thread.retire(cursor.p.with_tag(0).into_raw());
-                    handle.thread.retire(cursor.s.with_tag(0).into_raw());
+                    handle.thread.retire(cursor.l.into_raw());
+                    handle.thread.retire(cursor.p.into_raw());
+                    handle.thread.retire(cursor.s.into_raw());
                 }
 
                 drop((left_lock, right_lock, parent_lock, gparent_lock));
@@ -1310,9 +1406,9 @@ where
             sibling.marked.store(true, Ordering::Release);
 
             unsafe {
-                handle.thread.retire(cursor.l.with_tag(0).into_raw());
-                handle.thread.retire(cursor.p.with_tag(0).into_raw());
-                handle.thread.retire(cursor.s.with_tag(0).into_raw());
+                handle.thread.retire(cursor.l.into_raw());
+                handle.thread.retire(cursor.p.into_raw());
+                handle.thread.retire(cursor.s.into_raw());
             }
 
             return (true, ArrayVec::new());
