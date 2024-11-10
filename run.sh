@@ -1,9 +1,0 @@
-cargo run --release --bin nr -- -dnm-tree -t92 -g0 -r100000 -i10
-cargo run --release --bin ebr -- -dnm-tree -t92 -g0 -r100000 -i10
-cargo run --release --bin pebr -- -dnm-tree -t92 -g0 -r100000 -i10
-cargo run --release --bin hp -- -dnm-tree -t92 -g0 -r100000 -i10
-cargo run --release --bin hp-pp -- -dnm-tree -t92 -g0 -r100000 -i10
-cargo run --release --bin nbr -- -dnm-tree -t92 -g0 -r100000 -i10
-cargo run --release --bin hp-brcu -- -dnm-tree -t92 -g0 -r100000 -i10
-cargo run --release --bin vbr -- -dnm-tree -t92 -g0 -r100000 -i10
-cargo run --release --bin hp-rcu -- -dnm-tree -t92 -g0 -r100000 -i10
