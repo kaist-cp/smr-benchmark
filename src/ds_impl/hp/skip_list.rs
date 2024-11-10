@@ -206,8 +206,6 @@ where
 
                     if tag(curr) != 0 {
                         // Validate on anchor.
-                        debug_assert_ne!(untagged(anchor), untagged(pred));
-
                         let an_new =
                             unsafe { &*untagged(anchor) }.next[level].load(Ordering::Acquire);
 
@@ -225,8 +223,6 @@ where
                         }
                     } else {
                         // Validate on prev.
-                        debug_assert_eq!(untagged(anchor), untagged(pred));
-
                         let curr_new =
                             unsafe { &*untagged(pred) }.next[level].load(Ordering::Acquire);
 
