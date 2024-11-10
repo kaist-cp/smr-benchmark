@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell, collections::VecDeque, fmt::Display, marker::PhantomData, mem::align_of,
-    ptr::null_mut, sync::atomic::AtomicU64,
+    ops::Deref, ptr::null_mut, sync::atomic::AtomicU64,
 };
 
 use atomic::{Atomic, Ordering};
@@ -31,6 +31,14 @@ pub struct Inner<T> {
     birth: AtomicU64,
     retire: AtomicU64,
     data: T,
+}
+
+impl<T> Deref for Inner<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
 }
 
 pub struct Global<T> {
@@ -299,9 +307,9 @@ impl<T: Default> Guard<T> {
         self.epoch = self.global().epoch();
     }
 
-    pub fn allocate<'g, F>(&'g self, init: F) -> Result<Shared<'g, T>, ()>
+    pub fn allocate<'g, F>(&'g self, mut init: F) -> Result<Shared<'g, T>, ()>
     where
-        F: Fn(Shared<'g, T>),
+        F: FnMut(Shared<'g, T>),
     {
         let ptr = self.local().pop_avail();
         debug_assert!(!ptr.is_null());
@@ -327,12 +335,27 @@ impl<T: Default> Guard<T> {
         Ok(result)
     }
 
+    /// # Safety
+    ///
+    /// The current must conceptually have exclusive permission to retire this pointer
+    /// (e.g., after successful physical deletion in a lock-free data structure).
     pub unsafe fn retire(&self, ptr: Shared<T>) {
         let inner = ptr.as_inner().expect("Attempted to retire a null pointer.");
+        if inner.birth.load(Ordering::SeqCst) > ptr.birth {
+            // It is already retired and reclaimed.
+            return;
+        }
+        self.retire_raw(inner as *const _ as *mut _);
+    }
 
-        if inner.birth.load(Ordering::SeqCst) > ptr.birth
-            || inner.retire.load(Ordering::SeqCst) != NOT_RETIRED
-        {
+    /// # Safety
+    ///
+    /// The pointee must not be relcaimed yet, and the current must conceptually have exclusive
+    /// permission to retire this pointer (e.g., after successful physical deletion in a lock-free
+    /// data structure).
+    pub unsafe fn retire_raw(&self, ptr: *mut Inner<T>) {
+        let inner = unsafe { &*ptr };
+        if inner.retire.load(Ordering::SeqCst) != NOT_RETIRED {
             return;
         }
 
@@ -556,6 +579,10 @@ impl<T: Default> Entry<T> {
                 _marker: PhantomData,
             })
         }
+    }
+
+    pub fn load_raw(&self) -> *mut Inner<T> {
+        self.link
     }
 }
 
