@@ -411,7 +411,7 @@ where
     fn child_index(&self, key: &K, guard: &Guard<Self>) -> Result<usize, ()> {
         let key_count = self.key_count(guard)?;
         let mut index = 0;
-        while index < key_count && !(key < &self.get_key(index, guard)?.unwrap()) {
+        while index < key_count && !(key < &some_or!(self.get_key(index, guard)?, return Err(()))) {
             index += 1;
         }
         guard.validate_epoch().map(|_| index)
