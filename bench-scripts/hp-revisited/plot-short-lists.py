@@ -105,7 +105,7 @@ def draw_throughput(data, bench):
 
 def draw_peak_garb(data, bench):
     data = data.copy()
-    y_label = 'Peak unreclaimed blocks (×10⁴)'
+    y_label = 'Peak unreclaimed nodes (×10⁴)'
     y_max = data.peak_garb.max() * 1.05
     draw(plot_title(bench), f'{RESULTS_PATH}/short-lists_{bench}_peak_garb.pdf',
          data, PEAK_GARB, y_label, y_max)

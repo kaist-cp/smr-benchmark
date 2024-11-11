@@ -133,7 +133,7 @@ def draw_peak_garb(data, ds, bench, key_range):
     data = data[data.key_range == key_range]
     data = data[data.mm != NR]
     data = data[data.mm != VBR]
-    y_label = 'Peak unreclaimed blocks (×10⁴)'
+    y_label = 'Peak unreclaimed nodes (×10⁴)'
     y_max = 0
     for cand in [HP_PP, HP_BRCU]:
         max_garb = data[data.mm == cand].peak_garb.max()
