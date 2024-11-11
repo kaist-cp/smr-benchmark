@@ -55,7 +55,7 @@ def invalid(mm, ds, g):
     if mm == 'nbr':
         is_invalid |= ds in ["hm-list", "skip-list"]
     if ds == 'elim-ab-tree':
-        is_invalid |= mm in ["pebr", "hp-pp", "vbr"]
+        is_invalid |= mm in ["hp-pp"]
     return is_invalid
 
 cmds = []
