@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use smr_benchmark::config::map::{setup, BagSize, BenchWriter, Config, Op, Perf, DS};
 use smr_benchmark::ds_impl::vbr::{
-    ConcurrentMap, HHSList, HList, HMList, HashMap, NMTreeMap, SkipList,
+    ConcurrentMap, ElimABTree, HHSList, HList, HMList, HashMap, NMTreeMap, SkipList,
 };
 
 fn main() {
@@ -32,6 +32,7 @@ fn bench(config: &Config, output: BenchWriter) {
         DS::HashMap => bench_map::<HashMap<usize, usize>>(config, PrefillStrategy::Decreasing),
         DS::NMTree => bench_map::<NMTreeMap<usize, usize>>(config, PrefillStrategy::Random),
         DS::SkipList => bench_map::<SkipList<usize, usize>>(config, PrefillStrategy::Decreasing),
+        DS::ElimAbTree => bench_map::<ElimABTree<usize, usize>>(config, PrefillStrategy::Random),
         _ => panic!("Unsupported(or unimplemented) data structure for VBR"),
     };
     output.write_record(config, &perf);
@@ -40,7 +41,9 @@ fn bench(config: &Config, output: BenchWriter) {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrefillStrategy {
+    /// Inserts keys in a random order, with multiple threads.
     Random,
+    /// Inserts keys in an increasing order, with a single thread.
     Decreasing,
 }
 
@@ -96,8 +99,9 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> Perf {
-    if config.bag_size == BagSize::Large {
-        println!("Warning: Large bag size is currently unavailable for VBR.");
+    match config.bag_size {
+        BagSize::Small => vbr::set_bag_capacity(512),
+        BagSize::Large => vbr::set_bag_capacity(4096),
     }
     let global = &M::global(config.prefill);
     let local = &M::local(global);

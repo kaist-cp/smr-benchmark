@@ -14,14 +14,30 @@ type Tower<K, V> = [MutAtomic<Node<K, V>>; MAX_HEIGHT];
 
 pub struct Node<K, V>
 where
-    K: 'static + Copy,
-    V: 'static + Copy,
+    K: 'static + Copy + Default,
+    V: 'static + Copy + Default,
 {
     key: ImmAtomic<K>,
     value: ImmAtomic<V>,
     next: Tower<K, V>,
     height: ImmAtomic<usize>,
     refs: AtomicUsize,
+}
+
+impl<K, V> Default for Node<K, V>
+where
+    K: 'static + Copy + Default,
+    V: 'static + Copy + Default,
+{
+    fn default() -> Self {
+        Self {
+            key: ImmAtomic::new(Default::default()),
+            value: ImmAtomic::new(Default::default()),
+            next: unsafe { zeroed() },
+            height: ImmAtomic::new(0),
+            refs: AtomicUsize::new(0),
+        }
+    }
 }
 
 fn generate_height() -> usize {
@@ -39,8 +55,8 @@ fn generate_height() -> usize {
 
 impl<K, V> Node<K, V>
 where
-    K: 'static + Copy,
-    V: 'static + Copy,
+    K: 'static + Copy + Default,
+    V: 'static + Copy + Default,
 {
     pub fn decrement(ptr: Shared<Node<K, V>>, guard: &Guard<Node<K, V>>) {
         let prev = unsafe { ptr.deref() }.refs.fetch_sub(1, Ordering::SeqCst);
@@ -92,8 +108,8 @@ where
 
 struct Cursor<'g, K, V>
 where
-    K: 'static + Copy,
-    V: 'static + Copy,
+    K: 'static + Copy + Default,
+    V: 'static + Copy + Default,
 {
     found: Option<Shared<'g, Node<K, V>>>,
     preds: [Shared<'g, Node<K, V>>; MAX_HEIGHT],
@@ -102,8 +118,8 @@ where
 
 impl<'g, K, V> Cursor<'g, K, V>
 where
-    K: 'static + Copy,
-    V: 'static + Copy,
+    K: 'static + Copy + Default,
+    V: 'static + Copy + Default,
 {
     fn new(head: Shared<'g, Node<K, V>>) -> Self {
         Self {
@@ -116,16 +132,16 @@ where
 
 pub struct SkipList<K, V>
 where
-    K: 'static + Copy,
-    V: 'static + Copy,
+    K: 'static + Copy + Default,
+    V: 'static + Copy + Default,
 {
     head: Entry<Node<K, V>>,
 }
 
 impl<K, V> SkipList<K, V>
 where
-    K: 'static + Copy + Ord,
-    V: 'static + Copy,
+    K: 'static + Copy + Default + Ord,
+    V: 'static + Copy + Default,
 {
     pub fn new(local: &Local<Node<K, V>>) -> Self {
         let guard = &local.guard();
@@ -392,8 +408,8 @@ where
 
 impl<K, V> ConcurrentMap<K, V> for SkipList<K, V>
 where
-    K: 'static + Ord + Copy,
-    V: 'static + Copy,
+    K: 'static + Ord + Copy + Default,
+    V: 'static + Copy + Default,
 {
     type Global = Global<Node<K, V>>;
     type Local = Local<Node<K, V>>;

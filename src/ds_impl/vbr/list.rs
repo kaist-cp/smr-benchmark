@@ -7,8 +7,8 @@ use std::sync::atomic::Ordering;
 
 pub struct Node<K, V>
 where
-    K: 'static + Copy,
-    V: 'static + Copy,
+    K: 'static + Copy + Default,
+    V: 'static + Copy + Default,
 {
     /// Mark: tag(), Tag: not needed
     next: MutAtomic<Node<K, V>>,
@@ -16,18 +16,32 @@ where
     value: ImmAtomic<V>,
 }
 
+impl<K, V> Default for Node<K, V>
+where
+    K: 'static + Copy + Default + Default,
+    V: 'static + Copy + Default + Default,
+{
+    fn default() -> Self {
+        Self {
+            next: MutAtomic::null(),
+            key: ImmAtomic::new(Default::default()),
+            value: ImmAtomic::new(Default::default()),
+        }
+    }
+}
+
 struct List<K, V>
 where
-    K: 'static + Copy,
-    V: 'static + Copy,
+    K: 'static + Copy + Default,
+    V: 'static + Copy + Default,
 {
     head: Entry<Node<K, V>>,
 }
 
 struct Cursor<'g, K, V>
 where
-    K: 'static + Copy,
-    V: 'static + Copy,
+    K: 'static + Copy + Default,
+    V: 'static + Copy + Default,
 {
     prev: Shared<'g, Node<K, V>>,
     // Tag of `curr` should always be zero so when `curr` is stored in a `prev`, we don't store a
@@ -37,8 +51,8 @@ where
 
 impl<'g, K, V> Cursor<'g, K, V>
 where
-    K: 'static + Ord + Copy,
-    V: 'static + Copy,
+    K: 'static + Ord + Copy + Default,
+    V: 'static + Copy + Default,
 {
     /// Creates the head cursor.
     #[inline]
@@ -57,8 +71,8 @@ where
 
 impl<K, V> List<K, V>
 where
-    K: 'static + Ord + Copy,
-    V: 'static + Copy,
+    K: 'static + Ord + Copy + Default,
+    V: 'static + Copy + Default,
 {
     /// Creates a new list.
     #[inline]
@@ -417,16 +431,16 @@ where
 
 pub struct HList<K, V>
 where
-    K: 'static + Ord + Copy,
-    V: 'static + Copy,
+    K: 'static + Ord + Copy + Default,
+    V: 'static + Copy + Default,
 {
     inner: List<K, V>,
 }
 
 impl<K, V> ConcurrentMap<K, V> for HList<K, V>
 where
-    K: 'static + Ord + Copy,
-    V: 'static + Copy,
+    K: 'static + Ord + Copy + Default,
+    V: 'static + Copy + Default,
 {
     type Global = Global<Node<K, V>>;
     type Local = Local<Node<K, V>>;
@@ -461,16 +475,16 @@ where
 
 pub struct HMList<K, V>
 where
-    K: 'static + Ord + Copy,
-    V: 'static + Copy,
+    K: 'static + Ord + Copy + Default,
+    V: 'static + Copy + Default,
 {
     inner: List<K, V>,
 }
 
 impl<K, V> ConcurrentMap<K, V> for HMList<K, V>
 where
-    K: 'static + Ord + Copy,
-    V: 'static + Copy,
+    K: 'static + Ord + Copy + Default,
+    V: 'static + Copy + Default,
 {
     type Global = Global<Node<K, V>>;
     type Local = Local<Node<K, V>>;
@@ -505,16 +519,16 @@ where
 
 pub struct HHSList<K, V>
 where
-    K: 'static + Ord + Copy,
-    V: 'static + Copy,
+    K: 'static + Ord + Copy + Default,
+    V: 'static + Copy + Default,
 {
     inner: List<K, V>,
 }
 
 impl<K, V> HHSList<K, V>
 where
-    K: 'static + Ord + Copy,
-    V: 'static + Copy,
+    K: 'static + Ord + Copy + Default,
+    V: 'static + Copy + Default,
 {
     /// Pop the first element efficiently.
     /// This method is used for only the fine grained benchmark (src/bin/long_running).
@@ -525,8 +539,8 @@ where
 
 impl<K, V> ConcurrentMap<K, V> for HHSList<K, V>
 where
-    K: 'static + Ord + Copy,
-    V: 'static + Copy,
+    K: 'static + Ord + Copy + Default,
+    V: 'static + Copy + Default,
 {
     type Global = Global<Node<K, V>>;
     type Local = Local<Node<K, V>>;

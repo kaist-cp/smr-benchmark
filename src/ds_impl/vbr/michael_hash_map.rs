@@ -8,16 +8,16 @@ use super::list::{HHSList, Node};
 
 pub struct HashMap<K, V>
 where
-    K: 'static + Ord + Hash + Copy,
-    V: 'static + Copy,
+    K: 'static + Ord + Hash + Copy + Default,
+    V: 'static + Copy + Default,
 {
     buckets: Vec<HHSList<K, V>>,
 }
 
 impl<K, V> HashMap<K, V>
 where
-    K: 'static + Ord + Hash + Copy,
-    V: 'static + Copy,
+    K: 'static + Ord + Hash + Copy + Default,
+    V: 'static + Copy + Default,
 {
     pub fn with_capacity(n: usize, local: &Local<Node<K, V>>) -> Self {
         let mut buckets = Vec::with_capacity(n);
@@ -59,8 +59,8 @@ where
 
 impl<K, V> ConcurrentMap<K, V> for HashMap<K, V>
 where
-    K: 'static + Ord + Hash + Copy,
-    V: 'static + Copy,
+    K: 'static + Ord + Hash + Copy + Default,
+    V: 'static + Copy + Default,
 {
     type Global = Global<Node<K, V>>;
 

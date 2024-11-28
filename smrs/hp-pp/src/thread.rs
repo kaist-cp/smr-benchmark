@@ -1,4 +1,4 @@
-use core::sync::atomic::{AtomicPtr, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use core::{mem, ptr};
 use std::collections::VecDeque;
 
@@ -9,7 +9,7 @@ use crate::retire::{Retired, Unlinked};
 use crate::HazardPointer;
 use crate::{Invalidate, Unlink};
 
-pub static mut COUNTS_BETWEEN_FLUSH: usize = 64;
+pub static COUNTS_BETWEEN_FLUSH: AtomicUsize = AtomicUsize::new(64);
 
 #[inline]
 pub fn set_counts_between_flush(counts: usize) {
@@ -17,22 +17,22 @@ pub fn set_counts_between_flush(counts: usize) {
         counts >= 2 && counts % 2 == 0,
         "counts must be even and greater than 1."
     );
-    unsafe { COUNTS_BETWEEN_FLUSH = counts };
+    COUNTS_BETWEEN_FLUSH.store(counts, Ordering::Relaxed);
 }
 
 #[inline]
 pub fn counts_between_invalidation() -> usize {
-    unsafe { COUNTS_BETWEEN_FLUSH / 2 }
+    COUNTS_BETWEEN_FLUSH.load(Ordering::Relaxed) / 2
 }
 
 #[inline]
 pub fn counts_between_flush() -> usize {
-    unsafe { COUNTS_BETWEEN_FLUSH }
+    COUNTS_BETWEEN_FLUSH.load(Ordering::Relaxed)
 }
 
 #[inline]
 pub fn counts_between_collect() -> usize {
-    unsafe { COUNTS_BETWEEN_FLUSH * 2 }
+    COUNTS_BETWEEN_FLUSH.load(Ordering::Relaxed) * 2
 }
 
 pub struct Thread<'domain> {

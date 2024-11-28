@@ -1,12 +1,27 @@
 use std::mem::forget;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::epoch::Epoch;
 
-/// Maximum number of objects a bag can contain.
-#[cfg(not(sanitize = "address"))]
-pub(crate) const MAX_OBJECTS: usize = 128;
-#[cfg(sanitize = "address")]
-pub(crate) const MAX_OBJECTS: usize = 4;
+#[cfg(not(feature = "sanitize"))]
+static MAX_OBJECTS: AtomicUsize = AtomicUsize::new(64);
+#[cfg(feature = "sanitize")]
+static MAX_OBJECTS: AtomicUsize = AtomicUsize::new(4);
+
+/// Sets the capacity of thread-local garbage bag.
+///
+/// This value applies to all threads.
+#[inline]
+pub fn set_bag_capacity(cap: usize) {
+    assert!(cap > 1, "capacity must be greater than 1.");
+    MAX_OBJECTS.store(cap, Ordering::Relaxed);
+}
+
+/// Returns the current capacity of thread-local garbage bag.
+#[inline]
+pub fn bag_capacity() -> usize {
+    MAX_OBJECTS.load(Ordering::Relaxed)
+}
 
 /// A deferred task consisted of data and a callable function.
 ///
@@ -67,7 +82,7 @@ impl Bag {
     #[inline]
     pub fn new() -> Self {
         Self {
-            defs: Vec::with_capacity(MAX_OBJECTS),
+            defs: Vec::with_capacity(bag_capacity()),
         }
     }
 
@@ -77,7 +92,7 @@ impl Bag {
     /// full.
     #[inline]
     pub fn try_push(&mut self, def: Deferred) -> Result<(), Deferred> {
-        if self.len() == MAX_OBJECTS {
+        if self.len() == bag_capacity() {
             return Err(def);
         }
         self.defs.push(def);

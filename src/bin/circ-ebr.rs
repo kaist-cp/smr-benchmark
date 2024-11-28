@@ -34,7 +34,13 @@ fn bench(config: &Config, output: BenchWriter) {
         DS::HashMap => bench_map::<HashMap<usize, usize>>(config, PrefillStrategy::Decreasing),
         DS::NMTree => bench_map::<NMTreeMap<usize, usize>>(config, PrefillStrategy::Random),
         DS::SkipList => bench_map::<SkipList<usize, usize>>(config, PrefillStrategy::Decreasing),
-        DS::BonsaiTree => bench_map::<BonsaiTreeMap<usize, usize>>(config, PrefillStrategy::Random),
+        DS::BonsaiTree => {
+            // Note: Using the `Random` strategy with the Bonsai tree is unsafe
+            // because it involves multiple threads with unprotected guards.
+            // It is safe for many other data structures that don't retire elements
+            // during insertion, but this is not the case for the Bonsai tree.
+            bench_map::<BonsaiTreeMap<usize, usize>>(config, PrefillStrategy::Decreasing)
+        }
         _ => panic!("Unsupported(or unimplemented) data structure for CIRC"),
     };
     output.write_record(config, &perf);
@@ -43,7 +49,9 @@ fn bench(config: &Config, output: BenchWriter) {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrefillStrategy {
+    /// Inserts keys in a random order, with multiple threads.
     Random,
+    /// Inserts keys in an increasing order, with a single thread.
     Decreasing,
 }
 
@@ -57,6 +65,9 @@ impl PrefillStrategy {
                 scope(|s| {
                     for t in 0..threads {
                         s.spawn(move |_| {
+                            // Safety: We assume that the insert operation does not retire
+                            // any elements. Note that this assumption may not hold for all
+                            // data structures (e.g., Bonsai tree).
                             let cs = unsafe { &Cs::unprotected() };
                             let rng = &mut rand::thread_rng();
                             let count = config.prefill / threads

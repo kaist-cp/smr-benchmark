@@ -39,3 +39,4 @@ tags
 *.pdf
 *.csv
 .python-version
+__pycache__

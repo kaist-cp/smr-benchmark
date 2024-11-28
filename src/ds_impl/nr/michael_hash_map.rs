@@ -1,4 +1,4 @@
-use super::concurrent_map::ConcurrentMap;
+use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -33,21 +33,6 @@ where
         k.hash(&mut s);
         s.finish() as usize
     }
-
-    pub fn get(&self, k: &K) -> Option<&'static V> {
-        let i = Self::hash(k);
-        self.get_bucket(i).get(k)
-    }
-
-    pub fn insert(&self, k: K, v: V) -> bool {
-        let i = Self::hash(&k);
-        self.get_bucket(i).insert(k, v)
-    }
-
-    pub fn remove(&self, k: &K) -> Option<&'static V> {
-        let i = Self::hash(k);
-        self.get_bucket(i).remove(k)
-    }
 }
 
 impl<K, V> ConcurrentMap<K, V> for HashMap<K, V>
@@ -60,16 +45,19 @@ where
     }
 
     #[inline(always)]
-    fn get(&self, key: &K) -> Option<&'static V> {
-        self.get(key)
+    fn get(&self, key: &K) -> Option<impl OutputHolder<V>> {
+        let i = Self::hash(key);
+        self.get_bucket(i).get(key)
     }
     #[inline(always)]
     fn insert(&self, key: K, value: V) -> bool {
-        self.insert(key, value)
+        let i = Self::hash(&key);
+        self.get_bucket(i).insert(key, value)
     }
     #[inline(always)]
-    fn remove(&self, key: &K) -> Option<&'static V> {
-        self.remove(key)
+    fn remove(&self, key: &K) -> Option<impl OutputHolder<V>> {
+        let i = Self::hash(key);
+        self.get_bucket(i).remove(key)
     }
 }
 
@@ -80,6 +68,6 @@ mod tests {
 
     #[test]
     fn smoke_hashmap() {
-        concurrent_map::tests::smoke::<HashMap<i32, String>>();
+        concurrent_map::tests::smoke::<_, HashMap<i32, String>, _>(&i32::to_string);
     }
 }

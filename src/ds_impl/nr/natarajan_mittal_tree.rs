@@ -1,4 +1,4 @@
-use super::concurrent_map::ConcurrentMap;
+use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use super::pointers::{Atomic, Shared};
 use std::cmp;
 use std::sync::atomic::Ordering;
@@ -445,7 +445,7 @@ where
     }
 
     #[inline(always)]
-    fn get(&self, key: &K) -> Option<&'static V> {
+    fn get(&self, key: &K) -> Option<impl OutputHolder<V>> {
         self.get(key)
     }
     #[inline(always)]
@@ -453,7 +453,7 @@ where
         self.insert(key, value).is_ok()
     }
     #[inline(always)]
-    fn remove(&self, key: &K) -> Option<&'static V> {
+    fn remove(&self, key: &K) -> Option<impl OutputHolder<V>> {
         self.remove(key)
     }
 }
@@ -465,6 +465,6 @@ mod tests {
 
     #[test]
     fn smoke_nm_tree() {
-        concurrent_map::tests::smoke::<NMTreeMap<i32, String>>();
+        concurrent_map::tests::smoke::<_, NMTreeMap<i32, String>, _>(&i32::to_string);
     }
 }

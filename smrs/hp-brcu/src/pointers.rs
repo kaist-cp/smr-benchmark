@@ -125,9 +125,27 @@ impl<T> Atomic<T> {
     }
 }
 
+impl<'g, T> From<Shared<'g, T>> for Atomic<T> {
+    fn from(value: Shared<'g, T>) -> Self {
+        Self {
+            link: AtomicUsize::new(value.inner),
+            _marker: PhantomData,
+        }
+    }
+}
+
 impl<T> Default for Atomic<T> {
     fn default() -> Self {
         Self::null()
+    }
+}
+
+impl<T> Clone for Atomic<T> {
+    fn clone(&self) -> Self {
+        Self {
+            link: AtomicUsize::new(self.link.load(Ordering::Relaxed)),
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -231,7 +249,7 @@ impl<'r, T> Shared<'r, T> {
     ///
     /// The `self` must be a valid memory location.
     #[inline]
-    pub unsafe fn deref(&self) -> &T {
+    pub unsafe fn deref(&self) -> &'r T {
         &*decompose_data::<T>(self.inner).0
     }
 
@@ -241,7 +259,7 @@ impl<'r, T> Shared<'r, T> {
     ///
     /// The `self` must be a valid memory location.
     #[inline]
-    pub unsafe fn deref_mut(&mut self) -> &mut T {
+    pub unsafe fn deref_mut(&mut self) -> &'r mut T {
         &mut *decompose_data::<T>(self.inner).0
     }
 

@@ -1,4 +1,4 @@
-use super::concurrent_map::ConcurrentMap;
+use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use crossbeam_pebr::Guard;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -35,26 +35,6 @@ where
         k.hash(&mut s);
         s.finish() as usize
     }
-
-    pub fn get<'g>(
-        &'g self,
-        cursor: &'g mut Cursor<K, V>,
-        k: &'g K,
-        guard: &'g mut Guard,
-    ) -> Option<&'g V> {
-        let i = Self::hash(k);
-        self.get_bucket(i).get(cursor, k, guard)
-    }
-
-    pub fn insert(&self, cursor: &mut Cursor<K, V>, k: K, v: V, guard: &mut Guard) -> bool {
-        let i = Self::hash(&k);
-        self.get_bucket(i).insert(cursor, k, v, guard)
-    }
-
-    pub fn remove(&self, cursor: &mut Cursor<K, V>, k: &K, guard: &mut Guard) -> Option<V> {
-        let i = Self::hash(&k);
-        self.get_bucket(i).remove(cursor, k, guard)
-    }
 }
 
 impl<K, V> ConcurrentMap<K, V> for HashMap<K, V>
@@ -81,16 +61,24 @@ where
         handle: &'g mut Self::Handle,
         key: &'g K,
         guard: &'g mut Guard,
-    ) -> Option<&'g V> {
-        self.get(handle, key, guard)
+    ) -> Option<impl OutputHolder<V>> {
+        let i = Self::hash(key);
+        self.get_bucket(i).get(handle, key, guard)
     }
     #[inline(always)]
     fn insert(&self, handle: &mut Self::Handle, key: K, value: V, guard: &mut Guard) -> bool {
-        self.insert(handle, key, value, guard)
+        let i = Self::hash(&key);
+        self.get_bucket(i).insert(handle, key, value, guard)
     }
     #[inline(always)]
-    fn remove(&self, handle: &mut Self::Handle, key: &K, guard: &mut Guard) -> Option<V> {
-        self.remove(handle, key, guard)
+    fn remove(
+        &self,
+        handle: &mut Self::Handle,
+        key: &K,
+        guard: &mut Guard,
+    ) -> Option<impl OutputHolder<V>> {
+        let i = Self::hash(&key);
+        self.get_bucket(i).remove(handle, key, guard)
     }
 }
 
@@ -101,6 +89,6 @@ mod tests {
 
     #[test]
     fn smoke_hashmap() {
-        concurrent_map::tests::smoke::<HashMap<i32, String>>();
+        concurrent_map::tests::smoke::<_, HashMap<i32, String>, _>(&i32::to_string);
     }
 }

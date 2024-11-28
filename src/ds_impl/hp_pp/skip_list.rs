@@ -6,7 +6,7 @@ use hp_pp::{
     decompose_ptr, light_membarrier, tag, tagged, untagged, HazardPointer, Thread, DEFAULT_DOMAIN,
 };
 
-use crate::ds_impl::hp::concurrent_map::ConcurrentMap;
+use crate::ds_impl::hp::concurrent_map::{ConcurrentMap, OutputHolder};
 
 const MAX_HEIGHT: usize = 32;
 
@@ -100,16 +100,17 @@ pub struct Handle<'g> {
     preds_h: [HazardPointer<'g>; MAX_HEIGHT],
     succs_h: [HazardPointer<'g>; MAX_HEIGHT],
     removed_h: HazardPointer<'g>,
-    thread: Thread<'g>,
+    thread: Box<Thread<'g>>,
 }
 
 impl Default for Handle<'static> {
     fn default() -> Self {
+        let mut thread = Box::new(Thread::new(&DEFAULT_DOMAIN));
         Self {
-            preds_h: Default::default(),
-            succs_h: Default::default(),
-            removed_h: Default::default(),
-            thread: Thread::new(&DEFAULT_DOMAIN),
+            preds_h: [(); MAX_HEIGHT].map(|_| HazardPointer::new(&mut thread)),
+            succs_h: [(); MAX_HEIGHT].map(|_| HazardPointer::new(&mut thread)),
+            removed_h: HazardPointer::new(&mut thread),
+            thread,
         }
     }
 }
@@ -164,9 +165,23 @@ where
         &self,
         key: &K,
         handle: &'hp mut Handle<'domain>,
-    ) -> Option<Cursor<K, V>> {
+    ) -> Option<*mut Node<K, V>> {
         'search: loop {
-            let mut cursor = Cursor::new(&self.head);
+            // This optimistic traversal doesn't have to use all shields in the `handle`.
+            let (anchor_h, anchor_next_h) = unsafe {
+                let splited = handle.preds_h.split_at_mut_unchecked(1);
+                (
+                    splited.0.get_unchecked_mut(0),
+                    splited.1.get_unchecked_mut(0),
+                )
+            };
+            let (pred_h, curr_h) = unsafe {
+                let splited = handle.succs_h.split_at_mut_unchecked(1);
+                (
+                    splited.0.get_unchecked_mut(0),
+                    splited.1.get_unchecked_mut(0),
+                )
+            };
 
             let mut level = MAX_HEIGHT;
             while level >= 1 && self.head[level - 1].load(Ordering::Relaxed).is_null() {
@@ -174,53 +189,62 @@ where
             }
 
             let mut pred = &self.head as *const _ as *mut Node<K, V>;
+            let mut curr = ptr::null_mut();
+            let mut anchor = pred;
+            let mut anchor_next = ptr::null_mut();
+
             while level >= 1 {
                 level -= 1;
                 // untagged
-                let mut curr = untagged(unsafe { &*pred }.next[level].load(Ordering::Acquire));
+                curr = untagged(unsafe { &*anchor }.next[level].load(Ordering::Acquire));
 
                 loop {
                     if curr.is_null() {
                         break;
                     }
-
-                    let pred_ref = unsafe { &*pred };
-
-                    // Inlined version of hp++ protection, without duplicate load
-                    handle.succs_h[level].protect_raw(curr);
-                    light_membarrier();
-                    let (curr_new_base, curr_new_tag) =
-                        decompose_ptr(pred_ref.next[level].load(Ordering::Acquire));
-                    if curr_new_tag == 3 {
-                        // Invalidated. Restart from head.
+                    if curr_h
+                        .try_protect_pp(
+                            curr,
+                            unsafe { &*pred },
+                            unsafe { &(*pred).next[level] },
+                            &|node| node.next[level].load(Ordering::Acquire) as usize & 3 == 3,
+                        )
+                        .is_err()
+                    {
                         continue 'search;
-                    } else if curr_new_base != curr {
-                        // If link changed but not invalidated, retry protecting the new node.
-                        curr = curr_new_base;
-                        continue;
                     }
 
                     let curr_node = unsafe { &*curr };
-
-                    match curr_node.key.cmp(key) {
-                        std::cmp::Ordering::Less => {
+                    let (next_base, next_tag) =
+                        decompose_ptr(curr_node.next[level].load(Ordering::Acquire));
+                    if next_tag == 0 {
+                        if curr_node.key < *key {
                             pred = curr;
-                            curr = untagged(curr_node.next[level].load(Ordering::Acquire));
-                            HazardPointer::swap(
-                                &mut handle.preds_h[level],
-                                &mut handle.succs_h[level],
-                            );
+                            curr = next_base;
+                            anchor = pred;
+                            HazardPointer::swap(curr_h, pred_h);
+                        } else {
+                            break;
                         }
-                        std::cmp::Ordering::Equal => {
-                            if curr_new_tag == 0 {
-                                cursor.found = Some(curr);
-                                return Some(cursor);
-                            } else {
-                                return None;
-                            }
+                    } else {
+                        if anchor == pred {
+                            anchor_next = curr;
+                            HazardPointer::swap(anchor_h, pred_h);
+                        } else if anchor_next == pred {
+                            HazardPointer::swap(anchor_next_h, pred_h);
                         }
-                        std::cmp::Ordering::Greater => break,
+                        pred = curr;
+                        curr = next_base;
+                        HazardPointer::swap(pred_h, curr_h);
                     }
+                }
+            }
+
+            if let Some(curr_node) = unsafe { curr.as_ref() } {
+                if curr_node.key == *key
+                    && (curr_node.next[0].load(Ordering::Acquire) as usize & 1) == 0
+                {
+                    return Some(curr);
                 }
             }
             return None;
@@ -502,9 +526,12 @@ where
     }
 
     #[inline(always)]
-    fn get<'domain, 'hp>(&self, handle: &'hp mut Self::Handle<'domain>, key: &K) -> Option<&'hp V> {
-        let cursor = self.find_optimistic(key, handle)?;
-        let node = unsafe { &*cursor.found? };
+    fn get<'hp>(
+        &'hp self,
+        handle: &'hp mut Self::Handle<'_>,
+        key: &'hp K,
+    ) -> Option<impl OutputHolder<V>> {
+        let node = unsafe { &*self.find_optimistic(key, handle)? };
         if node.key.eq(&key) {
             Some(&node.value)
         } else {
@@ -513,21 +540,16 @@ where
     }
 
     #[inline(always)]
-    fn insert<'domain, 'hp>(
-        &self,
-        handle: &'hp mut Self::Handle<'domain>,
-        key: K,
-        value: V,
-    ) -> bool {
+    fn insert(&self, handle: &mut Self::Handle<'_>, key: K, value: V) -> bool {
         self.insert(key, value, handle)
     }
 
     #[inline(always)]
-    fn remove<'domain, 'hp>(
-        &self,
-        handle: &'hp mut Self::Handle<'domain>,
-        key: &K,
-    ) -> Option<&'hp V> {
+    fn remove<'hp>(
+        &'hp self,
+        handle: &'hp mut Self::Handle<'_>,
+        key: &'hp K,
+    ) -> Option<impl OutputHolder<V>> {
         self.remove(key, handle)
     }
 }
@@ -539,6 +561,6 @@ mod tests {
 
     #[test]
     fn smoke_skip_list() {
-        concurrent_map::tests::smoke::<SkipList<i32, String>>();
+        concurrent_map::tests::smoke::<_, SkipList<i32, String>, _>(&i32::to_string);
     }
 }

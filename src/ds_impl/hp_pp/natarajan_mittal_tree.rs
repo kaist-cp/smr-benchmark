@@ -1,7 +1,8 @@
-use hp_pp::{light_membarrier, tag, tagged, untagged, HazardPointer};
-use hp_pp::{try_unlink, ProtectError};
+use hp_pp::{
+    light_membarrier, tag, tagged, untagged, HazardPointer, ProtectError, Thread, DEFAULT_DOMAIN,
+};
 
-use crate::ds_impl::hp::concurrent_map::ConcurrentMap;
+use crate::ds_impl::hp::concurrent_map::{ConcurrentMap, OutputHolder};
 use std::mem;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
@@ -144,15 +145,18 @@ pub struct Handle<'domain> {
     successor_h: HazardPointer<'domain>,
     parent_h: HazardPointer<'domain>,
     leaf_h: HazardPointer<'domain>,
+    thread: Box<Thread<'domain>>,
 }
 
 impl Default for Handle<'static> {
     fn default() -> Self {
+        let mut thread = Box::new(Thread::new(&DEFAULT_DOMAIN));
         Self {
-            ancestor_h: HazardPointer::default(),
-            successor_h: HazardPointer::default(),
-            parent_h: HazardPointer::default(),
-            leaf_h: HazardPointer::default(),
+            ancestor_h: HazardPointer::new(&mut thread),
+            successor_h: HazardPointer::new(&mut thread),
+            parent_h: HazardPointer::new(&mut thread),
+            leaf_h: HazardPointer::new(&mut thread),
+            thread,
         }
     }
 }
@@ -276,31 +280,25 @@ impl<K, V> hp_pp::Invalidate for Node<K, V> {
     }
 }
 
-struct Unlink<'r, 'domain, 'hp, K, V> {
-    record: &'r SeekRecord<'domain, 'hp, K, V>,
+struct Unlink<K, V> {
+    successor_addr: *mut AtomicPtr<Node<K, V>>,
+    successor: *mut Node<K, V>,
     target_sibling: *mut Node<K, V>,
     flag: bool,
 }
 
-impl<'r, 'domain, 'hp, K, V> hp_pp::Unlink<Node<K, V>> for Unlink<'r, 'domain, 'hp, K, V> {
+impl<K, V> hp_pp::Unlink<Node<K, V>> for Unlink<K, V> {
     fn do_unlink(&self) -> Result<Vec<*mut Node<K, V>>, ()> {
         let link = tagged(
             self.target_sibling,
             Marks::new(false, self.flag, false).bits(),
         );
-        if self
-            .record
-            .successor_addr()
-            .compare_exchange(
-                self.record.successor,
-                link,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
+        if unsafe { &*self.successor_addr }
+            .compare_exchange(self.successor, link, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
             // destroy the subtree of successor except target_sibling
-            let mut stack = vec![self.record.successor];
+            let mut stack = vec![self.successor];
             let mut collected = Vec::with_capacity(32);
 
             while let Some(node) = stack.pop() {
@@ -518,7 +516,7 @@ where
     /// Physically removes node.
     ///
     /// Returns true if it successfully unlinks the flagged node in `record`.
-    fn cleanup(&self, record: &SeekRecord<K, V>) -> bool {
+    fn cleanup(&self, record: &mut SeekRecord<K, V>) -> bool {
         // Identify the node(subtree) that will replace `successor`.
         let leaf_marked = record.leaf_addr().load(Ordering::Acquire);
         let leaf_flag = Marks::from_bits_truncate(tag(leaf_marked)).flag();
@@ -540,13 +538,19 @@ where
         let flag = Marks::from_bits_truncate(tag(target_sibling)).flag();
         let link = tagged(target_sibling, Marks::new(false, flag, false).bits());
         let unlink = Unlink {
-            record,
+            successor_addr: record.successor_addr() as *const _ as *mut _,
+            successor: record.successor,
             target_sibling,
             flag,
         };
 
         let link = untagged(link);
-        unsafe { try_unlink(unlink, slice::from_ref(&link)) }
+        unsafe {
+            record
+                .handle
+                .thread
+                .try_unlink(unlink, slice::from_ref(&link))
+        }
     }
 
     fn get_inner<'domain, 'hp>(
@@ -629,7 +633,7 @@ where
                     // Insertion failed. Help the conflicting remove operation if needed.
                     // NOTE: The paper version checks if any of the mark is set, which is redundant.
                     if untagged(current) == leaf {
-                        self.cleanup(&record);
+                        self.cleanup(record);
                     }
                 }
             }
@@ -683,7 +687,7 @@ where
             ) {
                 Ok(_) => {
                     // Finalize the node to be removed
-                    if self.cleanup(&record) {
+                    if self.cleanup(&mut record) {
                         return Ok(Some(value));
                     }
                     // In-place cleanup failed. Enter the cleanup phase.
@@ -695,7 +699,7 @@ where
                     // case 2. Another thread flagged/tagged the edge to leaf: help and restart
                     // NOTE: The paper version checks if any of the mark is set, which is redundant.
                     if leaf == tagged(current, Marks::empty().bits()) {
-                        self.cleanup(&record);
+                        self.cleanup(&mut record);
                     }
                 }
             }
@@ -712,7 +716,7 @@ where
             }
 
             // leaf is still present in the tree.
-            if self.cleanup(&record) {
+            if self.cleanup(&mut record) {
                 return Ok(Some(value));
             }
         }
@@ -747,26 +751,25 @@ where
     }
 
     #[inline(always)]
-    fn get<'domain, 'hp>(&self, handle: &'hp mut Self::Handle<'domain>, key: &K) -> Option<&'hp V> {
+    fn get<'hp>(
+        &'hp self,
+        handle: &'hp mut Self::Handle<'_>,
+        key: &'hp K,
+    ) -> Option<impl OutputHolder<V>> {
         self.get(key, handle)
     }
 
     #[inline(always)]
-    fn insert<'domain, 'hp>(
-        &self,
-        handle: &'hp mut Self::Handle<'domain>,
-        key: K,
-        value: V,
-    ) -> bool {
+    fn insert(&self, handle: &mut Self::Handle<'_>, key: K, value: V) -> bool {
         self.insert(key, value, handle).is_ok()
     }
 
     #[inline(always)]
-    fn remove<'domain, 'hp>(
-        &self,
-        handle: &'hp mut Self::Handle<'domain>,
-        key: &K,
-    ) -> Option<&'hp V> {
+    fn remove<'hp>(
+        &'hp self,
+        handle: &'hp mut Self::Handle<'_>,
+        key: &'hp K,
+    ) -> Option<impl OutputHolder<V>> {
         self.remove(key, handle)
     }
 }
@@ -778,6 +781,6 @@ mod tests {
 
     #[test]
     fn smoke_nm_tree() {
-        concurrent_map::tests::smoke::<NMTreeMap<i32, String>>();
+        concurrent_map::tests::smoke::<_, NMTreeMap<i32, String>, _>(&i32::to_string);
     }
 }

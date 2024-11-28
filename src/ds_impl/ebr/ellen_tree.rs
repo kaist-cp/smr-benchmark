@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 
 use crossbeam_ebr::{unprotected, Atomic, CompareExchangeError, Guard, Owned, Shared};
 
-use super::concurrent_map::ConcurrentMap;
+use super::concurrent_map::{ConcurrentMap, OutputHolder};
 
 bitflags! {
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -535,7 +535,7 @@ where
     }
 
     #[inline(always)]
-    fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
+    fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<impl OutputHolder<V>> {
         match self.find(key, guard) {
             Some(node) => Some(node.value.as_ref().unwrap()),
             None => None,
@@ -548,7 +548,7 @@ where
     }
 
     #[inline(always)]
-    fn remove<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V> {
+    fn remove<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<impl OutputHolder<V>> {
         self.delete(key, guard)
     }
 }
@@ -560,6 +560,6 @@ mod tests {
 
     #[test]
     fn smoke_efrb_tree() {
-        concurrent_map::tests::smoke::<EFRBTree<i32, String>>();
+        concurrent_map::tests::smoke::<_, EFRBTree<i32, String>, _>(&i32::to_string);
     }
 }

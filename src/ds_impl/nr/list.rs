@@ -1,4 +1,4 @@
-use super::concurrent_map::ConcurrentMap;
+use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use super::pointers::{Atomic, Shared};
 
 use std::cmp::Ordering::{Equal, Greater, Less};
@@ -316,7 +316,7 @@ where
     }
 
     #[inline(always)]
-    fn get(&self, key: &K) -> Option<&'static V> {
+    fn get(&self, key: &K) -> Option<impl OutputHolder<V>> {
         self.inner.harris_get(key)
     }
     #[inline(always)]
@@ -324,7 +324,7 @@ where
         self.inner.harris_insert(key, value)
     }
     #[inline(always)]
-    fn remove(&self, key: &K) -> Option<&'static V> {
+    fn remove(&self, key: &K) -> Option<impl OutputHolder<V>> {
         self.inner.harris_remove(key)
     }
 }
@@ -343,7 +343,7 @@ where
     }
 
     #[inline(always)]
-    fn get(&self, key: &K) -> Option<&'static V> {
+    fn get(&self, key: &K) -> Option<impl OutputHolder<V>> {
         self.inner.harris_michael_get(key)
     }
     #[inline(always)]
@@ -351,7 +351,7 @@ where
         self.inner.harris_michael_insert(key, value)
     }
     #[inline(always)]
-    fn remove(&self, key: &K) -> Option<&'static V> {
+    fn remove(&self, key: &K) -> Option<impl OutputHolder<V>> {
         self.inner.harris_michael_remove(key)
     }
 }
@@ -382,7 +382,7 @@ where
     }
 
     #[inline(always)]
-    fn get(&self, key: &K) -> Option<&'static V> {
+    fn get(&self, key: &K) -> Option<impl OutputHolder<V>> {
         self.inner.harris_herlihy_shavit_get(key)
     }
     #[inline(always)]
@@ -390,7 +390,7 @@ where
         self.inner.harris_insert(key, value)
     }
     #[inline(always)]
-    fn remove(&self, key: &K) -> Option<&'static V> {
+    fn remove(&self, key: &K) -> Option<impl OutputHolder<V>> {
         self.inner.harris_remove(key)
     }
 }
@@ -402,17 +402,17 @@ mod tests {
 
     #[test]
     fn smoke_h_list() {
-        concurrent_map::tests::smoke::<HList<i32, String>>();
+        concurrent_map::tests::smoke::<_, HList<i32, String>, _>(&i32::to_string);
     }
 
     #[test]
     fn smoke_hm_list() {
-        concurrent_map::tests::smoke::<HMList<i32, String>>();
+        concurrent_map::tests::smoke::<_, HMList<i32, String>, _>(&i32::to_string);
     }
 
     #[test]
     fn smoke_hhs_list() {
-        concurrent_map::tests::smoke::<HHSList<i32, String>>();
+        concurrent_map::tests::smoke::<_, HHSList<i32, String>, _>(&i32::to_string);
     }
 
     #[test]

@@ -11,7 +11,8 @@ use std::time::Instant;
 
 use smr_benchmark::config::map::{setup, BagSize, BenchWriter, Config, Op, Perf, DS};
 use smr_benchmark::ds_impl::hp::{
-    BonsaiTreeMap, ConcurrentMap, EFRBTree, HMList, HashMap, SkipList,
+    BonsaiTreeMap, ConcurrentMap, EFRBTree, ElimABTree, HHSList, HList, HMList, HashMap, NMTreeMap,
+    SkipList,
 };
 
 fn main() {
@@ -28,12 +29,17 @@ fn main() {
 fn bench(config: &Config, output: BenchWriter) {
     println!("{}", config);
     let perf = match config.ds {
+        DS::HList => bench_map::<HList<usize, usize>>(config, PrefillStrategy::Decreasing),
+        DS::HHSList => bench_map::<HHSList<usize, usize>>(config, PrefillStrategy::Decreasing),
         DS::HMList => bench_map::<HMList<usize, usize>>(config, PrefillStrategy::Decreasing),
         DS::HashMap => bench_map::<HashMap<usize, usize>>(config, PrefillStrategy::Decreasing),
         DS::EFRBTree => bench_map::<EFRBTree<usize, usize>>(config, PrefillStrategy::Random),
         DS::SkipList => bench_map::<SkipList<usize, usize>>(config, PrefillStrategy::Decreasing),
-        DS::BonsaiTree => bench_map::<BonsaiTreeMap<usize, usize>>(config, PrefillStrategy::Random),
-        _ => panic!("Unsupported(or unimplemented) data structure for HP"),
+        DS::BonsaiTree => {
+            bench_map::<BonsaiTreeMap<usize, usize>>(config, PrefillStrategy::Decreasing)
+        }
+        DS::NMTree => bench_map::<NMTreeMap<usize, usize>>(config, PrefillStrategy::Random),
+        DS::ElimAbTree => bench_map::<ElimABTree<usize, usize>>(config, PrefillStrategy::Random),
     };
     output.write_record(config, &perf);
     println!("{}", perf);
@@ -41,7 +47,9 @@ fn bench(config: &Config, output: BenchWriter) {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrefillStrategy {
+    /// Inserts keys in a random order, with multiple threads.
     Random,
+    /// Inserts keys in an increasing order, with a single thread.
     Decreasing,
 }
 
@@ -93,7 +101,7 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
     strategy: PrefillStrategy,
 ) -> Perf {
     match config.bag_size {
-        BagSize::Small => set_counts_between_flush(64),
+        BagSize::Small => set_counts_between_flush(512),
         BagSize::Large => set_counts_between_flush(4096),
     }
     let map = &M::new();

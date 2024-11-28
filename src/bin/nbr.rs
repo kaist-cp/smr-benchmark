@@ -36,14 +36,16 @@ fn bench(config: &Config, output: BenchWriter) {
 
 fn extract_nbr_params(config: &Config) -> (usize, usize) {
     match config.bag_size {
-        BagSize::Small => (256, 32),
+        BagSize::Small => (512, 64),
         BagSize::Large => (8192, 1024),
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrefillStrategy {
+    /// Inserts keys in a random order, with multiple threads.
     Random,
+    /// Inserts keys in an increasing order, with a single thread.
     Decreasing,
 }
 

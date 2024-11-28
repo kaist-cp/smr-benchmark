@@ -170,6 +170,7 @@ where
   * `skip-list`: lock-free skiplist by Herlihy and Shavit, with wait-free get() for schemes other than HP \[3\]
   * `bonsai-tree`: A non-blocking variant of Bonsai tree \[5\]
   * `efrb-tree`: Ellen et al. ’s tree \[6\]
+  * `elim-ab-tree`: An (a,b) tree with elimination \[17\]
 * Reclamation scheme
   * `nr`: A baseline that does not reclaim memory
   * `ebr`: Epoch-based RCU \[1,7\]
@@ -276,3 +277,4 @@ Note that sanitizer may report memory leaks when used against CIRC EBR. This is 
 * \[14\] Jeonghyeon Kim, Jaehwang Jung, and Jeehoon Kang. 2024. Expediting Hazard Pointers with Bounded RCU Critical Sections. In Proceedings of the 36th ACM Symposium on Parallelism in Algorithms and Architectures (SPAA 2024), June 17–21, 2024, Nantes, France. ACM, New York, NY, USA, 34 pages. <https://doi.org/10.1145/3626183.3659941>
 * \[15\] Jaehwang Jung, Jeonghyeon Kim, Matthew J. Parkinson, and Jeehoon Kang. 2024. Concurrent Immediate Reference Counting. Proc. ACM Program. Lang. 8, PLDI, Article 153 (June 2024), 24 pages. <https://doi.org/10.1145/3656383>
 * \[16\] Gali Sheffi, Maurice Herlihy, and Erez Petrank. 2021. VBR: Version Based Reclamation. In Proceedings of the 33rd ACM Symposium on Parallelism in Algorithms and Architectures (Virtual Event, USA) (SPAA ’21). Association for Computing Machinery, New York, NY, USA, 443–445. <https://doi.org/10.1145/3409964.3461817>
+* \[17\] Anubhav Srivastava and Trevor Brown. 2022. Elimination (a,b)-trees with fast, durable updates. In Proceedings of the 27th ACM SIGPLAN Symposium on Principles and Practice of Parallel Programming (PPoPP '22). Association for Computing Machinery, New York, NY, USA, 416–430. <https://doi.org/10.1145/3503221.3508441>

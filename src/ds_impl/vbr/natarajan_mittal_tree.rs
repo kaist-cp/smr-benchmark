@@ -34,8 +34,8 @@ impl Marks {
 
 pub struct Node<K, V>
 where
-    K: 'static + Copy,
-    V: 'static + Copy,
+    K: 'static + Copy + Default,
+    V: 'static + Copy + Default,
 {
     key: ImmAtomic<K>,
     value: ImmAtomic<V>,
@@ -43,10 +43,25 @@ where
     right: MutAtomic<Node<K, V>>,
 }
 
+impl<K, V> Default for Node<K, V>
+where
+    K: 'static + Copy + Default + Bounded,
+    V: 'static + Copy + Default,
+{
+    fn default() -> Self {
+        Self {
+            key: ImmAtomic::new(Default::default()),
+            value: ImmAtomic::new(Default::default()),
+            left: MutAtomic::null(),
+            right: MutAtomic::null(),
+        }
+    }
+}
+
 impl<K, V> Node<K, V>
 where
-    K: 'static + Copy + Bounded,
-    V: 'static + Copy,
+    K: 'static + Copy + Default + Bounded,
+    V: 'static + Copy + Default,
 {
     fn new_leaf<'g>(
         key: K,
@@ -90,8 +105,8 @@ enum Direction {
 /// All of the edges of path from `successor` to `parent` are in the process of removal.
 struct SeekRecord<'g, K, V>
 where
-    K: 'static + Copy + Bounded,
-    V: 'static + Copy,
+    K: 'static + Copy + Default + Bounded,
+    V: 'static + Copy + Default,
 {
     /// Parent of `successor`
     ancestor: Shared<'g, Node<K, V>>,
@@ -109,8 +124,8 @@ where
 
 impl<'g, K, V> SeekRecord<'g, K, V>
 where
-    K: 'static + Copy + Bounded,
-    V: 'static + Copy,
+    K: 'static + Copy + Default + Bounded,
+    V: 'static + Copy + Default,
 {
     fn successor_addr(&self) -> &MutAtomic<Node<K, V>> {
         match self.successor_dir {
@@ -136,16 +151,16 @@ where
 
 pub struct NMTreeMap<K, V>
 where
-    K: 'static + Copy,
-    V: 'static + Copy,
+    K: 'static + Copy + Default,
+    V: 'static + Copy + Default,
 {
     r: Entry<Node<K, V>>,
 }
 
 impl<K, V> NMTreeMap<K, V>
 where
-    K: 'static + Copy + Ord + Bounded,
-    V: 'static + Copy,
+    K: 'static + Copy + Default + Ord + Bounded,
+    V: 'static + Copy + Default,
 {
     pub fn new(local: &Local<Node<K, V>>) -> Self {
         // An empty tree has 5 default nodes with infinite keys so that the SeekRecord is allways
@@ -498,8 +513,8 @@ where
 
 impl<K, V> ConcurrentMap<K, V> for NMTreeMap<K, V>
 where
-    K: 'static + Copy + Ord + Bounded,
-    V: 'static + Copy,
+    K: 'static + Copy + Default + Ord + Bounded,
+    V: 'static + Copy + Default,
 {
     type Global = Global<Node<K, V>>;
 

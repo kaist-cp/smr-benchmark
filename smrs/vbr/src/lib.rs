@@ -1,26 +1,44 @@
 use std::{
-    cell::RefCell,
-    collections::VecDeque,
-    fmt::Display,
-    marker::PhantomData,
-    mem::{align_of, zeroed},
-    ptr::null_mut,
-    sync::atomic::AtomicU64,
+    cell::RefCell, collections::VecDeque, fmt::Display, marker::PhantomData, mem::align_of,
+    ops::Deref, ptr::null_mut, sync::atomic::AtomicU64,
 };
 
-use arrayvec::ArrayVec;
 use atomic::{Atomic, Ordering};
 use crossbeam_utils::CachePadded;
-use portable_atomic::{compiler_fence, AtomicU128};
+use portable_atomic::{compiler_fence, AtomicU128, AtomicUsize};
 
-pub const ENTRIES_PER_BAG: usize = 128;
+static ENTRIES_PER_BAG: AtomicUsize = AtomicUsize::new(128);
 pub const INIT_BAGS_PER_LOCAL: usize = 32;
 pub const NOT_RETIRED: u64 = u64::MAX;
 
+/// Sets the capacity of thread-local garbage bag.
+///
+/// This value applies to all threads.
+#[inline]
+pub fn set_bag_capacity(cap: usize) {
+    assert!(cap > 1, "capacity must be greater than 1.");
+    ENTRIES_PER_BAG.store(cap, Ordering::Relaxed);
+}
+
+/// Returns the current capacity of thread-local garbage bag.
+#[inline]
+pub fn bag_capacity() -> usize {
+    ENTRIES_PER_BAG.load(Ordering::Relaxed)
+}
+
+#[derive(Default)]
 pub struct Inner<T> {
     birth: AtomicU64,
     retire: AtomicU64,
     data: T,
+}
+
+impl<T> Deref for Inner<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
 }
 
 pub struct Global<T> {
@@ -31,10 +49,10 @@ pub struct Global<T> {
 unsafe impl<T> Sync for Global<T> {}
 unsafe impl<T> Send for Global<T> {}
 
-impl<T> Global<T> {
+impl<T: Default> Global<T> {
     pub fn new(capacity: usize) -> Self {
         let avail = BagStack::new();
-        let count = capacity / ENTRIES_PER_BAG + if capacity % ENTRIES_PER_BAG > 0 { 1 } else { 0 };
+        let count = capacity / bag_capacity() + if capacity % bag_capacity() > 0 { 1 } else { 0 };
         for _ in 0..count {
             avail.push(Box::into_raw(Box::new(Bag::new_with_alloc())));
         }
@@ -153,30 +171,34 @@ impl<T> Drop for BagStack<T> {
 pub struct Bag<T> {
     /// NOTE: A timestamp is necessary to prevent ABA problems.
     next: AtomicU128,
-    entries: ArrayVec<*mut T, ENTRIES_PER_BAG>,
+    entries: Vec<*mut T>,
 }
 
-impl<T> Bag<T> {
+impl<T: Default> Bag<T> {
     fn new() -> Self {
         Self {
             next: AtomicU128::new(0),
-            entries: ArrayVec::new(),
+            entries: Vec::with_capacity(bag_capacity()),
         }
     }
 
     fn new_with_alloc() -> Self {
-        let mut alloc = [null_mut(); ENTRIES_PER_BAG];
-        for ptr in &mut alloc {
-            *ptr = unsafe { Box::into_raw(Box::new(zeroed())) };
+        let mut entries = vec![null_mut(); bag_capacity()];
+        for ptr in &mut entries {
+            *ptr = Box::into_raw(Box::new(T::default()));
         }
         Self {
             next: AtomicU128::new(0),
-            entries: ArrayVec::from(alloc),
+            entries,
         }
     }
 
     fn push(&mut self, obj: *mut T) -> bool {
-        self.entries.try_push(obj).is_ok()
+        if self.entries.len() < bag_capacity() {
+            self.entries.push(obj);
+            return true;
+        }
+        false
     }
 
     fn pop(&mut self) -> Option<*mut T> {
@@ -190,7 +212,7 @@ pub struct Local<T> {
     retired: RefCell<VecDeque<*mut Bag<Inner<T>>>>,
 }
 
-impl<T> Local<T> {
+impl<T: Default> Local<T> {
     fn global(&self) -> &Global<T> {
         unsafe { &*self.global }
     }
@@ -272,7 +294,7 @@ pub struct Guard<T> {
     epoch: u64,
 }
 
-impl<T> Guard<T> {
+impl<T: Default> Guard<T> {
     fn global(&self) -> &Global<T> {
         unsafe { &*self.local().global }
     }
@@ -285,13 +307,15 @@ impl<T> Guard<T> {
         self.epoch = self.global().epoch();
     }
 
-    pub fn allocate<'g, F>(&'g self, init: F) -> Result<Shared<'g, T>, ()>
+    pub fn allocate<'g, F>(&'g self, mut init: F) -> Result<Shared<'g, T>, ()>
     where
-        F: Fn(Shared<'g, T>),
+        F: FnMut(Shared<'g, T>),
     {
         let ptr = self.local().pop_avail();
         debug_assert!(!ptr.is_null());
         let slot_ref = unsafe { &*ptr };
+        // If the retire epoch is (greater than or) equal to the current epoch,
+        // try advance the global epoch.
         if self.epoch <= slot_ref.retire.load(Ordering::SeqCst) {
             self.local().return_avail(ptr);
             let _ = self.global().advance(self.epoch);
@@ -311,12 +335,27 @@ impl<T> Guard<T> {
         Ok(result)
     }
 
+    /// # Safety
+    ///
+    /// The current must conceptually have exclusive permission to retire this pointer
+    /// (e.g., after successful physical deletion in a lock-free data structure).
     pub unsafe fn retire(&self, ptr: Shared<T>) {
         let inner = ptr.as_inner().expect("Attempted to retire a null pointer.");
+        if inner.birth.load(Ordering::SeqCst) > ptr.birth {
+            // It is already retired and reclaimed.
+            return;
+        }
+        self.retire_raw(inner as *const _ as *mut _);
+    }
 
-        if inner.birth.load(Ordering::SeqCst) > ptr.birth
-            || inner.retire.load(Ordering::SeqCst) != NOT_RETIRED
-        {
+    /// # Safety
+    ///
+    /// The pointee must not be relcaimed yet, and the current must conceptually have exclusive
+    /// permission to retire this pointer (e.g., after successful physical deletion in a lock-free
+    /// data structure).
+    pub unsafe fn retire_raw(&self, ptr: *mut Inner<T>) {
+        let inner = unsafe { &*ptr };
+        if inner.retire.load(Ordering::SeqCst) != NOT_RETIRED {
             return;
         }
 
@@ -419,10 +458,19 @@ pub struct MutAtomic<T> {
     _marker: PhantomData<T>,
 }
 
+impl<T> Default for MutAtomic<T> {
+    fn default() -> Self {
+        Self {
+            link: AtomicU128::new(0),
+            _marker: PhantomData,
+        }
+    }
+}
+
 unsafe impl<T> Sync for MutAtomic<T> {}
 unsafe impl<T> Send for MutAtomic<T> {}
 
-impl<T> MutAtomic<T> {
+impl<T: Default> MutAtomic<T> {
     pub fn null() -> Self {
         Self {
             link: AtomicU128::new(0),
@@ -506,7 +554,7 @@ pub struct Entry<T> {
 unsafe impl<T> Sync for Entry<T> {}
 unsafe impl<T> Send for Entry<T> {}
 
-impl<T> Entry<T> {
+impl<T: Default> Entry<T> {
     pub fn new(init: Shared<T>) -> Self {
         Self {
             link: init.as_raw(),
@@ -532,6 +580,10 @@ impl<T> Entry<T> {
             })
         }
     }
+
+    pub fn load_raw(&self) -> *mut Inner<T> {
+        self.link
+    }
 }
 
 pub struct ImmAtomic<T: Copy> {
@@ -541,14 +593,14 @@ pub struct ImmAtomic<T: Copy> {
 unsafe impl<T: Copy> Sync for ImmAtomic<T> {}
 unsafe impl<T: Copy> Send for ImmAtomic<T> {}
 
-impl<T: Copy> ImmAtomic<T> {
+impl<T: Copy + Default> ImmAtomic<T> {
     pub fn new(v: T) -> Self {
         Self {
             data: Atomic::new(v),
         }
     }
 
-    pub fn get<G>(&self, guard: &Guard<G>) -> Result<T, ()> {
+    pub fn get<G: Default>(&self, guard: &Guard<G>) -> Result<T, ()> {
         let value = unsafe { self.get_unchecked() };
         compiler_fence(Ordering::SeqCst);
         guard.validate_epoch()?;

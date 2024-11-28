@@ -28,7 +28,7 @@ use hp_pp::{
     DEFAULT_DOMAIN,
 };
 
-use crate::ds_impl::hp::concurrent_map::ConcurrentMap;
+use crate::ds_impl::hp::concurrent_map::{ConcurrentMap, OutputHolder};
 
 bitflags! {
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -240,22 +240,23 @@ pub struct Handle<'domain> {
     new_internal_h: HazardPointer<'domain>,
     // Protect an owner of update which is currently being helped.
     help_src_h: HazardPointer<'domain>,
-    thread: Thread<'domain>,
+    thread: Box<Thread<'domain>>,
 }
 
 impl Default for Handle<'static> {
     fn default() -> Self {
+        let mut thread = Box::new(Thread::new(&DEFAULT_DOMAIN));
         Self {
-            gp_h: HazardPointer::default(),
-            p_h: HazardPointer::default(),
-            l_h: HazardPointer::default(),
-            l_other_h: HazardPointer::default(),
-            pupdate_h: HazardPointer::default(),
-            gpupdate_h: HazardPointer::default(),
-            aux_update_h: HazardPointer::default(),
-            new_internal_h: HazardPointer::default(),
-            help_src_h: HazardPointer::default(),
-            thread: Thread::new(&DEFAULT_DOMAIN),
+            gp_h: HazardPointer::new(&mut thread),
+            p_h: HazardPointer::new(&mut thread),
+            l_h: HazardPointer::new(&mut thread),
+            l_other_h: HazardPointer::new(&mut thread),
+            pupdate_h: HazardPointer::new(&mut thread),
+            gpupdate_h: HazardPointer::new(&mut thread),
+            aux_update_h: HazardPointer::new(&mut thread),
+            new_internal_h: HazardPointer::new(&mut thread),
+            help_src_h: HazardPointer::new(&mut thread),
+            thread,
         }
     }
 }
@@ -949,29 +950,25 @@ where
     }
 
     #[inline(always)]
-    fn get<'domain, 'hp>(&self, handle: &'hp mut Self::Handle<'domain>, key: &K) -> Option<&'hp V> {
-        match self.find(key, handle) {
-            Some(value) => Some(value),
-            None => None,
-        }
+    fn get<'hp>(
+        &'hp self,
+        handle: &'hp mut Self::Handle<'_>,
+        key: &'hp K,
+    ) -> Option<impl OutputHolder<V>> {
+        self.find(key, handle)
     }
 
     #[inline(always)]
-    fn insert<'domain, 'hp>(
-        &self,
-        handle: &'hp mut Self::Handle<'domain>,
-        key: K,
-        value: V,
-    ) -> bool {
+    fn insert(&self, handle: &mut Self::Handle<'_>, key: K, value: V) -> bool {
         self.insert(&key, value, handle)
     }
 
     #[inline(always)]
-    fn remove<'domain, 'hp>(
-        &self,
-        handle: &'hp mut Self::Handle<'domain>,
-        key: &K,
-    ) -> Option<&'hp V> {
+    fn remove<'hp>(
+        &'hp self,
+        handle: &'hp mut Self::Handle<'_>,
+        key: &'hp K,
+    ) -> Option<impl OutputHolder<V>> {
         self.delete(key, handle)
     }
 }
@@ -983,6 +980,6 @@ mod tests {
 
     #[test]
     fn smoke_efrb_tree() {
-        concurrent_map::tests::smoke::<EFRBTree<i32, String>>();
+        concurrent_map::tests::smoke::<_, EFRBTree<i32, String>, _>(&i32::to_string);
     }
 }

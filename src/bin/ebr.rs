@@ -12,7 +12,8 @@ use typenum::{Unsigned, U1, U4};
 
 use smr_benchmark::config::map::{setup, BagSize, BenchWriter, Config, Op, OpsPerCs, Perf, DS};
 use smr_benchmark::ds_impl::ebr::{
-    BonsaiTreeMap, ConcurrentMap, EFRBTree, HHSList, HList, HMList, HashMap, NMTreeMap, SkipList,
+    BonsaiTreeMap, ConcurrentMap, EFRBTree, ElimABTree, HHSList, HList, HMList, HashMap, NMTreeMap,
+    SkipList,
 };
 
 fn main() {
@@ -38,10 +39,12 @@ fn bench<N: Unsigned>(config: &Config, output: BenchWriter) {
         DS::HashMap => bench_map::<HashMap<usize, usize>, N>(config, PrefillStrategy::Decreasing),
         DS::NMTree => bench_map::<NMTreeMap<usize, usize>, N>(config, PrefillStrategy::Random),
         DS::BonsaiTree => {
-            bench_map::<BonsaiTreeMap<usize, usize>, N>(config, PrefillStrategy::Random)
+            // For Bonsai Tree, it would be faster to use a single thread to prefill.
+            bench_map::<BonsaiTreeMap<usize, usize>, N>(config, PrefillStrategy::Decreasing)
         }
         DS::EFRBTree => bench_map::<EFRBTree<usize, usize>, N>(config, PrefillStrategy::Random),
         DS::SkipList => bench_map::<SkipList<usize, usize>, N>(config, PrefillStrategy::Decreasing),
+        DS::ElimAbTree => bench_map::<ElimABTree<usize, usize>, N>(config, PrefillStrategy::Random),
     };
     output.write_record(config, &perf);
     println!("{}", perf);
@@ -49,12 +52,17 @@ fn bench<N: Unsigned>(config: &Config, output: BenchWriter) {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrefillStrategy {
+    /// Inserts keys in a random order, with multiple threads.
     Random,
+    /// Inserts keys in an increasing order, with a single thread.
     Decreasing,
 }
 
 impl PrefillStrategy {
     fn prefill<M: ConcurrentMap<usize, usize> + Send + Sync>(self, config: &Config, map: &M) {
+        // Some data structures (e.g., Bonsai tree, Elim AB-Tree) need SMR's retirement
+        // functionality even during insertions.
+        let collector = &crossbeam_ebr::Collector::new();
         match self {
             PrefillStrategy::Random => {
                 let threads = available_parallelism().map(|v| v.get()).unwrap_or(1);
@@ -63,14 +71,14 @@ impl PrefillStrategy {
                 scope(|s| {
                     for t in 0..threads {
                         s.spawn(move |_| {
-                            let guard = unsafe { crossbeam_ebr::unprotected() };
+                            let handle = collector.register();
                             let rng = &mut rand::thread_rng();
                             let count = config.prefill / threads
                                 + if t < config.prefill % threads { 1 } else { 0 };
                             for _ in 0..count {
                                 let key = config.key_dist.sample(rng);
                                 let value = key;
-                                map.insert(key, value, guard);
+                                map.insert(key, value, &handle.pin());
                             }
                         });
                     }
@@ -79,7 +87,7 @@ impl PrefillStrategy {
                 for _ in 0..config.prefill {}
             }
             PrefillStrategy::Decreasing => {
-                let guard = unsafe { crossbeam_ebr::unprotected() };
+                let handle = collector.register();
                 let rng = &mut rand::thread_rng();
                 let mut keys = Vec::with_capacity(config.prefill);
                 for _ in 0..config.prefill {
@@ -88,7 +96,7 @@ impl PrefillStrategy {
                 keys.sort_by(|a, b| b.cmp(a));
                 for key in keys.drain(..) {
                     let value = key;
-                    map.insert(key, value, guard);
+                    map.insert(key, value, &handle.pin());
                 }
             }
         }
@@ -102,7 +110,7 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync, N: Unsigned>(
     strategy: PrefillStrategy,
 ) -> Perf {
     match config.bag_size {
-        BagSize::Small => crossbeam_ebr::set_bag_capacity(64),
+        BagSize::Small => crossbeam_ebr::set_bag_capacity(512),
         BagSize::Large => crossbeam_ebr::set_bag_capacity(4096),
     }
     let map = &M::new();

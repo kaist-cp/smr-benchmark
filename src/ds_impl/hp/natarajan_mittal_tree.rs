@@ -1,9 +1,8 @@
-use hp_pp::Thread;
+use hp_pp::{light_membarrier, Thread};
 use hp_pp::{tag, tagged, untagged, HazardPointer, DEFAULT_DOMAIN};
 
-use super::concurrent_map::ConcurrentMap;
+use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use std::cmp;
-use std::mem;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
@@ -29,6 +28,10 @@ impl Marks {
 
     fn tag(self) -> bool {
         !(self & Marks::TAG).is_empty()
+    }
+
+    fn marked(self) -> bool {
+        !(self & (Marks::TAG | Marks::FLAG)).is_empty()
     }
 }
 
@@ -136,17 +139,18 @@ pub struct Handle<'domain> {
     successor_h: HazardPointer<'domain>,
     parent_h: HazardPointer<'domain>,
     leaf_h: HazardPointer<'domain>,
-    thread: Thread<'domain>,
+    thread: Box<Thread<'domain>>,
 }
 
 impl Default for Handle<'static> {
     fn default() -> Self {
+        let mut thread = Box::new(Thread::new(&DEFAULT_DOMAIN));
         Self {
-            ancestor_h: HazardPointer::default(),
-            successor_h: HazardPointer::default(),
-            parent_h: HazardPointer::default(),
-            leaf_h: HazardPointer::default(),
-            thread: Thread::new(&DEFAULT_DOMAIN),
+            ancestor_h: HazardPointer::new(&mut thread),
+            successor_h: HazardPointer::new(&mut thread),
+            parent_h: HazardPointer::new(&mut thread),
+            leaf_h: HazardPointer::new(&mut thread),
+            thread,
         }
     }
 }
@@ -274,12 +278,11 @@ where
         NMTreeMap { r }
     }
 
-    // All `Shared<_>` fields are unmarked.
     fn seek(&self, key: &K, record: &mut SeekRecord<'_, '_, K, V>) -> Result<(), ()> {
         let s = untagged(self.r.left.load(Ordering::Relaxed));
         let s_node = unsafe { &*s };
 
-        // We doesn't have to defend with hazard pointers here
+        // The root node is always alive; we do not have to protect it.
         record.ancestor = &self.r as *const _ as *mut _;
         record.successor = s; // TODO: should preserve tag?
 
@@ -287,11 +290,12 @@ where
 
         let leaf = tagged(s_node.left.load(Ordering::Relaxed), Marks::empty().bits());
 
-        // We doesn't have to defend with hazard pointers here
+        // The `s` node is always alive; we do not have to protect it.
         record.parent = s;
 
         record.handle.leaf_h.protect_raw(leaf);
-        if leaf != tagged(s_node.left.load(Ordering::Relaxed), Marks::empty().bits()) {
+        light_membarrier();
+        if leaf != tagged(s_node.left.load(Ordering::Acquire), Marks::empty().bits()) {
             return Err(());
         }
         record.leaf = leaf;
@@ -301,36 +305,90 @@ where
         let mut curr_dir = Direction::L;
         let mut curr = unsafe { &*record.leaf }.left.load(Ordering::Relaxed);
 
+        // `ancestor` always points untagged node.
         while !untagged(curr).is_null() {
             if !prev_tag {
                 // untagged edge: advance ancestor and successor pointers
-                record
-                    .handle
-                    .ancestor_h
-                    .protect_raw(untagged(record.parent));
                 record.ancestor = record.parent;
-                record.handle.successor_h.protect_raw(untagged(record.leaf));
                 record.successor = record.leaf;
                 record.successor_dir = record.leaf_dir;
-            }
+                // `ancestor` and `successor` are already protected by
+                // hazard pointers of `parent` and `leaf`.
 
-            // advance parent and leaf pointers
-            mem::swap(&mut record.parent, &mut record.leaf);
-            HazardPointer::swap(&mut record.handle.parent_h, &mut record.handle.leaf_h);
-            let mut curr_base = untagged(curr);
-            loop {
-                record.handle.leaf_h.protect_raw(curr_base);
-                let curr_base_new = untagged(match curr_dir {
-                    Direction::L => unsafe { &*record.parent }.left.load(Ordering::Acquire),
-                    Direction::R => unsafe { &*record.parent }.right.load(Ordering::Acquire),
-                });
-                if curr_base_new == curr_base {
-                    break;
+                // Advance the parent and leaf pointers when the cursor looks like the following:
+                // (): protected by its dedicated shield.
+                //
+                //  (parent), ancestor -> O                   (ancestor) -> O
+                //                       / \                               / \
+                // (leaf), successor -> O   O   => (parent), successor -> O   O
+                //                     / \                               / \
+                //                    O   O                   (leaf) -> O   O
+                record.parent = record.leaf;
+                HazardPointer::swap(&mut record.handle.ancestor_h, &mut record.handle.parent_h);
+                HazardPointer::swap(&mut record.handle.parent_h, &mut record.handle.leaf_h);
+            } else if record.successor == record.parent {
+                // Advance the parent and leaf pointer when the cursor looks like the following:
+                // (): protected by its dedicated shield.
+                //
+                //            (ancestor) -> O             (ancestor) -> O
+                //                         / \                         / \
+                // (parent), successor -> O   O        (successor) -> O   O
+                //                       / \      =>                 / \
+                //            (leaf) -> O   O           (parent) -> O   O
+                //                     / \                         / \
+                //                    O   O             (leaf) -> O   O
+                record.parent = record.leaf;
+                HazardPointer::swap(&mut record.handle.successor_h, &mut record.handle.parent_h);
+                HazardPointer::swap(&mut record.handle.parent_h, &mut record.handle.leaf_h);
+            } else {
+                // Advance the parent and leaf pointer when the cursor looks like the following:
+                // (): protected by its dedicated shield.
+                //
+                //    (ancestor) -> O
+                //                 / \
+                // (successor) -> O   O
+                //             ... ...
+                //  (parent) -> O
+                //             / \
+                //  (leaf) -> O   O
+                record.parent = record.leaf;
+                HazardPointer::swap(&mut record.handle.parent_h, &mut record.handle.leaf_h);
+            }
+            debug_assert_eq!(tag(record.successor), 0);
+
+            let curr_base = untagged(curr);
+            record.handle.leaf_h.protect_raw(curr_base);
+            light_membarrier();
+
+            if Marks::from_bits_truncate(tag(curr)).marked() {
+                // `curr` is marked. Validate by `ancestor`.
+                let succ_new = record.successor_addr().load(Ordering::Acquire);
+                if Marks::from_bits_truncate(tag(succ_new)).marked() || record.successor != succ_new
+                {
+                    // Validation is failed. Let's restart from the root.
+                    // TODO: Maybe it can be optimized (by restarting from the anchor), but
+                    //       it would require a serious reasoning (including shield swapping, etc).
+                    return Err(());
                 }
-                curr_base = curr_base_new;
+            } else {
+                // `curr` is unmarked. Validate by `parent`.
+                let curr_new = match curr_dir {
+                    Direction::L => unsafe { &*untagged(record.parent) }
+                        .left
+                        .load(Ordering::Acquire),
+                    Direction::R => unsafe { &*untagged(record.parent) }
+                        .right
+                        .load(Ordering::Acquire),
+                };
+                if curr_new != curr {
+                    // Validation is failed. Let's restart from the root.
+                    // TODO: Maybe it can be optimized (by restarting from the parent), but
+                    //       it would require a serious reasoning (including shield swapping, etc).
+                    return Err(());
+                }
             }
 
-            record.leaf = curr_base;
+            record.leaf = curr;
             record.leaf_dir = curr_dir;
 
             // update other variables
@@ -373,7 +431,7 @@ where
         let is_unlinked = record
             .successor_addr()
             .compare_exchange(
-                record.successor,
+                untagged(record.successor),
                 tagged(target_sibling, Marks::new(flag, false).bits()),
                 Ordering::AcqRel,
                 Ordering::Acquire,
@@ -446,9 +504,9 @@ where
                 drop(Box::from_raw(new_internal));
                 Err(value)
             })?;
-            let leaf = record.leaf;
+            let leaf = untagged(record.leaf);
 
-            let (new_left, new_right) = match unsafe { &*untagged(leaf) }.key.cmp(key) {
+            let (new_left, new_right) = match unsafe { &*leaf }.key.cmp(key) {
                 cmp::Ordering::Equal => {
                     // Newly created nodes that failed to be inserted are free'd here.
                     let value = unsafe { &mut *new_leaf }.value.take().unwrap();
@@ -510,8 +568,8 @@ where
             self.seek(key, &mut record)?;
 
             // candidates
-            let leaf = record.leaf;
-            let leaf_node = unsafe { &*untagged(record.leaf) };
+            let leaf = untagged(record.leaf);
+            let leaf_node = unsafe { &*record.leaf };
 
             if leaf_node.key.cmp(key) != cmp::Ordering::Equal {
                 return Ok(None);
@@ -551,7 +609,7 @@ where
         // cleanup phase
         loop {
             self.seek(key, &mut record)?;
-            if record.leaf != leaf {
+            if untagged(record.leaf) != leaf {
                 // The edge to leaf flagged for deletion was removed by a helping thread
                 return Ok(Some(value));
             }
@@ -588,7 +646,11 @@ where
     }
 
     #[inline(always)]
-    fn get<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
+    fn get<'hp>(
+        &'hp self,
+        handle: &'hp mut Self::Handle<'_>,
+        key: &'hp K,
+    ) -> Option<impl OutputHolder<V>> {
         self.get(key, handle)
     }
 
@@ -598,7 +660,11 @@ where
     }
 
     #[inline(always)]
-    fn remove<'hp>(&self, handle: &'hp mut Self::Handle<'_>, key: &K) -> Option<&'hp V> {
+    fn remove<'hp>(
+        &'hp self,
+        handle: &'hp mut Self::Handle<'_>,
+        key: &'hp K,
+    ) -> Option<impl OutputHolder<V>> {
         self.remove(key, handle)
     }
 }
@@ -610,6 +676,6 @@ mod tests {
 
     #[test]
     fn smoke_nm_tree() {
-        concurrent_map::tests::smoke::<NMTreeMap<i32, String>>();
+        concurrent_map::tests::smoke::<_, NMTreeMap<i32, String>, _>(&i32::to_string);
     }
 }
