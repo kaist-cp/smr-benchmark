@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use smr_benchmark::config::map::{setup, BagSize, BenchWriter, Config, Op, Perf, DS};
 use smr_benchmark::ds_impl::cdrc::{
-    BonsaiTreeMap, ConcurrentMap, HHSList, HList, HMList, HashMap, NMTreeMap, SkipList,
+    BonsaiTreeMap, ConcurrentMap, ElimABTree, HHSList, HList, HMList, HashMap, NMTreeMap, SkipList,
 };
 
 fn main() {
@@ -46,6 +46,9 @@ fn bench(config: &Config, output: BenchWriter) {
             // during insertion, but this is not the case for the Bonsai tree.
             bench_map::<BonsaiTreeMap<usize, usize, CsHP>>(config, PrefillStrategy::Decreasing)
         }
+        DS::ElimAbTree => {
+            bench_map::<ElimABTree<usize, usize, CsHP>>(config, PrefillStrategy::Random)
+        }
         _ => panic!("Unsupported(or unimplemented) data structure for CDRC"),
     };
     output.write_record(config, &perf);
@@ -62,6 +65,8 @@ pub enum PrefillStrategy {
 
 impl PrefillStrategy {
     fn prefill<M: ConcurrentMap<usize, usize, CsHP> + Send + Sync>(self, config: &Config, map: &M) {
+        // Some data structures (e.g., Bonsai tree, Elim AB-Tree) need SMR's retirement
+        // functionality even during insertions.
         match self {
             PrefillStrategy::Random => {
                 let threads = available_parallelism().map(|v| v.get()).unwrap_or(1);
@@ -70,10 +75,6 @@ impl PrefillStrategy {
                 scope(|s| {
                     for t in 0..threads {
                         s.spawn(move |_| {
-                            // Safety: We assume that the insert operation does not retire
-                            // any elements. Note that this assumption may not hold for all
-                            // data structures (e.g., Bonsai tree).
-                            let cs = unsafe { &Cs::unprotected() };
                             let output = &mut M::empty_output();
                             let rng = &mut rand::thread_rng();
                             let count = config.prefill / threads
@@ -81,7 +82,7 @@ impl PrefillStrategy {
                             for _ in 0..count {
                                 let key = config.key_dist.sample(rng);
                                 let value = key;
-                                map.insert(key, value, output, cs);
+                                map.insert(key, value, output, &CsHP::new());
                             }
                         });
                     }
@@ -89,7 +90,6 @@ impl PrefillStrategy {
                 .unwrap();
             }
             PrefillStrategy::Decreasing => {
-                let cs = unsafe { &Cs::unprotected() };
                 let output = &mut M::empty_output();
                 let rng = &mut rand::thread_rng();
                 let mut keys = Vec::with_capacity(config.prefill);
@@ -99,7 +99,7 @@ impl PrefillStrategy {
                 keys.sort_by(|a, b| b.cmp(a));
                 for key in keys.drain(..) {
                     let value = key;
-                    map.insert(key, value, output, cs);
+                    map.insert(key, value, output, &CsHP::new());
                 }
             }
         }
