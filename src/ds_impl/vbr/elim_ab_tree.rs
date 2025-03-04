@@ -248,7 +248,7 @@ where
         self._next[index].store(ptr, Ordering::Release);
     }
 
-    fn next_slice<'l>(&'l self, _: &MCSLockGuard<'l, K, V>) -> &[AtomicPtr<Inner<Node<K, V>>>] {
+    fn next_slice<'l>(&'l self, _: &MCSLockGuard<'l, K, V>) -> &'l [AtomicPtr<Inner<Node<K, V>>>] {
         &self._next
     }
 
@@ -351,7 +351,7 @@ where
         self._keys[index].get()
     }
 
-    fn key_slice<'l>(&'l self, _: &MCSLockGuard<'l, K, V>) -> &[Cell<Option<K>>] {
+    fn key_slice<'l>(&'l self, _: &MCSLockGuard<'l, K, V>) -> &'l [Cell<Option<K>>] {
         &self._keys
     }
 

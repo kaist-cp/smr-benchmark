@@ -57,11 +57,7 @@ use super::sync::queue::Queue;
 pub static GLOBAL_GARBAGE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// Maximum number of objects a bag can contain.
-#[cfg(not(any(crossbeam_sanitize, miri)))]
 static MAX_OBJECTS: AtomicUsize = AtomicUsize::new(64);
-// Makes it more likely to trigger any potential data races.
-#[cfg(any(crossbeam_sanitize, miri))]
-static MAX_OBJECTS: AtomicUsize = AtomicUsize::new(4);
 
 static MANUAL_EVENTS_BETWEEN_COLLECT: AtomicUsize = AtomicUsize::new(64);
 
@@ -314,18 +310,6 @@ pub(crate) struct Local {
 
     /// The local epoch.
     epoch: CachePadded<AtomicEpoch>,
-}
-
-// Make sure `Local` is less than or equal to 2048 bytes.
-// https://github.com/crossbeam-rs/crossbeam/issues/551
-#[cfg(not(any(crossbeam_sanitize, miri)))] // `crossbeam_sanitize` and `miri` reduce the size of `Local`
-#[test]
-fn local_size() {
-    // TODO: https://github.com/crossbeam-rs/crossbeam/issues/869
-    // assert!(
-    //     core::mem::size_of::<Local>() <= 2048,
-    //     "An allocation of `Local` should be <= 2048 bytes."
-    // );
 }
 
 impl Local {
@@ -630,7 +614,7 @@ impl IsElement<Local> for Local {
     }
 }
 
-#[cfg(all(test, not(crossbeam_loom)))]
+#[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 

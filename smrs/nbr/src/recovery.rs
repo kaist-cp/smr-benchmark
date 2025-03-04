@@ -28,7 +28,9 @@ pub(crate) unsafe fn install() {
         // Block signals during handler
         SigSet::all(),
     );
+    #[allow(static_mut_refs)]
     SIG_ACTION.write(sig_action);
+    #[allow(static_mut_refs)]
     if sigaction(NEUTRALIZE_SIGNAL, SIG_ACTION.assume_init_ref()).is_err() {
         panic!("failed to install signal handler");
     }

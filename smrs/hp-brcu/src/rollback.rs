@@ -105,7 +105,10 @@ impl Rollbacker {
     #[inline]
     pub fn restart(&self) -> ! {
         compiler_fence(Ordering::SeqCst);
-        unsafe { siglongjmp(CHKPT.as_mut_ptr(), 1) }
+        #[allow(static_mut_refs)]
+        unsafe {
+            siglongjmp(CHKPT.as_mut_ptr(), 1)
+        }
     }
 }
 
@@ -127,6 +130,7 @@ macro_rules! checkpoint {
         compiler_fence(Ordering::SeqCst);
 
         // Make a checkpoint with `sigsetjmp` for recovering in this critical section.
+        #[allow(static_mut_refs)]
         if unsafe { setjmp::sigsetjmp(CHKPT.as_mut_ptr(), 0) } == 1 {
             compiler_fence(Ordering::SeqCst);
 
@@ -148,7 +152,10 @@ extern "C" fn handle_signal(_: i32, _: *mut siginfo_t, _: *mut c_void) {
 
     // if we have made a checkpoint and are not in crash-atomic section, it is good to `longjmp`.
     if current == Status::InCs {
-        unsafe { siglongjmp(CHKPT.as_mut_ptr(), 1) }
+        #[allow(static_mut_refs)]
+        unsafe {
+            siglongjmp(CHKPT.as_mut_ptr(), 1)
+        }
     }
 
     // If we are in crash-atomic section by `Rollbacker::atomic`, turn `RbReq` on.

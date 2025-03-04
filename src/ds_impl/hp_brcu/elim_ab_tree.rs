@@ -171,7 +171,11 @@ impl<K, V> Node<K, V> {
         self.next()[index].load(Ordering::Acquire, guard)
     }
 
-    fn load_next_locked<'g>(&'g self, index: usize, _: &MCSLockGuard<'g, K, V>) -> Shared<Self> {
+    fn load_next_locked<'g>(
+        &'g self,
+        index: usize,
+        _: &MCSLockGuard<'g, K, V>,
+    ) -> Shared<'g, Self> {
         // Safety: the node is locked by this thread.
         self.next()[index].load(Ordering::Acquire, &unsafe { Unprotected::new() })
     }
@@ -467,7 +471,7 @@ where
     fn iter_key_next<'g>(
         &'g self,
         lock: &'g MCSLockGuard<'g, K, V>,
-    ) -> impl Iterator<Item = (Option<K>, Shared<Self>)> + 'g {
+    ) -> impl Iterator<Item = (Option<K>, Shared<'g, Self>)> + 'g {
         self.enumerate_key(lock)
             .map(|(i, k)| (Some(k), self.load_next_locked(i, lock)))
             .chain(once((None, self.load_next_locked(self.key_count(), lock))))

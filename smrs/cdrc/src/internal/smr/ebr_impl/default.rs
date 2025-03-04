@@ -46,7 +46,7 @@ where
         .unwrap_or_else(|_| f(&collector().register()))
 }
 
-#[cfg(all(test, not(crossbeam_loom)))]
+#[cfg(test)]
 mod tests {
     use crossbeam_utils::thread;
 
