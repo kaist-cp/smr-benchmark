@@ -40,10 +40,6 @@ fn bench(config: &Config, output: BenchWriter) {
             bench_map::<SkipList<usize, usize, CsHP>>(config, PrefillStrategy::Decreasing)
         }
         DS::BonsaiTree => {
-            // Note: Using the `Random` strategy with the Bonsai tree is unsafe
-            // because it involves multiple threads with unprotected guards.
-            // It is safe for many other data structures that don't retire elements
-            // during insertion, but this is not the case for the Bonsai tree.
             bench_map::<BonsaiTreeMap<usize, usize, CsHP>>(config, PrefillStrategy::Decreasing)
         }
         DS::ElimAbTree => {
