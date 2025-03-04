@@ -518,32 +518,34 @@ mod tests {
 
     #[test]
     fn smoke_ebr_h_list_ebr() {
-        concurrent_map::tests::smoke::<CsEBR, HList<i32, String, CsEBR>>();
+        concurrent_map::tests::smoke::<CsEBR, _, HList<i32, String, CsEBR>, _>(&|a| a.to_string());
     }
 
     #[test]
     fn smoke_ebr_hm_list_ebr() {
-        concurrent_map::tests::smoke::<CsEBR, HMList<i32, String, CsEBR>>();
+        concurrent_map::tests::smoke::<CsEBR, _, HMList<i32, String, CsEBR>, _>(&|a| a.to_string());
     }
 
     #[test]
     fn smoke_ebr_hhs_list_ebr() {
-        concurrent_map::tests::smoke::<CsEBR, HHSList<i32, String, CsEBR>>();
+        concurrent_map::tests::smoke::<CsEBR, _, HHSList<i32, String, CsEBR>, _>(&|a| {
+            a.to_string()
+        });
     }
 
     #[test]
     fn smoke_ebr_h_list_hp() {
-        concurrent_map::tests::smoke::<CsHP, HList<i32, String, CsHP>>();
+        concurrent_map::tests::smoke::<CsHP, _, HList<i32, String, CsHP>, _>(&|a| a.to_string());
     }
 
     #[test]
     fn smoke_ebr_hm_list_hp() {
-        concurrent_map::tests::smoke::<CsHP, HMList<i32, String, CsHP>>();
+        concurrent_map::tests::smoke::<CsHP, _, HMList<i32, String, CsHP>, _>(&|a| a.to_string());
     }
 
     #[test]
     fn smoke_ebr_hhs_list_hp() {
-        concurrent_map::tests::smoke::<CsHP, HHSList<i32, String, CsHP>>();
+        concurrent_map::tests::smoke::<CsHP, _, HHSList<i32, String, CsHP>, _>(&|a| a.to_string());
     }
 
     #[test]

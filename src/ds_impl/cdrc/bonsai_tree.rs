@@ -709,11 +709,15 @@ mod tests {
 
     #[test]
     fn smoke_bonsai_tree_ebr() {
-        concurrent_map::tests::smoke::<CsEBR, BonsaiTreeMap<i32, String, CsEBR>>();
+        concurrent_map::tests::smoke::<CsEBR, _, BonsaiTreeMap<i32, String, CsEBR>, _>(&|a| {
+            a.to_string()
+        });
     }
 
     #[test]
     fn smoke_bonsai_tree_hp() {
-        concurrent_map::tests::smoke::<CsHP, BonsaiTreeMap<i32, String, CsHP>>();
+        concurrent_map::tests::smoke::<CsHP, _, BonsaiTreeMap<i32, String, CsHP>, _>(&|a| {
+            a.to_string()
+        });
     }
 }

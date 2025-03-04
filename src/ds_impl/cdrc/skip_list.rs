@@ -438,11 +438,13 @@ mod tests {
 
     #[test]
     fn smoke_skip_list_ebr() {
-        concurrent_map::tests::smoke::<CsEBR, SkipList<i32, String, CsEBR>>();
+        concurrent_map::tests::smoke::<CsEBR, _, SkipList<i32, String, CsEBR>, _>(&|a| {
+            a.to_string()
+        });
     }
 
     #[test]
     fn smoke_skip_list_hp() {
-        concurrent_map::tests::smoke::<CsHP, SkipList<i32, String, CsHP>>();
+        concurrent_map::tests::smoke::<CsHP, _, SkipList<i32, String, CsHP>, _>(&|a| a.to_string());
     }
 }
