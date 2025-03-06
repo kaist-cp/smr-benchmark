@@ -74,7 +74,7 @@ def draw(title, name, data, y_value, y_label=None, y_max=None, y_from_zero=False
     h2, = plt.plot(d[THREADS], d[y_value], label="HP; EFRBTREE",
              linewidth=3, markersize=marker_size, **EFRBTREE_SHAPE, zorder=30)
 
-    plt.legend(handles=[h1, h2], fontsize=label_size, loc="lower right")
+    # plt.legend(handles=[h1, h2], fontsize=label_size, loc="lower right")
 
     plt.xlabel("Threads", fontsize=label_size)
     plt.ylabel(y_label, fontsize=label_size)

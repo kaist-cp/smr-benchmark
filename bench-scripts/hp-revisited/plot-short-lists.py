@@ -74,7 +74,7 @@ def draw(title, name, data, y_value, y_label=None, y_max=None, y_from_zero=False
     h2, = plt.plot(d[THREADS], d[y_value], label="HP; HMList",
              linewidth=3, markersize=marker_size, **HMLIST_SHAPE, zorder=30)
 
-    plt.legend(handles=[h1, h2], fontsize=label_size, loc="lower right")
+    # plt.legend(handles=[h1, h2], fontsize=label_size, loc="lower right")
 
     plt.xlabel("Threads", fontsize=label_size)
     plt.ylabel(y_label, fontsize=label_size)
@@ -129,7 +129,7 @@ data.avg_garb = data.avg_garb.map(lambda x: x / 10000)
 data["mm_ds"] = list(map(lambda p: p[0] + "_" + p[1], zip(data.mm, data.ds)))
 data.mm = list(map(lambda tup: tup[0] if tup[1] == "small" else tup[0] + "-large", zip(data.mm, data.bag_size)))
 data = data[data.mm.isin(SMRs)]
-data = data[data.key_range == 16]
+data = data[data.key_range == 100]
 data = data.drop(["bag_size", "ds", "mm"], axis=1)
 
 # take average of each runs

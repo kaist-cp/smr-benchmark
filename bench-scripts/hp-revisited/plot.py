@@ -61,12 +61,14 @@ n_map = {0: ''}
 (label_size, xtick_size, ytick_size, marker_size) = (24, 20, 18, 20)
 
 mm_order = [
+    HP,
     HP_BRCU,
     EBR,
-    HP,
     HP_PP,
     PEBR,
     VBR,
+    CDRC_HP,
+    CIRC_HP,
     NR,
 ]
 
@@ -133,6 +135,8 @@ def draw_peak_garb(data, ds, bench, key_range):
     data = data[data.key_range == key_range]
     data = data[data.mm != NR]
     data = data[data.mm != VBR]
+    data = data[data.mm != CDRC_HP]
+    data = data[data.mm != CIRC_HP]
     y_label = 'Peak unreclaimed nodes (×10⁴)'
     y_max = 0
     for cand in [HP_PP, HP_BRCU]:
@@ -141,6 +145,16 @@ def draw_peak_garb(data, ds, bench, key_range):
             y_max = max(y_max, max_garb * 2)
     draw(plot_title(ds, bench), f'{RESULTS_PATH}/{ds}_{bench}_{range_to_str(key_range)}_peak_garb.pdf',
          data, PEAK_GARB, y_label, y_max)
+
+
+def draw_peak_mem(data, ds, bench, key_range):
+    data = data[ds].copy()
+    data = data[data.key_range == key_range]
+    y_label = 'Peak memory usage (MiB)'
+    _d = data[~data[SMR_ONLY].isin([NR, EBR, VBR, CIRC_HP, CDRC_HP])]
+    y_max = _d[_d.ds == ds].peak_mem.max()
+    draw(plot_title(ds, bench), f'{RESULTS_PATH}/{ds}_{bench}_{range_to_str(key_range)}_peak_mem.pdf',
+         data, PEAK_MEM, y_label, y_max)
 
 
 raw_data = {}
@@ -187,3 +201,12 @@ for ds in dss_read:
     for kr in key_ranges(ds):
         draw_peak_garb(avg_data[HALF], ds, HALF, kr)
         draw_peak_garb(avg_data[READ], ds, READ, kr)
+
+# 3. peak memory graph
+for ds in dss_write:
+    for kr in key_ranges(ds):
+        draw_peak_mem(avg_data[WRITE], ds, WRITE, kr)
+for ds in dss_read:
+    for kr in key_ranges(ds):
+        draw_peak_mem(avg_data[HALF], ds, HALF, kr)
+        draw_peak_mem(avg_data[READ], ds, READ, kr)
