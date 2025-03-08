@@ -48,7 +48,7 @@ SMRs = [HP]
 COMBs = [f"{HP}_{NMTREE}", f"{HP}_{EFRBTREE}"]
 
 NMTREE_SHAPE = line_shapes[HP]
-EFRBTREE_SHAPE = line_shapes["PESSIM_HP"]
+EFRBTREE_SHAPE = line_shapes[PESSIM_HP]
 
 def plot_title(bench):
     return 'NMTree v.s. EFRBTree'

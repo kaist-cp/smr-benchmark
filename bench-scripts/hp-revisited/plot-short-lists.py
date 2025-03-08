@@ -48,7 +48,7 @@ SMRs = [HP]
 COMBs = [f"{HP}_{HHSLIST}", f"{HP}_{HMLIST}"]
 
 HHSLIST_SHAPE = line_shapes[HP]
-HMLIST_SHAPE = line_shapes["PESSIM_HP"]
+HMLIST_SHAPE = line_shapes[PESSIM_HP]
 
 def plot_title(bench):
     return 'HHSList v.s. HMList'
