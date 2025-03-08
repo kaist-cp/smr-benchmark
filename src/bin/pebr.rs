@@ -112,6 +112,7 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync, N: Unsigned>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> Perf {
+    // Note: It tries a collection after two bag flushes.
     match config.bag_size {
         BagSize::Small => crossbeam_pebr::set_bag_capacity(512),
         BagSize::Large => crossbeam_pebr::set_bag_capacity(4096),

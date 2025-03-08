@@ -102,6 +102,7 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> Perf {
+    // Note: It tries a collection after two bag flushes.
     match config.bag_size {
         BagSize::Small => set_counts_between_flush_ebr(512),
         BagSize::Large => set_counts_between_flush_ebr(4096),

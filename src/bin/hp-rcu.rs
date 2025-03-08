@@ -105,6 +105,7 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> Perf {
+    // Note: It tries a collection after two bag flushes.
     match config.bag_size {
         BagSize::Small => set_bag_capacity(512),
         BagSize::Large => set_bag_capacity(4096),

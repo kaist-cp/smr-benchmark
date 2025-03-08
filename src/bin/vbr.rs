@@ -100,7 +100,7 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
     strategy: PrefillStrategy,
 ) -> Perf {
     match config.bag_size {
-        BagSize::Small => vbr::set_bag_capacity(512),
+        BagSize::Small => vbr::set_bag_capacity(1024),
         BagSize::Large => vbr::set_bag_capacity(4096),
     }
     let global = &M::global(config.prefill);
