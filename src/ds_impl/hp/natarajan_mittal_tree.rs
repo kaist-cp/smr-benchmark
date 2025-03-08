@@ -569,7 +569,7 @@ where
 
             // candidates
             let leaf = untagged(record.leaf);
-            let leaf_node = unsafe { &*record.leaf };
+            let leaf_node = unsafe { &*leaf };
 
             if leaf_node.key.cmp(key) != cmp::Ordering::Equal {
                 return Ok(None);
@@ -608,7 +608,11 @@ where
 
         // cleanup phase
         loop {
-            self.seek(key, &mut record)?;
+            if self.seek(key, &mut record).is_err() {
+                // Note that as the linearization point has passed,
+                // we must not return `Err` in this case.
+                continue;
+            }
             if untagged(record.leaf) != leaf {
                 // The edge to leaf flagged for deletion was removed by a helping thread
                 return Ok(Some(value));
