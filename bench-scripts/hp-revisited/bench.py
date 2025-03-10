@@ -17,7 +17,7 @@ elif cpu_count <= 64:
     ts = list(map(str, [1] + list(range(8, 129, 8))))
 else:
     ts = list(map(str, [1] + list(range(12, 193, 12))))
-runs = 2
+runs = 1
 gs = [0, 1, 2]
 
 subprocess.run(['cargo', 'build', '--release'])

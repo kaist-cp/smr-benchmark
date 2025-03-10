@@ -23,7 +23,7 @@ gs = [0, 1, 2]
 subprocess.run(['cargo', 'build', '--release'])
 
 def key_ranges(ds):
-    return ["16"]
+    return ["100"]
 
 def is_suffix(orig, suf):
     return len(suf) <= len(orig) and mm[-len(suf):] == suf
