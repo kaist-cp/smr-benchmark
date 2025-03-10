@@ -67,14 +67,14 @@ def draw(title, name, data, y_value, y_label=None, y_max=None, y_from_zero=False
     plt.title(title, fontsize=36, pad=15)
 
     d = data[data.mm_ds == f"{HP}_{NMTREE}"].sort_values(by=[THREADS], axis=0)
-    h1, = plt.plot(d[THREADS], d[y_value], label="HP; NMTREE",
+    h1, = plt.plot(d[THREADS], d[y_value], label="NMTree",
              linewidth=3, markersize=marker_size, **NMTREE_SHAPE, zorder=30)
     
     d = data[data.mm_ds == f"{HP}_{EFRBTREE}"].sort_values(by=[THREADS], axis=0)
-    h2, = plt.plot(d[THREADS], d[y_value], label="HP; EFRBTREE",
+    h2, = plt.plot(d[THREADS], d[y_value], label="EFRBTree",
              linewidth=3, markersize=marker_size, **EFRBTREE_SHAPE, zorder=30)
 
-    # plt.legend(handles=[h1, h2], fontsize=label_size, loc="lower right")
+    plt.legend(handles=[h1, h2], fontsize=label_size, loc="lower right")
 
     plt.xlabel("Threads", fontsize=label_size)
     plt.ylabel(y_label, fontsize=label_size)
