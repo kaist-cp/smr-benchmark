@@ -8,7 +8,7 @@ use crossbeam_utils::CachePadded;
 use portable_atomic::{compiler_fence, AtomicU128, AtomicUsize};
 
 static ENTRIES_PER_BAG: AtomicUsize = AtomicUsize::new(128);
-pub const INIT_BAGS_PER_LOCAL: usize = 32;
+pub const INIT_BAGS_PER_LOCAL: usize = 1;
 pub const NOT_RETIRED: u64 = u64::MAX;
 
 /// Sets the capacity of thread-local garbage bag.
