@@ -103,14 +103,6 @@ def draw_throughput(data, bench):
          data, THROUGHPUT, y_label, y_max, True)
 
 
-def draw_peak_garb(data, bench):
-    data = data.copy()
-    y_label = 'Peak unreclaimed nodes (×10⁴)'
-    y_max = data.peak_garb.max() * 1.05
-    draw(plot_title(bench), f'{RESULTS_PATH}/short-lists_{bench}_peak_garb.pdf',
-         data, PEAK_GARB, y_label, y_max)
-
-
 raw_data = {}
 # averaged data for write:read = 100:0, 50:50, 10:90
 avg_data = { WRITE: {}, HALF: {}, READ: {} }
@@ -140,12 +132,4 @@ avg.sort_values(by=SMR_ONLY, inplace=True)
 for i, bench in [(0, WRITE), (1, HALF), (2, READ)]:
     avg_data[bench] = avg[avg.get_rate == i]
 
-# 1. throughput graphs, 3 lines (SMR_ONLY) each.
-draw_throughput(avg_data[WRITE], WRITE)
 draw_throughput(avg_data[HALF], HALF)
-draw_throughput(avg_data[READ], READ)
-
-# 2. peak garbage graph
-draw_peak_garb(avg_data[WRITE], WRITE)
-draw_peak_garb(avg_data[HALF], HALF)
-draw_peak_garb(avg_data[READ], READ)
