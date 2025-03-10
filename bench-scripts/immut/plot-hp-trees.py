@@ -33,13 +33,27 @@ dss_all   = [NMTREE, EFRBTREE]
 
 WRITE, HALF, READ = "write", "half", "read"
 
+t_step, t_end = 0, 0
 cpu_count = os.cpu_count()
-if not cpu_count or cpu_count <= 24:
-    ts = [1] + list(range(4, 33, 4))
+if not cpu_count or cpu_count <= 12:
+    t_step, t_end = 2, 16
+elif cpu_count <= 24:
+    t_step, t_end = 4, 32
 elif cpu_count <= 64:
-    ts = [1] + list(range(8, 129, 8))
+    t_step, t_end = 8, 128
 else:
-    ts = [1] + list(range(12, 193, 12))
+    t_step, t_end = 8, 192
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-e", "--end", dest="end", type=int, default=t_end,
+                    help="the maximum number in a sequence of the number of threads")
+parser.add_argument("-t", "--step", dest="step", type=int, default=t_step,
+                    help="the interval between adjacent pair in a sequence of the number of threads")
+args = parser.parse_args()
+t_end = args.end
+t_step = args.step
+
+ts = list(map(str, [1] + list(range(t_step, t_end + 1, t_step))))
 n_map = {0: ''}
 
 (label_size, xtick_size, ytick_size, marker_size) = (24, 20, 18, 20)
