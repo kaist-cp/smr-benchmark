@@ -69,7 +69,7 @@ args = parser.parse_args()
 t_end = args.end
 t_step = args.step
 
-ts = list(map(str, [1] + list(range(t_step, t_end + 1, t_step))))
+ts = [1] + list(range(t_step, t_end + 1, t_step))
 n_map = {0: ''}
 
 (label_size, xtick_size, ytick_size, marker_size) = (24, 20, 18, 20)
