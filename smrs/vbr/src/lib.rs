@@ -4,6 +4,7 @@ use std::{
 };
 
 use atomic::{Atomic, Ordering};
+use crossbeam_queue::SegQueue;
 use crossbeam_utils::CachePadded;
 use portable_atomic::{compiler_fence, AtomicU128, AtomicUsize};
 
@@ -41,17 +42,17 @@ impl<T> Deref for Inner<T> {
     }
 }
 
-pub struct Global<T> {
+pub struct Global<T: Default> {
     epoch: CachePadded<AtomicU64>,
-    avail: BagStack<Inner<T>>,
+    avail: SegQueue<*mut Bag<Inner<T>>>,
 }
 
-unsafe impl<T> Sync for Global<T> {}
-unsafe impl<T> Send for Global<T> {}
+unsafe impl<T: Default> Sync for Global<T> {}
+unsafe impl<T: Default> Send for Global<T> {}
 
 impl<T: Default> Global<T> {
     pub fn new(capacity: usize) -> Self {
-        let avail = BagStack::new();
+        let avail = SegQueue::new();
         let count = capacity / bag_capacity() + if capacity % bag_capacity() > 0 { 1 } else { 0 };
         for _ in 0..count {
             avail.push(Box::into_raw(Box::new(Bag::new_with_alloc())));
@@ -94,91 +95,14 @@ impl<T: Default> Global<T> {
     }
 }
 
-pub struct BagStack<T> {
-    /// NOTE: A timestamp is necessary to prevent ABA problems.
-    head: AtomicU128,
-    _marker: PhantomData<T>,
-}
-
-impl<T> BagStack<T> {
-    fn new() -> Self {
-        Self {
-            head: AtomicU128::new(0),
-            _marker: PhantomData,
-        }
-    }
-
-    pub fn pop(&self) -> Option<*mut Bag<T>> {
-        loop {
-            let (ts, head) = decompose_u128::<Bag<T>>(self.head.load(Ordering::SeqCst));
-
-            if let Some(head_ref) = unsafe { head.as_ref() } {
-                let (_, next) = decompose_u128::<Bag<T>>(head_ref.next.load(Ordering::SeqCst));
-                if self
-                    .head
-                    .compare_exchange(
-                        compose_u128(ts, head),
-                        compose_u128(ts + 1, next),
-                        Ordering::SeqCst,
-                        Ordering::SeqCst,
-                    )
-                    .is_ok()
-                {
-                    head_ref.next.store(0, Ordering::SeqCst);
-                    return Some(head);
-                }
-            } else {
-                return None;
-            }
-        }
-    }
-
-    pub fn push(&self, bag: *mut Bag<T>) {
-        debug_assert!(!bag.is_null());
-        loop {
-            let (ts, head) = decompose_u128::<Bag<T>>(self.head.load(Ordering::SeqCst));
-            unsafe { &*bag }
-                .next
-                .store(compose_u128(ts, head), Ordering::SeqCst);
-            if self
-                .head
-                .compare_exchange(
-                    compose_u128(ts, head),
-                    compose_u128(ts + 1, bag),
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                )
-                .is_ok()
-            {
-                return;
-            }
-        }
-    }
-}
-
-impl<T> Drop for BagStack<T> {
-    fn drop(&mut self) {
-        let mut head = decompose_u128::<Bag<T>>(self.head.load(Ordering::SeqCst)).1;
-        while !head.is_null() {
-            head = decompose_u128::<Bag<T>>(
-                unsafe { Box::from_raw(head) }.next.load(Ordering::SeqCst),
-            )
-            .1;
-        }
-    }
-}
-
 pub struct Bag<T> {
-    /// NOTE: A timestamp is necessary to prevent ABA problems.
-    next: AtomicU128,
-    entries: Vec<*mut T>,
+    entries: VecDeque<*mut T>,
 }
 
 impl<T: Default> Bag<T> {
     fn new() -> Self {
         Self {
-            next: AtomicU128::new(0),
-            entries: Vec::with_capacity(bag_capacity()),
+            entries: VecDeque::with_capacity(bag_capacity()),
         }
     }
 
@@ -188,25 +112,24 @@ impl<T: Default> Bag<T> {
             *ptr = Box::into_raw(Box::new(T::default()));
         }
         Self {
-            next: AtomicU128::new(0),
-            entries,
+            entries: entries.into(),
         }
     }
 
     fn push(&mut self, obj: *mut T) -> bool {
         if self.entries.len() < bag_capacity() {
-            self.entries.push(obj);
+            self.entries.push_back(obj);
             return true;
         }
         false
     }
 
     fn pop(&mut self) -> Option<*mut T> {
-        self.entries.pop()
+        self.entries.pop_front()
     }
 }
 
-pub struct Local<T> {
+pub struct Local<T: Default> {
     global: *const Global<T>,
     avail: RefCell<VecDeque<*mut Bag<Inner<T>>>>,
     retired: RefCell<VecDeque<*mut Bag<Inner<T>>>>,
@@ -219,7 +142,9 @@ impl<T: Default> Local<T> {
 
     pub fn new(global: &Global<T>) -> Self {
         let mut avail = VecDeque::with_capacity(INIT_BAGS_PER_LOCAL);
-        avail.resize_with(INIT_BAGS_PER_LOCAL, || global.acquire());
+        avail.resize_with(INIT_BAGS_PER_LOCAL, || {
+            Box::into_raw(Box::new(Bag::new_with_alloc()))
+        });
         let mut retired = VecDeque::new();
         retired.push_back(Box::into_raw(Box::new(Bag::new())));
         Self {
@@ -242,7 +167,7 @@ impl<T: Default> Local<T> {
                     return item;
                 } else {
                     self.avail.borrow_mut().pop_front();
-                    self.retired.borrow_mut().push_back(bag);
+                    unsafe { drop(Box::from_raw(bag)) };
                 }
             }
 
@@ -289,7 +214,24 @@ impl<T: Default> Local<T> {
     }
 }
 
-pub struct Guard<T> {
+impl<T: Default> Drop for Local<T> {
+    fn drop(&mut self) {
+        for bag in self
+            .retired
+            .borrow_mut()
+            .drain(..)
+            .chain(self.avail.borrow_mut().drain(..))
+        {
+            if unsafe { &*bag }.entries.len() == 0 {
+                unsafe { drop(Box::from_raw(bag)) };
+            } else {
+                self.global().retire(bag);
+            }
+        }
+    }
+}
+
+pub struct Guard<T: Default> {
     local: *const Local<T>,
     epoch: u64,
 }
@@ -337,7 +279,7 @@ impl<T: Default> Guard<T> {
 
     /// # Safety
     ///
-    /// The current must conceptually have exclusive permission to retire this pointer
+    /// The current thread must conceptually have exclusive permission to retire this pointer
     /// (e.g., after successful physical deletion in a lock-free data structure).
     pub unsafe fn retire(&self, ptr: Shared<T>) {
         let inner = ptr.as_inner().expect("Attempted to retire a null pointer.");
@@ -350,7 +292,7 @@ impl<T: Default> Guard<T> {
 
     /// # Safety
     ///
-    /// The pointee must not be relcaimed yet, and the current must conceptually have exclusive
+    /// The pointee must not be relcaimed yet, and the current thread must conceptually have exclusive
     /// permission to retire this pointer (e.g., after successful physical deletion in a lock-free
     /// data structure).
     pub unsafe fn retire_raw(&self, ptr: *mut Inner<T>) {

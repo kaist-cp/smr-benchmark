@@ -7,5 +7,6 @@ edition = "2021"
 
 [dependencies]
 crossbeam-utils = "0.8"
+crossbeam-queue = "0.3"
 atomic = "0.5"
 portable-atomic = "1"
