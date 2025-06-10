@@ -1,0 +1,5 @@
+[advisories]
+# The `paste` crate, used by `tikv-jemalloc-ctl`, has been unmaintained since October 7, 2024.
+# However, there is currently no suitable replacement.
+# See also: https://github.com/tikv/jemallocator/issues/123
+ignore = ["RUSTSEC-2024-0436"]
