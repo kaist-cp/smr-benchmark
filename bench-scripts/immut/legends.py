@@ -14,8 +14,12 @@ HP_PP = "hp-pp"
 HP_BRCU = "hp-brcu"
 HP_RCU = "hp-rcu"
 VBR = "vbr"
+CDRC_HP = "cdrc-hp"
+CIRC_HP = "circ-hp"
+# Used in `plot-short-lists`
+PESSIM_HP = "pessim-hp"
 
-SMRs = [NR, EBR, HP_PP, HP, PEBR, HP_BRCU, HP_RCU, VBR]
+SMRs = [NR, EBR, HP_PP, HP, PEBR, HP_BRCU, HP_RCU, VBR, CDRC_HP, CIRC_HP, PESSIM_HP]
 
 FACE_ALPHA = 0.85
 
@@ -64,8 +68,17 @@ line_shapes = {
         "color": "orange",
         "linestyle": (0, (2, 1)),
     },
-    # Used in `plot-short-lists`
-    "PESSIM_HP": {
+    CDRC_HP: {
+        "marker": "p",
+        "color": "forestgreen",
+        "linestyle": (0, (3, 1, 1, 1)),
+    },
+    CIRC_HP: {
+        "marker": "H",
+        "color": "slateblue",
+        "linestyle": (0, (3, 1, 1, 1)),
+    },
+    PESSIM_HP: {
         "marker": "v",
         "color": "#828282",
         "linestyle": "dotted",

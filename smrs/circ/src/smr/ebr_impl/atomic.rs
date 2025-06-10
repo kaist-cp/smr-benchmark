@@ -342,17 +342,7 @@ impl<T: ?Sized + Pointable> Atomic<T> {
     ///
     /// let a = Atomic::<i32>::null();
     /// ```
-    #[cfg(all(not(crossbeam_no_const_fn_trait_bound), not(crossbeam_loom)))]
     pub const fn null() -> Atomic<T> {
-        Self {
-            data: AtomicUsize::new(0),
-            _marker: PhantomData,
-        }
-    }
-
-    /// Returns a new null atomic pointer.
-    #[cfg(not(all(not(crossbeam_no_const_fn_trait_bound), not(crossbeam_loom))))]
-    pub fn null() -> Atomic<T> {
         Self {
             data: AtomicUsize::new(0),
             _marker: PhantomData,
@@ -877,17 +867,7 @@ impl<T: ?Sized + Pointable> Atomic<T> {
     /// }
     /// ```
     pub unsafe fn into_owned(self) -> Owned<T> {
-        #[cfg(crossbeam_loom)]
-        {
-            // FIXME: loom does not yet support into_inner, so we use unsync_load for now,
-            // which should have the same synchronization properties:
-            // https://github.com/tokio-rs/loom/issues/117
-            Owned::from_usize(self.data.unsync_load())
-        }
-        #[cfg(not(crossbeam_loom))]
-        {
-            Owned::from_usize(self.data.into_inner())
-        }
+        Owned::from_usize(self.data.into_inner())
     }
 
     /// Takes ownership of the pointee if it is non-null.
@@ -924,10 +904,6 @@ impl<T: ?Sized + Pointable> Atomic<T> {
     /// }
     /// ```
     pub unsafe fn try_into_owned(self) -> Option<Owned<T>> {
-        // FIXME: See self.into_owned()
-        #[cfg(crossbeam_loom)]
-        let data = self.data.unsync_load();
-        #[cfg(not(crossbeam_loom))]
         let data = self.data.into_inner();
         if decompose_tag::<T>(data).0 == 0 {
             None
@@ -1685,7 +1661,7 @@ impl<T: ?Sized + Pointable> Default for Shared<'_, T> {
     }
 }
 
-#[cfg(all(test, not(crossbeam_loom)))]
+#[cfg(test)]
 mod tests {
     use super::{Owned, Shared};
     use std::mem::MaybeUninit;

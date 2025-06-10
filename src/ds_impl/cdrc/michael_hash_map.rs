@@ -86,11 +86,13 @@ mod tests {
 
     #[test]
     fn smoke_hashmap_ebr() {
-        concurrent_map::tests::smoke::<CsEBR, HashMap<i32, String, CsEBR>>();
+        concurrent_map::tests::smoke::<CsEBR, _, HashMap<i32, String, CsEBR>, _>(&|a| {
+            a.to_string()
+        });
     }
 
     #[test]
     fn smoke_hashmap_hp() {
-        concurrent_map::tests::smoke::<CsHP, HashMap<i32, String, CsHP>>();
+        concurrent_map::tests::smoke::<CsHP, _, HashMap<i32, String, CsHP>, _>(&|a| a.to_string());
     }
 }

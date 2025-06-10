@@ -508,11 +508,15 @@ mod tests {
 
     #[test]
     fn smoke_nm_tree_ebr() {
-        concurrent_map::tests::smoke::<CsEBR, NMTreeMap<i32, String, CsEBR>>();
+        concurrent_map::tests::smoke::<CsEBR, _, NMTreeMap<i32, String, CsEBR>, _>(&|a| {
+            a.to_string()
+        });
     }
 
     #[test]
     fn smoke_nm_tree_hp() {
-        concurrent_map::tests::smoke::<CsHP, NMTreeMap<i32, String, CsHP>>();
+        concurrent_map::tests::smoke::<CsHP, _, NMTreeMap<i32, String, CsHP>, _>(&|a| {
+            a.to_string()
+        });
     }
 }

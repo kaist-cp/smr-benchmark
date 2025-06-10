@@ -99,14 +99,18 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> Perf {
-    match config.bag_size {
-        BagSize::Small => vbr::set_bag_capacity(512),
-        BagSize::Large => vbr::set_bag_capacity(4096),
-    }
+    // At this prefilling stage, we use the default bag size (usually small)
+    // to minimize the effect of allocations that the prefilling threads make.
     let global = &M::global(config.prefill);
     let local = &M::local(global);
     let map = &M::new(local);
     strategy.prefill(config, map, global);
+
+    // Adjust the bag size after prefilling.
+    match config.bag_size {
+        BagSize::Small => vbr::set_bag_capacity(1024),
+        BagSize::Large => vbr::set_bag_capacity(4096),
+    }
 
     let barrier = &Arc::new(Barrier::new(config.threads + config.aux_thread));
     let (ops_sender, ops_receiver) = mpsc::channel();

@@ -57,6 +57,8 @@ pub enum PrefillStrategy {
 
 impl PrefillStrategy {
     fn prefill<M: ConcurrentMap<usize, usize> + Send + Sync>(self, config: &Config, map: &M) {
+        // Some data structures (e.g., Bonsai tree, Elim AB-Tree) need SMR's retirement
+        // functionality even during insertions.
         match self {
             PrefillStrategy::Random => {
                 let threads = available_parallelism().map(|v| v.get()).unwrap_or(1);
@@ -65,17 +67,13 @@ impl PrefillStrategy {
                 scope(|s| {
                     for t in 0..threads {
                         s.spawn(move |_| {
-                            // Safety: We assume that the insert operation does not retire
-                            // any elements. Note that this assumption may not hold for all
-                            // data structures (e.g., Bonsai tree).
-                            let cs = unsafe { &Cs::unprotected() };
                             let rng = &mut rand::thread_rng();
                             let count = config.prefill / threads
                                 + if t < config.prefill % threads { 1 } else { 0 };
                             for _ in 0..count {
                                 let key = config.key_dist.sample(rng);
                                 let value = key;
-                                map.insert(key, value, cs);
+                                map.insert(key, value, &CsEBR::new());
                             }
                         });
                     }
@@ -83,7 +81,6 @@ impl PrefillStrategy {
                 .unwrap();
             }
             PrefillStrategy::Decreasing => {
-                let cs = unsafe { &Cs::unprotected() };
                 let rng = &mut rand::thread_rng();
                 let mut keys = Vec::with_capacity(config.prefill);
                 for _ in 0..config.prefill {
@@ -92,7 +89,7 @@ impl PrefillStrategy {
                 keys.sort_by(|a, b| b.cmp(a));
                 for key in keys.drain(..) {
                     let value = key;
-                    map.insert(key, value, cs);
+                    map.insert(key, value, &CsEBR::new());
                 }
             }
         }
@@ -105,8 +102,9 @@ fn bench_map<M: ConcurrentMap<usize, usize> + Send + Sync>(
     config: &Config,
     strategy: PrefillStrategy,
 ) -> Perf {
+    // Note: It tries a collection after two bag flushes.
     match config.bag_size {
-        BagSize::Small => set_counts_between_flush_ebr(64),
+        BagSize::Small => set_counts_between_flush_ebr(512),
         BagSize::Large => set_counts_between_flush_ebr(4096),
     }
     let map = &M::new();

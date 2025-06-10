@@ -23,11 +23,18 @@ pub mod tests {
     use cdrc::Cs;
     use crossbeam_utils::thread;
     use rand::prelude::*;
+    use std::fmt::Debug;
 
     const THREADS: i32 = 30;
     const ELEMENTS_PER_THREADS: i32 = 1000;
 
-    pub fn smoke<C: Cs, M: ConcurrentMap<i32, String, C> + Send + Sync>() {
+    pub fn smoke<C, V, M, F>(to_value: &F)
+    where
+        C: Cs,
+        V: Eq + Debug,
+        M: ConcurrentMap<i32, V, C> + Send + Sync,
+        F: Sync + Fn(&i32) -> V,
+    {
         let map = &M::new();
 
         thread::scope(|s| {
@@ -39,7 +46,7 @@ pub mod tests {
                         (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        assert!(map.insert(i, i.to_string(), output, &C::new()));
+                        assert!(map.insert(i, to_value(&i), output, &C::new()));
                     }
                 });
             }
@@ -57,7 +64,7 @@ pub mod tests {
                     let cs = &mut C::new();
                     for i in keys {
                         assert!(map.remove(&i, output, cs));
-                        assert_eq!(i.to_string(), *output.output());
+                        assert_eq!(to_value(&i), *output.output());
                         cs.clear();
                     }
                 });
@@ -76,7 +83,7 @@ pub mod tests {
                     let cs = &mut C::new();
                     for i in keys {
                         assert!(map.get(&i, output, cs));
-                        assert_eq!(i.to_string(), *output.output());
+                        assert_eq!(to_value(&i), *output.output());
                         cs.clear();
                     }
                 });

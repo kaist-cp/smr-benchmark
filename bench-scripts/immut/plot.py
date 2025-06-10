@@ -1,6 +1,6 @@
 import pandas as pd
 import warnings
-import os, math
+import os, math, argparse
 import matplotlib
 import matplotlib.pyplot as plt
 from legends import *
@@ -49,24 +49,40 @@ dss_write = [HLIST, HMLIST,          HASHMAP, NMTREE, SKIPLIST, ELIMABTREE]
 
 WRITE, HALF, READ = "write", "half", "read"
 
+t_step, t_end = 0, 0
 cpu_count = os.cpu_count()
-if not cpu_count or cpu_count <= 24:
-    ts = [1] + list(range(4, 33, 4))
+if not cpu_count or cpu_count <= 12:
+    t_step, t_end = 2, 16
+elif cpu_count <= 24:
+    t_step, t_end = 4, 32
 elif cpu_count <= 64:
-    ts = [1] + list(range(8, 129, 8))
+    t_step, t_end = 8, 128
 else:
-    ts = [1] + list(range(12, 193, 12))
+    t_step, t_end = 8, 192
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-e", "--end", dest="end", type=int, default=t_end,
+                    help="the maximum number in a sequence of the number of threads")
+parser.add_argument("-t", "--step", dest="step", type=int, default=t_step,
+                    help="the interval between adjacent pair in a sequence of the number of threads")
+args = parser.parse_args()
+t_end = args.end
+t_step = args.step
+
+ts = [1] + list(range(t_step, t_end + 1, t_step))
 n_map = {0: ''}
 
 (label_size, xtick_size, ytick_size, marker_size) = (24, 20, 18, 20)
 
 mm_order = [
+    HP,
     HP_BRCU,
     EBR,
-    HP,
     HP_PP,
     PEBR,
     VBR,
+    CDRC_HP,
+    CIRC_HP,
     NR,
 ]
 
@@ -133,6 +149,8 @@ def draw_peak_garb(data, ds, bench, key_range):
     data = data[data.key_range == key_range]
     data = data[data.mm != NR]
     data = data[data.mm != VBR]
+    data = data[data.mm != CDRC_HP]
+    data = data[data.mm != CIRC_HP]
     y_label = 'Peak unreclaimed nodes (×10⁴)'
     y_max = 0
     for cand in [HP_PP, HP_BRCU]:
@@ -141,6 +159,16 @@ def draw_peak_garb(data, ds, bench, key_range):
             y_max = max(y_max, max_garb * 2)
     draw(plot_title(ds, bench), f'{RESULTS_PATH}/{ds}_{bench}_{range_to_str(key_range)}_peak_garb.pdf',
          data, PEAK_GARB, y_label, y_max)
+
+
+def draw_peak_mem(data, ds, bench, key_range):
+    data = data[ds].copy()
+    data = data[data.key_range == key_range]
+    y_label = 'Peak memory usage (MiB)'
+    _d = data[~data[SMR_ONLY].isin([NR, EBR, VBR, CIRC_HP, CDRC_HP])]
+    y_max = _d[_d.ds == ds].peak_mem.max()
+    draw(plot_title(ds, bench), f'{RESULTS_PATH}/{ds}_{bench}_{range_to_str(key_range)}_peak_mem.pdf',
+         data, PEAK_MEM, y_label, y_max)
 
 
 raw_data = {}
@@ -187,3 +215,12 @@ for ds in dss_read:
     for kr in key_ranges(ds):
         draw_peak_garb(avg_data[HALF], ds, HALF, kr)
         draw_peak_garb(avg_data[READ], ds, READ, kr)
+
+# 3. peak memory graph
+for ds in dss_write:
+    for kr in key_ranges(ds):
+        draw_peak_mem(avg_data[WRITE], ds, WRITE, kr)
+for ds in dss_read:
+    for kr in key_ranges(ds):
+        draw_peak_mem(avg_data[HALF], ds, HALF, kr)
+        draw_peak_mem(avg_data[READ], ds, READ, kr)

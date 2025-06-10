@@ -122,7 +122,7 @@ impl fmt::Debug for LocalHandle {
     }
 }
 
-#[cfg(all(test, not(crossbeam_loom)))]
+#[cfg(test)]
 mod tests {
     use std::mem::ManuallyDrop;
     use std::sync::atomic::{AtomicUsize, Ordering};

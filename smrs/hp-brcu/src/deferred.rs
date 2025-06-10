@@ -3,9 +3,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::epoch::Epoch;
 
-#[cfg(not(feature = "sanitize"))]
+#[cfg(not(sanitize = "address"))]
 static MAX_OBJECTS: AtomicUsize = AtomicUsize::new(64);
-#[cfg(feature = "sanitize")]
+#[cfg(sanitize = "address")]
 static MAX_OBJECTS: AtomicUsize = AtomicUsize::new(4);
 
 /// Sets the capacity of thread-local garbage bag.

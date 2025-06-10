@@ -1,5 +1,5 @@
 #![doc = include_str!("../README.md")]
-#![feature(strict_provenance_atomic_ptr, strict_provenance)]
+#![feature(strict_provenance_atomic_ptr)]
 #![feature(cfg_sanitize)]
 
 #[macro_use]

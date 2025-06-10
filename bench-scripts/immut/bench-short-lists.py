@@ -1,34 +1,44 @@
 #!/usr/bin/env python
 
 import subprocess
-import os
+import os, argparse
 
 RESULTS_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "results")
 BIN_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "target", "release")
 
-dss = ['h-list', 'hm-list', 'hhs-list', 'hash-map', 'nm-tree', 'skip-list', 'elim-ab-tree']
+dss = ['hhs-list', 'hm-list']
 # "-large" suffix if it uses a large garbage bag.
-mms = ['nr', 'ebr', 'pebr', 'hp', 'hp-pp', 'hp-brcu', 'vbr']
+mms = ['hp']
 i = 10
-cpu_count = os.cpu_count()
-if not cpu_count or cpu_count <= 24:
-    ts = list(map(str, [1] + list(range(4, 33, 4))))
-elif cpu_count <= 64:
-    ts = list(map(str, [1] + list(range(8, 129, 8))))
-else:
-    ts = list(map(str, [1] + list(range(12, 193, 12))))
 runs = 2
-gs = [0, 1, 2]
+gs = [1]
+
+t_step, t_end = 0, 0
+cpu_count = os.cpu_count()
+if not cpu_count or cpu_count <= 12:
+    t_step, t_end = 2, 16
+elif cpu_count <= 24:
+    t_step, t_end = 4, 32
+elif cpu_count <= 64:
+    t_step, t_end = 8, 128
+else:
+    t_step, t_end = 8, 192
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-e", "--end", dest="end", type=int, default=t_end,
+                    help="the maximum number in a sequence of the number of threads")
+parser.add_argument("-t", "--step", dest="step", type=int, default=t_step,
+                    help="the interval between adjacent pair in a sequence of the number of threads")
+args = parser.parse_args()
+t_end = args.end
+t_step = args.step
+
+ts = list(map(str, [1] + list(range(t_step, t_end + 1, t_step))))
 
 subprocess.run(['cargo', 'build', '--release'])
 
 def key_ranges(ds):
-    if ds in ["h-list", "hm-list", "hhs-list"]:
-        # 1K and 10K
-        return ["1000", "10000"]
-    else:
-        # 100K and 100M
-        return ["100000", "100000000"]
+    return ["100"]
 
 def is_suffix(orig, suf):
     return len(suf) <= len(orig) and mm[-len(suf):] == suf
@@ -55,7 +65,7 @@ def invalid(mm, ds, g):
     if mm == 'nbr':
         is_invalid |= ds in ["hm-list", "skip-list"]
     if ds == 'elim-ab-tree':
-        is_invalid |= mm in ["hp-pp"]
+        is_invalid |= mm in ["pebr", "hp-pp", "vbr"]
     return is_invalid
 
 cmds = []
