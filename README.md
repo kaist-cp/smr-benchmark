@@ -5,6 +5,7 @@
 
 This is the artifact for:
 
+* Janggun Lee, Jeonghyeon Kim, Jeehoon Kang, Leveraging Immutability to Validate Hazard Pointers for Optimistic Traversals, PLDI 2025 \[18\].
 * Jaehwang Jung, Jeonghyeon Kim, Matthew J. Parkinson and Jeehoon Kang, Concurrent Immediate Reference Counting, PLDI 2024 \[15\].
 * Jeonghyeon Kim, Jaehwang Jung and Jeehoon Kang, Expediting Hazard Pointers with Bounded RCU Critical Sections, SPAA 2024 \[14\].
 * Jaehwang Jung, Janggun Lee, Jeonghyeon Kim and Jeehoon Kang, Applying Hazard Pointers to More Concurrent Data Structures, SPAA 2023 \[11\].
@@ -278,3 +279,4 @@ Note that sanitizer may report memory leaks when used against CIRC EBR. This is 
 * \[15\] Jaehwang Jung, Jeonghyeon Kim, Matthew J. Parkinson, and Jeehoon Kang. 2024. Concurrent Immediate Reference Counting. Proc. ACM Program. Lang. 8, PLDI, Article 153 (June 2024), 24 pages. <https://doi.org/10.1145/3656383>
 * \[16\] Gali Sheffi, Maurice Herlihy, and Erez Petrank. 2021. VBR: Version Based Reclamation. In Proceedings of the 33rd ACM Symposium on Parallelism in Algorithms and Architectures (Virtual Event, USA) (SPAA ’21). Association for Computing Machinery, New York, NY, USA, 443–445. <https://doi.org/10.1145/3409964.3461817>
 * \[17\] Anubhav Srivastava and Trevor Brown. 2022. Elimination (a,b)-trees with fast, durable updates. In Proceedings of the 27th ACM SIGPLAN Symposium on Principles and Practice of Parallel Programming (PPoPP '22). Association for Computing Machinery, New York, NY, USA, 416–430. <https://doi.org/10.1145/3503221.3508441>
+* \[18\] Janggun Lee, Jeonghyeon Kim, and Jeehoon Kang. 2025. Leveraging Immutability to Validate Hazard Pointers for Optimistic Traversals. Proc. ACM Program. Lang. 9, PLDI, Article 148 (June 2025), 22 pages. <https://doi.org/10.1145/3729247>
