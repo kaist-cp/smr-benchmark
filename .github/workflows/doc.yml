@@ -49,6 +49,9 @@ jobs:
   deploy:
     name: Deploy
     needs: build
+    # This condition is to only run deployment on pushes to the main branch.
+    # It will be skipped for pull requests and pushes to other branches.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
     environment:
