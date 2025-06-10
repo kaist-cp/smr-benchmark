@@ -15,9 +15,6 @@ jobs:
       run: sudo apt-get update && sudo apt-get install -y clang
 
     - uses: dtolnay/rust-toolchain@stable
-      with:
-        toolchain: nightly
-        components: rustfmt, clippy
     - uses: Swatinem/rust-cache@v2
     - name: Install cargo-audit
       run: cargo install cargo-audit
