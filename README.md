@@ -191,7 +191,7 @@ where
 * Get rate
   * `0`: Write-only (Insert 50%, Remove 50%)
   * `1`: Read-write (Get 50%, Insert 25%, Remove 25%)
-  * `2`: Write-intensive (Get 10%, Insert 45%, Remove 45%)
+  * `2`: Read-intensive (Get 90%, Insert 5%, Remove 5%)
   * `3`: Read-only (Get 100%)
 
 It runs a single map data structure benchmark with the given configuration, and measures the throughput (operations per second) and memory usage (bytes).
