@@ -16,5 +16,5 @@ rustc-hash = "1.1.0"
 memoffset = "0.7"
 
 [dev-dependencies]
-rand = "0.8"
+rand = "0.9"
 bitflags = "2.4.0"
